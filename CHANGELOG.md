@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.27 (2026-11-04)
+Tested live on one PC: doors (opened, closed and pushed as if by the friend, and the player's own use sent) and
+lockpicks (the study desk).
+- **Doors your friend opens or closes now open and close for you**, swinging smoothly, including the latched
+  main-house doors that ignored them before (most of the house).
+- **Closing a door with its handle is sent again** (v0.25 had stopped it along with doors that shut by
+  themselves); doors that shut by themselves stay local.
+- A close from your friend never shuts a door on you while you're right next to it (1.5 m).
+- **Doors pushed open with your body match on both screens**: the door's angle is sent while it's pushed, and the
+  other copy glides to the same angle (tested live, no stalls).
+- **One game owns each door's self-close**: whoever opened a door, their game shuts it and tells the other; the
+  other copy waits instead of shutting on its own timer, and the owner's door waits while the other player stands in
+  the doorway (the last part untested).
+- **Lockpicked drawers and boxes open for both**: when your friend picks a lock, your copy runs the lock's own
+  "picked" sequence (lockpick sound, the lock comes off, the drawer opens), without touching you or opening a menu.
+  Tested live on the study desk, including one left half-open by last session's version.
+- **Pushed objects (chairs, bottles) are moved through their physics body**: before, every move was undone by the
+  physics. Untested on a live object; the bug report says for each move whether it stuck.
+
 ## v0.26 (2026-11-04)
 - **No more weapons overlapping in your friend's hand.** When their character was rebuilt (a load or a Lobby look
   change) while a weapon message arrived, the old weapon copy stayed stuck on the hand and overlapped every weapon

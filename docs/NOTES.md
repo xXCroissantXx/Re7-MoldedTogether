@@ -1154,3 +1154,20 @@ Not synced / broken, as reported by the owner:
   InteractSendFsm logged. Lockpick (keypicklock keylockset intr) applied but drawer stayed shut: unknown.
 - v0.26 (2026-11-04): weapon overlap (video): rebuild path set held.part = nil while the old copy stayed on the
   hand; two copies made at 21:27:40. held.all tracks every copy; drop_held detaches and hides all.
+- v0.27 (2026-11-04, live probe): DoorPush.setInteract(user GO, isShakable, isDoubleDoors) is what the handle
+  calls (states 2 little open, 3, 4 auto-open, 5 open; close 6 -> 0). requestAutoOpen/6(2, angle, AutoOpenRotationSpeed,
+  AutoOpenEaseType, false, false) and requestAutoClose(speed, ease, false, false) animate and work on latched doors;
+  requestOpened/requestClosed snap. Lockpick desk sm1415_Table09A: the swap (KeyOpenBefore hidden, sm2234_KeyPickLock02A
+  shown, InteractDrawer shown, lock interact hidden) happens at the lock's final InteractClose. Remote apply: successInteract,
+  InteractClose, again after 0.6 s, then the swap by hand. Lockpick apply untested.
+  v0.27 more (live): requestPush(side, angle, false) holds an exact angle (state 3); side 0 -> IsOpenFront true.
+  Lua integers passed to a Single arrive as ~0: always add 0.0. 'dang <id> <angle> <side> <ch>' at 10 Hz for states
+  2/3, receiver glides (step = |d|*dt/0.12, 0 stalls). Door ownership: receiver sets IsAutoClosable false until close;
+  owner sends its self-close; owner pauses (set_pauseAutoMoving) while the ghost is within 1.8 m (untested).
+  Props: Transform-only moves never stuck; now also RigidBodySet setPosition/setRotation/resetTransform (untested on
+  an active prop; the basement prop ignored everything).
+  Lockpicks (live): successInteract on a lock opens the receiver's item menu: don't. The lock object's
+  app.ItemSelectReaction maps CylinderKey -> state 'SelectSuccess' of its via.fsm.Fsm (FsmObj); setCurrentState(String)
+  runs SelectSuccess -> Gimmick_Open_PauseStart -> Open_End in ~3 s (sound, model swap incl. mesh parts 0-2, InteractDrawer
+  on, prompt gone, player untouched). In an inactive area it waits in Gimmick_Open_PauseStart. Open = sibling
+  InteractDrawer DrawSelf true.

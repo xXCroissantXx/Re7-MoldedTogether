@@ -75,7 +75,14 @@ local function id_of(comp)
 end
 
 local function send(text)
-    if coop_send_event then coop_send_event(text) ws.sent = ws.sent + 1 log("sent: " .. text) end
+    if coop_send_event then
+        coop_send_event(text)
+        ws.sent = ws.sent + 1
+        -- Door angles go 10 times a second while pushing: only the first of a push is logged.
+        local did = text:match("^dang (%S+)")
+        if did == nil then log("sent: " .. text)
+        elseif ws.dang_logged ~= did then ws.dang_logged = did log("sent: " .. text .. " (and more angles)") end
+    end
 end
 
 local function scene()
@@ -107,8 +114,9 @@ local function refresh_doors()
         if id then
             seen[id] = true
             if ws.doors[id] == nil or ws.doors[id].d ~= d then
+                local st = d:call("get_doorState")
                 ws.doors[id] = { d = d, locked = d:call("get_isLocked") == true,
-                    open = is_open(d:call("get_doorState")) }
+                    open = is_open(st), full = st == 4 or st == 5, state = st }
             end
         end
     end
@@ -118,25 +126,64 @@ end
 -- An "open" that didn't take (v0.25): 87 of 106 remote opens in three sessions left the door
 -- at state 0 or 1, the latched main-house doors. Checked 0.7 s later and retried from the
 -- other two sides (OpenSide 0 and 1; 2 was the only one used). Every try is logged.
+-- Opening and closing a door for the friend (v0.26, tested live 2026-11-04 on a latched
+-- main-house door, sm1050): the one-argument requestAutoOpen(side) did nothing on those doors
+-- (87 of 106 remote opens). The six-argument requestAutoOpen(side, angle, speed, ease, doFix,
+-- doMute), with the door's own auto-open speed and ease, swings it open over about 1.3 s
+-- (state 4, then 5); requestAutoClose(speed, ease, doLock, doMute) swings it shut (6, then 0).
+-- requestOpened(side, angle, doFix) and requestClosed(doLock) snap it, kept as fallbacks.
+-- OpenSide: Front 0, Back 1, Auto 2.
 ws.open_retry = {}
+local function door_open(d)
+    local angle = tonumber(safe(d.get_field, d, "CurrentMaxOpenAngle")) or tonumber(safe(d.get_field, d, "MaxOpenAngle")) or 90
+    if angle <= 0 then angle = 90 end
+    angle = angle + 0.0
+    local speed = tonumber(safe(d.get_field, d, "AutoOpenRotationSpeed")) or 50
+    local ease = safe(d.get_field, d, "AutoOpenEaseType") or 0
+    return pcall(d.call, d,
+        "requestAutoOpen(app.DoorPush.OpenSide, System.Single, System.Single, via.curve.EaseType, System.Boolean, System.Boolean)",
+        2, angle, speed, ease, false, false)
+end
+local function door_close(d)
+    local speed = tonumber(safe(d.get_field, d, "AutoCloseRotationSpeed")) or 50
+    local ease = safe(d.get_field, d, "AutoCloseEaseType") or 0
+    local ok, err = pcall(d.call, d, "requestAutoClose(System.Single, via.curve.EaseType, System.Boolean, System.Boolean)",
+        speed, ease, false, false)
+    if not ok then ok, err = pcall(d.call, d, "requestClosed(System.Boolean)", false) end
+    return ok, err
+end
 function check_open_retry(id, s, state, now)
     local r = ws.open_retry[id]
     if r == nil or now < r.t then return end
+    ws.open_retry[id] = nil
     if is_open(state) or state == 4 then
-        log(string.format("door %s opened (state %d, side %s)", id, state, tostring(r.side)))
-        ws.open_retry[id] = nil
+        log(string.format("door %s opening (state %d)", id, state))
         return
     end
-    local side = table.remove(r.sides, 1)
-    if side == nil then
-        log(string.format("door %s didn't open (state %d): needs its handle (app.InteractDoor)", id, state))
-        ws.open_retry[id] = nil
-        return
-    end
+    -- Didn't start: snap it open.
     ws.applying[id] = now
-    local ok, err = pcall(s.d.call, s.d, "requestAutoOpen(app.DoorPush.OpenSide)", side)
-    r.side, r.t = side, now + 0.7
-    if not ok then log("door " .. id .. " open side " .. side .. " ERR " .. tostring(err)) end
+    local angle = tonumber(safe(s.d.get_field, s.d, "MaxOpenAngle")) or 90
+    local ok, err = pcall(s.d.call, s.d, "requestOpened(app.DoorPush.OpenSide, System.Single, System.Boolean)", 2, angle, false)
+    log(string.format("door %s didn't start (state %d): snapped open%s", id, state, ok and "" or (" ERR " .. tostring(err))))
+end
+
+-- Our player using a door's handle (DoorPush.setInteract, user = our player): a close then is
+-- a real close even though the door goes through state 6 like a door shutting by itself.
+ws.door_touch = {}
+do
+    local m = sdk.find_type_definition("app.DoorPush"):get_method("setInteract(via.GameObject, System.Boolean, System.Boolean)")
+    if m then
+        pcall(sdk.hook, m, function(args)
+            pcall(function()
+                local om = sdk.get_managed_singleton("app.ObjectManager")
+                local p = om and om:get_field("PlayerObj")
+                local user = sdk.to_managed_object(args[3])
+                if p and user and user:get_address() == p:get_address() then
+                    ws.door_touch[sdk.to_managed_object(args[2]):get_address()] = os.clock()
+                end
+            end)
+        end, function(r) return r end)
+    end
 end
 
 local function player_near_door(s, m)
@@ -147,6 +194,68 @@ local function player_near_door(s, m)
     if pp == nil or dp == nil then return false end
     return (pp.x - dp.x) ^ 2 + (pp.z - dp.z) ^ 2 < m * m
 end
+
+-- The friend's door: our copy doesn't shut by itself (IsAutoClosable off) until the friend's
+-- game closes it or we use it ourselves.
+function door_take_by_peer(s)
+    if not s.peer then
+        s.peer = true
+        s.auto_orig = safe(s.d.get_field, s.d, "IsAutoClosable")
+        pcall(s.d.set_field, s.d, "IsAutoClosable", false)
+    end
+end
+function door_release(s)
+    if s.peer then
+        s.peer = nil
+        if s.auto_orig ~= nil then pcall(s.d.set_field, s.d, "IsAutoClosable", s.auto_orig) end
+    end
+end
+local function friend_near_door(s, m)
+    local g = coop_ghost and coop_ghost()
+    local gp = g and safe(function() return g:call("get_Transform"):call("get_Position") end)
+    local dp = safe(function() return s.d:call("get_GameObject"):call("get_Transform"):call("get_Position") end)
+    if gp == nil or dp == nil or ghost_hidden then return false end
+    return (gp.x - dp.x) ^ 2 + (gp.z - dp.z) ^ 2 < m * m
+end
+-- Our door (we opened it): its self-close waits while the friend stands in the doorway, so it
+-- never shuts on them (pauseAutoMoving).
+function door_ownership(s, state, now)
+    if s.peer then
+        if ws.door_touch[s.d:get_address()] and now - ws.door_touch[s.d:get_address()] < 1 then door_release(s) end
+        return
+    end
+    local hold = s.mine and (state == 5 or state == 6) and friend_near_door(s, 1.8) or false
+    if hold ~= (s.held or false) then
+        s.held = hold
+        pcall(s.d.call, s.d, "set_pauseAutoMoving", hold)
+        log(string.format("door: self-close %s (your friend %s the doorway)", hold and "paused" or "resumed",
+            hold and "is in" or "left"))
+    end
+end
+
+-- Pushes: a door pushed by a body or cracked open by its handle (states 2 and 3) sends its
+-- angle up to 10 times a second ("dang <id> <angle> <side> <chapter>", side 0 = opens to the
+-- front, 1 = to the back, from DoorPush.IsOpenFront). The other game sets the same angle with
+-- requestPush(side, angle, false) (tested live 2026-11-04: it holds the exact angle, state 3).
+ws.dang_t = 0
+local function stream_door_angles(now)
+    if now - ws.dang_t < 0.1 then return end
+    ws.dang_t = now
+    for id, s in pairs(ws.doors) do
+        if s.live_t and now - s.live_t < 0.3 and (s.state == 2 or s.state == 3) then
+            local ours = ws.applying[id] and now - ws.applying[id] < 1
+            local a = tonumber(safe(s.d.call, s.d, "get_currentAngle"))
+            if a and not ours and math.abs(a - (s.ang_sent or -100)) >= 3 then
+                s.ang_sent, s.mine = a, true
+                local side = safe(s.d.get_field, s.d, "IsOpenFront") == true and 0 or 1
+                send(string.format("dang %s %.0f %d %d", id, a, side, chapter()))
+            end
+        elseif s.state == 0 then
+            s.ang_sent = nil
+        end
+    end
+end
+coop_world_stream_doors = stream_door_angles
 
 local function poll_doors(now)
     -- Only doors the scene still has (v0.24): one unloaded by an area change threw inside the
@@ -175,12 +284,26 @@ local function poll_doors(now)
             local open = is_open(state)
             local ours = ws.applying[id] and now - ws.applying[id] < 3
             if s.locked and not locked and not ours then send_once("unlock", id) end
-            if open and not s.open and not ours then send_once("open", id) end
             -- A door that swings shut by itself goes through state 6 (auto-closing): that's the
             -- game, not the player, and sending it slammed the door on the other player as
             -- they walked through (2026-11-03). Only a close straight from open is sent.
-            if s.open and not open and not ours and state ~= 6 and s.state ~= 6 then send_once("close", id) end
-            s.locked, s.open, s.state = locked, open, state
+            local touched = ws.door_touch[d:get_address()] and now - ws.door_touch[d:get_address()] < 3
+            s.live_t = now
+            -- A push or a cracked-open handle (states 2 and 3) goes as its angle ("dang", below);
+            -- "open" is for a door swinging or swung fully open (4 and 5).
+            local full = state == 4 or state == 5
+            if full and not s.full and not ours then send_once("open", id) s.mine = true end
+            -- The door's self-close belongs to the game of whoever opened it (v0.28): that game
+            -- sends it, the other game's copy waits for it (its own self-close is off).
+            if s.open and not open and not ours and (touched or s.mine or (state ~= 6 and s.state ~= 6)) then
+                send_once("close", id)
+            end
+            if not open and state ~= 2 then
+                s.mine = nil
+                if s.peer then door_release(s) end
+            end
+            pcall(door_ownership, s, state, now)
+            s.locked, s.open, s.state, s.full = locked, open, state, full
             pcall(check_open_retry, id, s, state, now)
         end
     end
@@ -205,21 +328,23 @@ local function apply_door(kind, id, ch)
             note("your friend unlocked a door")
         end
     elseif kind == "open" then
+        door_take_by_peer(s)
         local before = s.d:call("get_doorState")
         if not is_open(before) and not s.d:call("get_isLocked") then
-            local ok, err = pcall(s.d.call, s.d, "requestAutoOpen(app.DoorPush.OpenSide)", 2)
+            local ok, err = door_open(s.d)
             log(string.format("opening door %s (state %s)%s", id, tostring(before), ok and "" or (" ERR " .. tostring(err))))
-            ws.open_retry[id] = { t = os.clock() + 0.7, side = 2, sides = { 0, 1 } }
+            ws.open_retry[id] = { t = os.clock() + 0.7 }
         else
             log(string.format("open door %s: already state %s, locked %s", id, tostring(before),
                 tostring(s.d:call("get_isLocked"))))
         end
     elseif kind == "close" then
-        if player_near_door(s, 2.5) then
+        door_release(s)
+        if player_near_door(s, 1.5) then
             log("close door " .. id .. ": not closed, you're in the doorway")
         elseif is_open(s.d:call("get_doorState")) then
-            local ok, err = pcall(s.d.call, s.d, "requestClosed(System.Boolean)", false)
-            log("closed door " .. id .. (ok and "" or (" ERR " .. tostring(err))))
+            local ok, err = door_close(s.d)
+            log("closing door " .. id .. (ok and "" or (" ERR " .. tostring(err))))
         end
     end
     ws.applied = ws.applied + 1
@@ -414,6 +539,7 @@ do
 end
 local TRACKED_TYPES = {}
 for _, pt in ipairs(PROP_TYPES) do TRACKED_TYPES[pt.type] = true end
+TRACKED_TYPES["app.InteractDoor"] = true   -- shared through its door (app.DoorPush) since v0.27
 do
     local seen = {}
     local td = sdk.find_type_definition("app.InteractObjectBase")
@@ -437,6 +563,146 @@ do
         end
     end
     log("interaction finder: " .. hooked .. " hooks")
+end
+
+-- Lockpicks (v0.26, watched live 2026-11-04 on the study desk sm1415_Table09A). Picking runs
+-- setInteract + successInteract on the lock's InteractSendFsm (what the friend's copy did), but
+-- the desk only changes when the lockpick ends with InteractClose: the locked model
+-- (*_KeyOpenBefore) is hidden, the opened lock model (sm2234_KeyPickLock02A, a direct child of
+-- the desk) shown, the drawer's InteractDrawer object switched on and the lock's interaction
+-- off. The friend's desk stayed locked. Now: InteractClose after the success; if the locked
+-- model is still drawn 0.6 s later, InteractClose once more; after that the four changes by
+-- hand. Each step is logged.
+function is_lockpick(c)
+    local n = intr_names(c)
+    return n:find("keypick", 1, true) ~= nil or n:find("keylock", 1, true) ~= nil
+end
+ws.locks = {}
+-- The lock's container: the nearest ancestor with a direct child named "InteractDrawer" (the
+-- desk sm1415_Table09A_Drawer, the box sm1929_KeyPickBox03A_KeyLock). That child is switched
+-- off (DrawSelf false) while locked and on once open, on both kinds: it's what "opened" means.
+-- The desk also swaps its locked model (*_KeyOpenBefore) for the opened lock (a direct child
+-- named sm2234_KeyPickLock*); the box has no such pair (tested live 2026-11-04: a remote pick
+-- of the box changed nothing but the lock's count, and the first check mistook that for open).
+local function child_named(go, pred)
+    local tr = safe(go.call, go, "get_Transform")
+    local child = tr and safe(tr.call, tr, "get_Child")
+    local out = {}
+    while child do
+        local cg = safe(child.call, child, "get_GameObject")
+        local name = cg and tostring(safe(cg.call, cg, "get_Name") or "") or ""
+        if cg and pred(name:lower()) then out[#out + 1] = cg end
+        child = safe(child.call, child, "get_Next")
+    end
+    return out
+end
+local function lock_parts(c)
+    local go = safe(c.call, c, "get_GameObject")
+    for _ = 1, 6 do
+        if go == nil then return nil end
+        local drawer = child_named(go, function(n) return n == "interactdrawer" end)[1]
+        if drawer then return go, drawer end
+        local tr = safe(go.call, go, "get_Transform")
+        local par = tr and safe(tr.call, tr, "get_Parent")
+        go = par and safe(par.call, par, "get_GameObject")
+    end
+    return nil
+end
+local function lock_is_open(c)
+    local root, drawer = lock_parts(c)
+    if drawer == nil then return nil end
+    return safe(drawer.call, drawer, "get_DrawSelf") == true
+end
+-- The lock's app.ItemSelectReaction (on the lock object, e.g. sm2234_KeyPickLock02A_KeyLockSet)
+-- maps an item to a state of its via.fsm.Fsm (FsmObj): CylinderKey (the lockpick) ->
+-- "SelectSuccess". Setting that state runs the game's own sequence (tested live 2026-11-04 on
+-- the study desk: SelectSuccess -> Gimmick_Open_PauseStart -> Open_End in about 3 s, lockpick
+-- sound, model swap, drawer usable, prompt gone, the player untouched, no menu).
+local function lock_reaction(c)
+    local go = safe(c.call, c, "get_GameObject")
+    for _ = 1, 3 do
+        if go == nil then return nil end
+        local r = safe(go.call, go, "getComponent(System.Type)", sdk.typeof("app.ItemSelectReaction"))
+        if r then return r end
+        local tr = safe(go.call, go, "get_Transform")
+        local par = tr and safe(tr.call, tr, "get_Parent")
+        go = par and safe(par.call, par, "get_GameObject")
+    end
+    return nil
+end
+local function success_state(r)
+    local rs = safe(r.get_field, r, "ReactionSettings")
+    local n = rs and tonumber(safe(rs.call, rs, "get_Count")) or 0
+    for i = 0, n - 1 do
+        local e = safe(rs.call, rs, "get_Item", i)
+        if e and tonumber(safe(e.get_field, e, "Result")) == 0 then return tostring(safe(e.get_field, e, "StateName")) end
+    end
+    return "SelectSuccess"
+end
+function start_lock_open(c, id)
+    if lock_is_open(c) == true then log("lockpick " .. id .. ": already open here") return end
+    local r = lock_reaction(c)
+    local fo = r and safe(r.get_field, r, "FsmObj")
+    local fsm = fo and safe(fo.call, fo, "getComponent(System.Type)", sdk.typeof("via.fsm.Fsm"))
+    if fsm then
+        local st = success_state(r)
+        local ok, err = pcall(fsm.call, fsm, "setCurrentState(System.String)", st)
+        log(string.format("lockpick %s: lock state -> %s%s (%s)", id, st, ok and "" or (" ERR " .. tostring(err)), intr_names(c)))
+        -- Checked every 2 s for a minute. A lock in an area the game isn't running waits in
+        -- Gimmick_Open_PauseStart until the area runs again (the box 27 m away, 2026-11-04), so
+        -- it's never opened by hand while its own sequence is under way.
+        ws.locks[id] = { c = c, t = os.clock() + 4, step = 3, fsm = fsm, until_t = os.clock() + 60 }
+    else
+        log("lockpick " .. id .. ": no lock state machine, opening by hand (" .. intr_names(c) .. ")")
+        ws.locks[id] = { c = c, t = os.clock(), step = 2 }
+    end
+end
+local function lock_hand_open(c, id)
+    local root, drawer = lock_parts(c)
+    if root == nil then log("lockpick " .. id .. ": no drawer found next to the lock") return end
+    local done = {}
+    pcall(drawer.call, drawer, "set_DrawSelf", true)
+    done[#done + 1] = "drawer on"
+    for _, g in ipairs(child_named(root, function(n) return n:find("keyopenbefore", 1, true) ~= nil end)) do
+        pcall(g.call, g, "set_DrawSelf", false)
+        done[#done + 1] = "hid " .. tostring(safe(g.call, g, "get_Name"))
+        -- Its opened lock: a direct child named like the lock inside the locked model.
+        for _, o in ipairs(child_named(root, function(n) return n:find("^sm%d+_keypicklock") ~= nil end)) do
+            pcall(o.call, o, "set_DrawSelf", true)
+            done[#done + 1] = "showed " .. tostring(safe(o.call, o, "get_Name"))
+        end
+    end
+    local lgo = safe(c.call, c, "get_GameObject")
+    if lgo then pcall(lgo.call, lgo, "set_DrawSelf", false) done[#done + 1] = "lock off" end
+    log("lockpick " .. id .. ": opened by hand (" .. table.concat(done, ", ") .. ")")
+    note("your friend picked a lock: it's open for you too")
+end
+local function poll_locks(now)
+    for id, l in pairs(ws.locks) do
+        if now >= l.t then
+            local open = lock_is_open(l.c)
+            if open == true then
+                ws.locks[id] = nil
+                log("lockpick " .. id .. ": open (the game's own change, step " .. l.step .. ")")
+                note("your friend picked a lock: it's open for you too")
+            elseif l.step == 3 then
+                local st = tostring(safe(l.fsm.call, l.fsm, "getCurrentState", 0))
+                if now > l.until_t then
+                    ws.locks[id] = nil
+                    log("lockpick " .. id .. ": still shut after a minute (lock state " .. st .. ")")
+                else
+                    if st ~= l.last_st then l.last_st = st log("lockpick " .. id .. ": lock state " .. st) end
+                    l.t = now + 2
+                end
+            elseif l.step == 1 then
+                pcall(l.c.call, l.c, "InteractClose")
+                l.step, l.t = 2, now + 0.6
+            else
+                ws.locks[id] = nil
+                pcall(lock_hand_open, l.c, id)
+            end
+        end
+    end
 end
 
 local function refresh_props()
@@ -492,7 +758,9 @@ local function apply_prop(kind, id, want, ch, phone)
         return
     end
     local before = safe(s.pt.state, s.c) == true
-    if before == want then return end
+    -- A lock counts as done when its drawer is open, not when its success count is above 0
+    -- (an earlier try can leave the count up and the lock shut).
+    if before == want and not (kind == "intr" and is_lockpick(s.c) and lock_is_open(s.c) == false) then return end
     ws.applying[key] = os.clock()
     local ok, err
     if kind == "box" then
@@ -534,7 +802,14 @@ local function apply_prop(kind, id, want, ch, phone)
         end
     elseif kind == "intr" then
         if not intr_allowed(s.c) then log("intr " .. id .. ": not shared here (save, tape, item box...): " .. intr_names(s.c)) return end
-        ok, err = pcall(s.c.call, s.c, "successInteract")
+        if is_lockpick(s.c) then
+            -- Not successInteract: on a lock it opened the item menu on the receiving player
+            -- (2026-11-04). The lock's own success state does the whole job instead.
+            ws.applying[key] = os.clock() + 5   -- its sequence runs about 3 s
+            ok, err = pcall(start_lock_open, s.c, id)
+        else
+            ok, err = pcall(s.c.call, s.c, "successInteract")
+        end
         if phone or is_phone(s.c) then
             note("your friend answered the phone: the call plays for you too")
         else
@@ -638,16 +913,49 @@ local function apply_phys(key, x, y, z, qw, qx, qy, qz, ch)
     ws.applying["phys:" .. key] = os.clock()
     local tr = s.go:call("get_Transform")
     local before = tr:call("get_Position")
+    local pos, rot = Vector3f.new(x, y, z), Quaternion.new(qw, qx, qy, qz)
+    -- Moving the Transform alone never stuck: every logged move in the sessions of 2026-11-03
+    -- ended where it started (the physics body puts it back). v0.28 also moves the physics body
+    -- itself (via.dynamics.RigidBodySet setPosition/setRotation for body 0, velocity zeroed) and
+    -- resets the body from the Transform. Untested on an active prop: each of the first ten
+    -- moves is checked 0.5 s later and logged.
+    s.rbs = s.rbs or safe(s.go.call, s.go, "getComponent(System.Type)", sdk.typeof("via.dynamics.RigidBodySet"))
+    local rbs = s.rbs
     pcall(s.c.call, s.c, "disable")
-    tr:call("set_Position", Vector3f.new(x, y, z))
-    tr:call("set_Rotation", Quaternion.new(qw, qx, qy, qz))
+    tr:call("set_Position", pos)
+    tr:call("set_Rotation", rot)
+    if rbs then
+        pcall(rbs.call, rbs, "setPosition(System.Int32, via.vec3)", 0, pos)
+        pcall(rbs.call, rbs, "setRotation(System.Int32, via.Quaternion)", 0, rot)
+        pcall(rbs.call, rbs, "setLinearVelocity(System.Int32, via.vec3)", 0, Vector3f.new(0, 0, 0))
+        pcall(rbs.call, rbs, "setAngularVelocity(System.Int32, via.vec3)", 0, Vector3f.new(0, 0, 0))
+        pcall(rbs.call, rbs, "resetTransform()")
+    end
     pcall(s.c.call, s.c, "enable")
     s.last = { x = x, y = y, z = z }
     if ws.phys_logged < 10 then
         ws.phys_logged = ws.phys_logged + 1
-        local after = tr:call("get_Position")
-        log(string.format("phys %s: %.2f %.2f %.2f -> wanted %.2f %.2f %.2f, now %.2f %.2f %.2f", key,
-            before.x, before.y, before.z, x, y, z, after.x, after.y, after.z))
+        ws.phys_checks = ws.phys_checks or {}
+        ws.phys_checks[#ws.phys_checks + 1] = { s = s, key = key, t = os.clock() + 0.5, want = pos,
+            from = { x = before.x, y = before.y, z = before.z } }
+    end
+end
+
+local function check_phys_moves(now)
+    local list = ws.phys_checks
+    if list == nil then return end
+    for i = #list, 1, -1 do
+        local c = list[i]
+        if now >= c.t then
+            table.remove(list, i)
+            local p = safe(function() return c.s.go:call("get_Transform"):call("get_Position") end)
+            if p then
+                local off = math.sqrt((p.x - c.want.x) ^ 2 + (p.y - c.want.y) ^ 2 + (p.z - c.want.z) ^ 2)
+                log(string.format("phys %s: from %.2f %.2f %.2f, wanted %.2f %.2f %.2f, after 0.5 s %.2f %.2f %.2f (%s)",
+                    c.key, c.from.x, c.from.y, c.from.z, c.want.x, c.want.y, c.want.z, p.x, p.y, p.z,
+                    off < 0.3 and "moved" or "DIDN'T MOVE"))
+            end
+        end
     end
 end
 
@@ -668,7 +976,56 @@ local function apply_pending()
 end
 
 -- Incoming events (called by coop_enemies.lua). Returns true if it was ours.
+local function apply_angle(id, a, side, ch)
+    if ch ~= chapter() then return end
+    -- A float: "15" parses to the integer 15, which reached the game's Single parameter as
+    -- about 0 (the door fell shut each time, 2026-11-04).
+    a = (tonumber(a) or 0) + 0.0
+    local s = ws.doors[id]
+    if s == nil or safe(s.d.call, s.d, "get_isLocked") == true then return end
+    ws.applying[id] = os.clock()
+    s.ang_sent = a   -- not sent back once our "ours" window ends
+    door_take_by_peer(s)
+    -- Glide to it (v0.28): the angles come 10 times a second and setting each one straight away
+    -- looked choppy; glide_doors moves the door there a little every frame.
+    if s.ang_target == nil then
+        s.ang_cur = tonumber(safe(s.d.call, s.d, "get_currentAngle")) or 0
+        log(string.format("door %s pushed by the friend (side %d)", id, side))
+    end
+    s.ang_target, s.ang_side, s.ang_t = a, side, os.clock()
+end
+
+-- Every frame: doors the friend is pushing move toward the last angle they sent, up to
+-- GLIDE_SPEED degrees a second; let go 1.5 s after the last angle.
+local GLIDE_SPEED = 360
+ws.glide_t = 0
+local function glide_doors(now)
+    local dt = math.min(now - ws.glide_t, 0.1)
+    ws.glide_t = now
+    for id, s in pairs(ws.doors) do
+        if s.ang_target then
+            if now - s.ang_t > 1.5 or not (s.live_t and now - s.live_t < 0.5) then
+                s.ang_target = nil
+            else
+                -- Paced so each step takes about as long as the gap to the next angle (0.1 s):
+                -- a fixed speed got there early and then waited, moving in bursts (2026-11-04).
+                local d = s.ang_target - s.ang_cur
+                local step = math.min(math.max(math.abs(d) * dt / 0.12, 20 * dt), GLIDE_SPEED * dt)
+                if math.abs(d) <= step then s.ang_cur = s.ang_target else s.ang_cur = s.ang_cur + (d > 0 and step or -step) end
+                if s.ang_cur ~= s.ang_set then
+                    s.ang_set = s.ang_cur
+                    ws.applying[id] = now
+                    pcall(s.d.call, s.d, "requestPush(app.DoorPush.OpenSide, System.Single, System.Boolean)",
+                        s.ang_side, s.ang_cur + 0.0, false)
+                end
+            end
+        end
+    end
+end
+
 function coop_world_on_event(text)
+    local aid, aa, aside, ach = text:match("^dang (%S+) ([%d%.]+) ([01]) (%-?%d+)")
+    if aid then pcall(apply_angle, aid, tonumber(aa), tonumber(aside), tonumber(ach)) return true end
     local kind, id, ch = text:match("^(unlock) (%S+) (%-?%d+)")
     if not kind then kind, id, ch = text:match("^(open) (%S+) (%-?%d+)") end
     if not kind then kind, id, ch = text:match("^(close) (%S+) (%-?%d+)") end
@@ -736,12 +1093,16 @@ re.on_frame(function()
         local ok, err = pcall(refresh_items)
         if not ok and not ws.item_err then ws.item_err = true log("items ERR " .. tostring(err)) end
     end
+    pcall(stream_door_angles, now)
+    pcall(check_phys_moves, now)
+    pcall(glide_doors, now)
     if now - ws.poll_t > 0.25 then
         ws.poll_t = now
         local ok, err = pcall(poll_doors, now)
         if not ok and not ws.poll_err then ws.poll_err = true log("door poll ERR " .. tostring(err)) end
         local fpok, fperr = pcall(poll_phys, now)
         if not fpok and not ws.phys_poll_err then ws.phys_poll_err = true log("phys poll ERR " .. tostring(fperr)) end
+        pcall(poll_locks, now)
         local pok, perr = pcall(poll_props, now)
         if not pok and not ws.ppoll_err then ws.ppoll_err = true log("prop poll ERR " .. tostring(perr)) end
         local iok, ierr = pcall(poll_items, now)

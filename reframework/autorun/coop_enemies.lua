@@ -154,7 +154,7 @@ local function send_event(text)
     fs.write("coopnet_ev_out.txt", table.concat(es.ev_out, "\n") .. "\n")
     es.sent = es.sent + 1
     -- Regular check-ins (health, options, version) would fill the log: not logged.
-    if not (text:match("^ehp ") or text:match("^opt ") or text:match("^ver ")) then log("sent: " .. text) end
+    if not (text:match("^ehp ") or text:match("^opt ") or text:match("^ver ") or text:match("^dang ")) then log("sent: " .. text) end
     if coop_talk_record then pcall(coop_talk_record, text) end   -- the catch-up list (coop_talk.lua)
 end
 
