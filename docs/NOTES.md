@@ -1171,3 +1171,46 @@ Not synced / broken, as reported by the owner:
   runs SelectSuccess -> Gimmick_Open_PauseStart -> Open_End in ~3 s (sound, model swap incl. mesh parts 0-2, InteractDrawer
   on, prompt gone, player untouched). In an inactive area it waits in Gimmick_Open_PauseStart. Open = sibling
   InteractDrawer DrawSelf true.
+- 2026-11-04 gun research (live): a shot calls EPVExpertMuzzleFlush.play() and EPVExpertGunSmoke.play() on the held
+  gun (no trigger on the gun's own WwiseContainerApp: the bang comes from elsewhere). Calling
+  EPVExpertMuzzleFlush.play() from a script threw VMContext::Exception and FROZE the game (smoke play() returned ok).
+  Do not call it again. Untried: ObjectEffectManager.requestEffect(EffectID, vec3, Quaternion, GameObject, String);
+  WwiseContainerApp.trigger(UInt32, vec3, Action) with the shot's trigger id (not found yet).
+  Shot sound: 0 script-level Wwise trigger calls during 4 shots (the bang is posted natively). The gun's
+  WwiseContainerApp holds snd_container_wp1010.wcc + snd_eventlist_wp1010.wel + impact banks; getTriggerIdNameList
+  returns a native struct (unreadable from Lua). Playing the shot needs its trigger id: from the .wel inside the game's
+  pak (needs an extractor) or trial. Parked.
+  More gun research: WwiseContainer.exists(String) found none of 14,550 candidate names; getTriggerIdByFsm lists are
+  empty; ContainableResourceHolder exposes nothing. Muzzle flash data: EPVExpertMuzzleFlush.DataList[0] ->
+  EPVExpertMuzzleFlushData.Elements (12: TargetID Handgun/ShotGun/Magnum..., JointName vfx_muzzle, CacheNum 1); the
+  effect resources sit in the EPV provider, not exposed. Remaining routes: ObjectEffectManager.requestEffect (EffectID
+  unknown, freeze risk), a native hook of Wwise PostEvent in CoopNet.cs (large), or the .wel from the pak (extractor).
+  requestEffect route closed: the gun's ObjectEffectManager has no standard effects (StandardDataMap count 0,
+  StandardProvider nil); the flash exists only in its 3 ExpertProviders (EPVExpertMuzzleFlush play() froze).
+  Sound, more: via.wwise.WwiseManager is reachable (static postEvent(GameObject, RequestInfo[, joint, triggerInfo]),
+  getEventIdByPlayingId, getRequestId, getTriggerIdByRequestId), but trigger/bank/event names are stripped (only
+  material names remain), and over 8 shots + 45 s nothing reached managed postEvent, WwiseContainerApp.received or
+  getDetectionLevel: all sound posting is native. Getting the shot id needs a native hook (CoopNet.cs) of the
+  engine's post path. Flash: only the EPV expert path, which froze.
+  Engine hook, step 1-2 (2026-11-04): postEvent wrappers jmp to internal functions (0x...DEC72B0/7330/73C0 this run),
+  which REFramework's sdk.hook had detoured (E9 at their start) and which saw 0 calls: the engine never posts through
+  WwiseManager::postEvent. Each internal one calls 0x...F996710 twice (ref counting?) and a different core
+  (0x...6ED9C0 / 0x...6EDA30): no single shared post function at this level. Next would be following calls down to
+  Wwise's own PostEvent (needs disassembly, e.g. capstone) and a native detour in CoopNet.cs; replaying needs the
+  container-level trigger id (WwiseContainerApp.trigger(UInt32, vec3, Action)), not the Wwise event id.
+- Research plugin local/build/research/CoopResearch.cs (TEST COPY ONLY, never ship): native ring-buffer hook on the
+  WwiseContainer trigger core (prologue 40 55 41 55 41 56 48 8D AC 24 C0 FD FF FF; rcx=container, r8d=trigger id).
+  SOUND FOUND (2026-11-04): native recorder on the container trigger core caught each handgun shot's sequence on
+  wp1210_Handgun_Item: 3908091806 (the bang, confirmed by ear), 1479720085, 1552630761, 475893168, 2866833706,
+  569726251. The player's container can't play it. A new GameObject created in the player's folder
+  (GameObject.create(String, Folder)) with a via.wwise.WwiseContainer whose ContainableAssets are holders made by
+  sdk.create_resource('via.wwise.ContainableResource', path):create_holder('via.wwise.ContainableResourceHolder') for the
+  gun container's 20 asset paths plays it, after set_Enabled(false/true) and awake()+start() (exists(id) true).
+- v0.28 (2026-11-04): coop_gunsound.lua: sender hooks EPVExpertGunSmoke.play on its held gun -> 'gshot <wp>', first
+  time 'gsnd <wp> <paths;...>' (container assets) and 'gfx <wp> <flash efx> <smoke efx>' (EPV DataList[0].Elements by
+  TargetID). Receiver: per-weapon WwiseContainer object (shot trigger table: wp1210 3908091806) and EffectPlayer
+  objects (Kill then Start) at the weapon copy + 0.2 m along its Z. Bot echoes gsnd/gshot/gfx. Tested with the bot.
+  Swings (2026-11-05): recorder on 22 knife swings: wp1190 container fires 1824153269 (whoosh, by ear) then 1200121026;
+  hits add 3927833586/1334339743/1632895245. A built container plays the whoosh silently (the knife's 4 files are
+  wcc, wel and two switch files: the switches have no values on a new object); played through the receiver's own
+  weapon copy (wpXXXX*_Item under the player) it works. Sender: app.Weapon.IsAttacking rising edge, no GunSmoke.

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.28 (2026-11-04)
+Tested on one PC with the bot.
+- **Your friend's gunshots are heard and seen**: each shot plays the gun's real bang, muzzle flash and powder
+  smoke at your friend's gun. Their game sends the gun's sound and effect files once; yours builds them and plays
+  them on every shot, whatever gun you hold yourself. The bang is known for the handgun so far; other guns show
+  the flash and smoke, and their bangs will be added.
+- **Your friend's knife swings are heard**: each swing plays the knife's whoosh at their hand (through your own
+  knife, which every player carries).
+
 ## v0.27 (2026-11-04)
 Tested live on one PC: doors (opened, closed and pushed as if by the friend, and the player's own use sent) and
 lockpicks (the study desk).

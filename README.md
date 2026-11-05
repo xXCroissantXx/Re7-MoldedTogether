@@ -24,7 +24,8 @@ over Steam (no port forwarding).
 | **Pushed objects** (experimental) | Chairs, bottles and other loose props one of you knocks around move for the other too. |
 | **Catching up** | Each game keeps a list of the lasting changes it made (doors unlocked, boxes smashed, drawers, switches, supplies taken, Molded killed) for 12 hours. When your friend joins or rejoins, the list is sent and their game catches up, including what you did while they were away. |
 | **Talking** | Quick messages with **F5** (ping: "Over here"), **F6** (Come here), **F7** (Wait for me) and **F8** (Help!): your friend sees them at the top of the screen, and a marker for pings, Come here and Help. Each other's **health** shows on the status line and nameplate. |
-| Not shared | Item boxes, puzzles, weapon sounds. |
+| Not shared | Item boxes, puzzles. |
+| **Gunshots and swings** | Your friend's shots make the real bang, muzzle flash and smoke at their gun (the bang for the handgun so far; other guns show the flash and smoke), and their knife swings make the whoosh. |
 
 Made with [coop-anything](https://github.com/cranebeaker/coop-anything). MIT licensed.
 

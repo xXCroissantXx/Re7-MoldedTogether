@@ -91,7 +91,8 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 - [ ] **Keys**: A picks up a key. B is told to pick it up too, and it's still there for B.
 - [ ] **VHS tape**: A puts a tape in (B nearby). B's game follows into the tape a few seconds later.
 - [ ] **Moves**: A blocks, swings the knife, aims and shoots the handgun, climbs a ladder. Which does B see?
-      (Gunshot sound and muzzle flash aren't expected yet.)
+      Each of A's shots: B hears the bang (handgun so far) and sees the muzzle flash and smoke at A's gun; each
+      knife swing: B hears the whoosh.
 - [ ] **Enemies**: A hits Jack or a Molded. On B's screen it loses health and flinches. Walk closer to it one at
       a time: it should keep moving smoothly and go after the nearer player.
 - [ ] **Pausing**: A pauses near an enemy. B sees "Your friend paused the game"; the enemy keeps moving for B.

@@ -327,6 +327,7 @@ local function on_event(text)
     if coop_world_on_event and coop_world_on_event(text) then return end
     if coop_story_on_event and coop_story_on_event(text) then return end
     if coop_revive_on_event and coop_revive_on_event(text) then return end
+    if coop_gunsound_on_event and coop_gunsound_on_event(text) then return end
     local pz = text:match("^pause ([01])")
     if pz then
         -- em_move, not mv: the local alias is declared further down, so "mv" here was a nil

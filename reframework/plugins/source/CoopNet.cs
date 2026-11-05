@@ -550,7 +550,7 @@ public class CoopNet
         public float LookYaw, LookPitch;   // camera relative to body, radians
     }
 
-    const string Version = "0.27";
+    const string Version = "0.28";
     const int PacketSize = 64;
     static readonly byte[] Magic = { (byte)'R', (byte)'7', (byte)'C', (byte)'2' };
     const int KeepSamples = 32;
@@ -782,7 +782,8 @@ public class CoopNet
             else if (s_sock != null) { s_sock.Send(pkt, pkt.Length, s_peer); s_evSent++; }
             // The bot copies our moves, so it also holds what we hold.
             else if (s_cfg.mode == "bot" && (text.StartsWith("weapon ") || text.StartsWith("bank ") || text.StartsWith("grip ")
-                || text.StartsWith("talk ") || text.StartsWith("catchup ") || text.StartsWith("hp ")))
+                || text.StartsWith("talk ") || text.StartsWith("catchup ") || text.StartsWith("hp ")
+                || text.StartsWith("gsnd ") || text.StartsWith("gshot ") || text.StartsWith("gfx ") || text.StartsWith("gswing ")))
                 Bot.QueueEvent(s_cfg, text);
         }
         if (s_evOutLast < 0) s_evOutLast = 0;
