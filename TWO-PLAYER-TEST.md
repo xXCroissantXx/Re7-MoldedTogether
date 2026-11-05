@@ -66,7 +66,7 @@ Jack appears soon after dinner. Saving is off, so getting hurt costs nothing.
       come back to Player A within 3 seconds.
 - [ ] Player B starts again and reconnects. A sees B again.
 
-## 8. New since the first session (v0.12-v0.19), in the order you'll meet them
+## 8. New since the first session (v0.12-v0.27), in the order you'll meet them
 
 Playing from the start of the game. Note for each: works / doesn't / looks odd.
 
@@ -74,11 +74,17 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
       screen and a marker where A stood. Try **F5** (ping), **F7** (wait), **F8** (help).
 - [ ] **Health** (new): the status line and nameplate show the other player's health (green, yellow, red).
 - [ ] **Lobby**: each picks a character; the other sees the change within a few seconds.
-- [ ] **Doors**: A opens a door and lets it close; it opens and closes on B's screen too.
+- [ ] **Doors** (v0.27): A opens a main-house door with its handle (one press cracks it, the second opens it); it
+      opens on B's screen too, smoothly. A walks into a door so it swings partway: B's copy swings the same amount.
+      A lets the door shut by itself: it shuts for B at the same time (B's copy doesn't shut on its own). B stands
+      in the doorway of a door A opened: it doesn't shut on B.
+- [ ] **Lockpicks** (v0.27): A picks a lock on a drawer or box. On B's screen the lockpick sound plays, the lock
+      comes off and B can open it without picking it. B's own menu doesn't open.
 - [ ] **Interactions**: A opens the van or the fridge, stirs the pot, flips a switch. Does it happen for B?
 - [ ] **Drawers and boxes**: A opens a drawer; A smashes a breakable box. On B's screen the box disappears and
       its item lies where it stood. **Both** can pick up an item from it.
-- [ ] **Pushed objects**: A knocks a chair or bottle around. Does it move for B?
+- [ ] **Pushed objects** (v0.27): A knocks a chair or bottle around. Does it move for B? (The bug report says
+      "moved" or "DIDN'T MOVE" for each of the first moves.)
 - [ ] **Supplies**: A picks up ammo. It stays for B (each gets their own). Then A ticks **Share supplies**
       (Options; it turns on for B too) and A picks up another: now it disappears for B. A walks into another area and back: B's other
       supplies must still be there.

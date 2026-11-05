@@ -63,7 +63,7 @@ The Lobby then says "Full character models: installed".
    from the very first screen (no save yet) leaves the screen black. If the game asks to create save data,
    tick **Allow saving** in the RE7 Co-op window (Insert) first, then answer Yes.
 2. Press **Insert**. A **RE7 Co-op** window opens next to the REFramework menu. Expand
-   **Connect and saving**.
+   **Connect and saving**. **No Insert key** (many laptops)? See *No Insert key* below.
 3. Under *Your Steam friends in RE7 Co-op*, click **Connect** next to your friend's name. (They appear there
    once they've started RE7 Co-op too.)
 4. Your friend sees "*<your name>* invited you to co-op" at the top left of their screen. They press Insert and
@@ -79,6 +79,14 @@ Your friend is remembered, so next time it reconnects by itself. Connecting by S
 **Meeting up.** If your friend is in another chapter, click **Go to my friend's chapter** (Lobby, or Connect):
 you start at the beginning of their chapter, then walk to each other. Nothing from the jump is saved (saving is
 switched off first). **Teleport to my friend** works once you're within 40 m of them.
+
+### No Insert key
+
+REFramework opens and closes its menu (and the RE7 Co-op window with it) with Insert only. Without that key the
+menu stays on screen, with an extra mouse pointer. Give it another key once: click the REFramework window's title
+bar to expand it, open **Configuration**, click **Menu Key** and press a key the game doesn't use, for example
+**F9** (F5-F8 are the quick messages). Tick **Remember Menu State** there too, so the menu stays closed when the game
+starts. Wherever this guide says Insert, use that key.
 
 ### The RE7 Co-op window
 
@@ -174,6 +182,7 @@ the other sees "Your friend saved" so you can both save at the same point.
 | Black screen or outside the map after chapter jumps | Restart the game |
 | Black screen but you can move, on a brand-new game | Start a **New Game** alone, play the opening until you can walk, then connect |
 | "Create save data?" keeps coming back | Insert, tick **Allow saving**, then Yes |
+| An extra mouse pointer on screen | The REFramework menu is open: close it with Insert (or your menu key, see *No Insert key*) |
 | Pause menu won't open | Wait 5 seconds out of any cutscene (the mod clears a stuck video flag), or restart |
 | You see the inside of a head in first person | The full-model mod's files are in place but not set up: close the game and run **Use full models.cmd** |
 
