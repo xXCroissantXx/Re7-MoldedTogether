@@ -3519,7 +3519,8 @@ local function hud_lines()
     if kv.mode == "bot" then
         out[#out + 1] = { "Co-op: bot test" .. ping, 0xFFFFD27F }
     elseif kv.mode == "steam" and (kv.peer == nil or kv.peer == "steam:0") then
-        out[#out + 1] = { "Co-op: not connected (press F9 for the co-op menu)", 0xFF9EB7FF }
+        out[#out + 1] = { "Co-op: not connected (press " .. ((coop_menu_key_name and coop_menu_key_name()) or "F9") ..
+            " for the co-op menu)", 0xFF9EB7FF }
     elseif fresh then
         local who = peer_name(kv) or "your friend"
         out[#out + 1] = { "Co-op: connected to " .. who .. ping, 0xFF7FFF8C }
@@ -3548,7 +3549,8 @@ local function hud_lines()
     if tl then out[#out + 1] = { tl, tc } end
     local inv = pending_invite and pending_invite()
     if inv then
-        out[#out + 1] = { inv.name .. " invited you to co-op: press F9 to answer", 0xFF7FFF8C }
+        out[#out + 1] = { inv.name .. " invited you to co-op: press " ..
+            ((coop_menu_key_name and coop_menu_key_name()) or "F9") .. " to answer", 0xFF7FFF8C }
     end
     if fresh and anim.flags and (anim.flags & STANCE_CUTSCENE) ~= 0 then
         out[#out + 1] = { "Friend is watching a cutscene", 0xFF7FE6FF }

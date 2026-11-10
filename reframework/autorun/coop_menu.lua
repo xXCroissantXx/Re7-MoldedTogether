@@ -75,6 +75,7 @@ local function menu_key()
     for _, k in ipairs(MENU_KEYS) do if k.vk == want then return k end end
     return MENU_KEYS[1]
 end
+function coop_menu_key_name() return menu_key().name end
 
 -- CoopNet takes one command at a time (coopnet_command.txt, read and deleted 30 times a
 -- second): queued, and the next written only once the last was taken.
@@ -661,7 +662,7 @@ function coop_ui_line_h(size) return line_h(size) - 4 end
 
 -- Input -------------------------------------------------------------------------------------
 local VK = { up = 0x26, down = 0x28, left = 0x25, right = 0x27, enter = 0x0D, space = 0x20, back = 0x08,
-    w = 0x57, s = 0x53, a = 0x41, d = 0x44 }
+    w = 0x57, s = 0x53, a = 0x41, d = 0x44, f = 0x46, esc = 0x1B }
 local function key_down(vk)
     if not (reframework and reframework.is_key_down) then return false end
     local ok, v = pcall(reframework.is_key_down, reframework, vk)
@@ -698,8 +699,8 @@ local function read_actions(now)
         down = key_down(VK.down) or key_down(VK.s) or pad_down(p, "LeftDown") or stick_v < -0.6,
         left = key_down(VK.left) or key_down(VK.a) or pad_down(p, "LeftLeft") or stick_h < -0.6,
         right = key_down(VK.right) or key_down(VK.d) or pad_down(p, "LeftRight") or stick_h > 0.6,
-        ok = key_down(VK.enter) or key_down(VK.space) or pad_down(p, "Decide"),
-        back = key_down(VK.back) or pad_down(p, "Cancel"),
+        ok = key_down(VK.enter) or key_down(VK.space) or key_down(VK.f) or pad_down(p, "Decide"),
+        back = key_down(VK.back) or key_down(VK.esc) or pad_down(p, "Cancel"),
         toggle = key_down(menu_key().vk),
         combo = pad_down(p, "LeftStickPush") and pad_down(p, "RightStickPush"),
     }
@@ -1354,7 +1355,8 @@ local function draw_paper(title, items, is_confirm)
     local w, h = screen()
     local hit = { a = {}, b = {}, more = {} }   -- v0.43: where the rows are, for the mouse
     M.hit = hit
-    pcall(draw.filled_rect, 0, 0, w, h, PAPER.dim)
+    -- On the Options table (title screen) the table shows; elsewhere a dark cover over the game.
+    pcall(draw.filled_rect, 0, 0, w, h, M.table_mode and 0x30000000 or PAPER.dim)
     -- Sheet A: the sections.
     local ax, ay = math.floor(w * 0.07), math.floor(h * 0.12)
     local aw, ah = math.floor(w * 0.29), math.floor(h * 0.72)
@@ -1463,8 +1465,8 @@ local function draw_paper(title, items, is_confirm)
     text(hint, (w - text_w(hint)) / 2 + 1, gy + 1, 0xC0000000)
     text(hint, (w - text_w(hint)) / 2, gy, hint_color)
     local controls = (M.focus == "A" and not is_confirm)
-        and ("Up/Down: choose    Right / Enter / A: open    Backspace / B: close    " .. menu_key().name .. " / L3+R3: close")
-        or "Up/Down: choose    Left/Right: change    Enter / A: select    Backspace / B: back"
+        and ("Up/Down: choose    Right / Enter / F / A: open    Esc / B: close    " .. menu_key().name .. " / L3+R3: close")
+        or "Up/Down: choose    Left/Right: change    Enter / F / A: select    Esc / Backspace / B: back"
     local mo = M.mouse
     if mo and os.clock() - (mo.t or -100) < 20 then
         controls = "Mouse: point to choose    Click: select    Right click: back    (the keys and the controller work too)"
@@ -1497,17 +1499,66 @@ local function title_menu()
     local list = arr and safe(arr.get_elements, arr) or {}
     for _, t in ipairs(list) do
         local go = safe(t.call, t, "get_GameObject")
-        if go and safe(go.call, go, "get_Name") == "GUI_menu" then TITLE.menu = t end
+        if go and safe(go.call, go, "get_Name") == "GUI_menu" then
+            TITLE.menu = t
+            local gui = safe(go.call, go, "getComponent(System.Type)", sdk.typeof("via.gui.GUI"))
+            TITLE.gui_addr = gui and safe(gui.get_address, gui) or nil
+        end
     end
     return TITLE.menu
 end
-local function m_name_of(item)
-    local c = safe(item.call, item, "get_Child")
-    while c do
-        if tostring(safe(c.call, c, "get_Name")) == "m_name" then return c end
-        c = safe(c.call, c, "get_Next")
+local function texts_of(item)
+    local key = tostring(safe(item.get_address, item)) .. "/" .. tostring(safe(item.call, item, "get_Name"))
+    TITLE.texts = TITLE.texts or {}
+    if TITLE.texts[key] then return TITLE.texts[key] end
+    local out = {}
+    local function walk(e, depth)
+        local c = safe(e.call, e, "get_Child")
+        local n = 0
+        while c and n < 40 do
+            n = n + 1
+            if tostring(safe(c.call, c, "get_Name")) == "m_name" then out[#out + 1] = c end
+            if depth < 4 then walk(c, depth + 1) end
+            c = safe(c.call, c, "get_Next")
+        end
     end
-    return nil
+    walk(item, 1)
+    TITLE.texts[key] = out
+    return out
+end
+-- The text, on whichever slot shows our row; the others get theirs back.
+local function title_texts()
+    local sl, steps = TITLE.sl, TITLE.steps
+    if sl == nil or steps == nil or TITLE.idx == nil then return end
+    local items = sl:call("get_Items")
+    for i = 0, items:call("get_Count") - 1 do
+        local it = items:call("get_Item", i)
+        local slot = it:call("get_Name")
+        local li = it:call("get_ListIndex")
+        for _, t in ipairs(texts_of(it)) do
+            if li == TITLE.idx then
+                if t:call("get_Message") ~= "CO-OP" then t:call("set_Message", "CO-OP") end
+                TITLE.marked[slot] = true
+            elseif TITLE.marked[slot] then
+                pcall(t.call, t, "set_Message", nil)
+                local sp = (li and li >= 0 and li < steps:call("get_Count")) and steps:call("get_Item", li) or nil
+                if sp then pcall(t.call, t, "set_MessageId", sp:get_field("ElemMsgID")) end
+            end
+        end
+        if li ~= TITLE.idx then TITLE.marked[slot] = nil end
+    end
+end
+if re and re.on_pre_gui_draw_element then
+    re.on_pre_gui_draw_element(function(element)
+        if TITLE.idx ~= nil and TITLE.gui_addr ~= nil and not TITLE.broken then
+            local ok, a = pcall(element.get_address, element)
+            if ok and a == TITLE.gui_addr then
+                local tok, terr = pcall(title_texts)
+                if not tok and not TITLE.draw_err then TITLE.draw_err = true log("title text ERR " .. tostring(terr)) end
+            end
+        end
+        return true
+    end)
 end
 local function title_row(now)
     TITLE.selected = false
@@ -1521,7 +1572,7 @@ local function title_row(now)
     local sl = cache and cache:get_field("_Element")
     if steps == nil or sl == nil then return end
     if TITLE.menu_addr ~= addr then
-        TITLE.menu_addr, TITLE.idx, TITLE.marked, TITLE.seen_n, TITLE.moves = addr, nil, {}, nil, 0
+        TITLE.menu_addr, TITLE.idx, TITLE.marked, TITLE.seen_n, TITLE.moves, TITLE.texts = addr, nil, {}, nil, 0, {}
     end
     -- Ours, if it's there already (it stays in the list after a reset of scripts).
     local n = steps:call("get_Count")
@@ -1579,26 +1630,29 @@ local function title_row(now)
     -- The game set its row count again without ours: count ours back in.
     if mine == n - 1 and sl:call("get_ItemMax") == n - 1 then sl:call("set_ItemMax", n) end
     TITLE.idx = mine
-    -- The text, on whichever slot shows our row; the others get theirs back.
-    local items = sl:call("get_Items")
-    for i = 0, items:call("get_Count") - 1 do
-        local it = items:call("get_Item", i)
-        local t = m_name_of(it)
-        local slot = it:call("get_Name")
-        if t then
-            if it:call("get_ListIndex") == TITLE.idx then
-                if t:call("get_Message") ~= "CO-OP" then t:call("set_Message", "CO-OP") end
-                TITLE.marked[slot] = true
-            elseif TITLE.marked[slot] then
-                TITLE.marked[slot] = nil
-                pcall(t.call, t, "set_Message", nil)
-                local li = it:call("get_ListIndex")
-                local sp = (li and li >= 0 and li < steps:call("get_Count")) and steps:call("get_Item", li) or nil
-                if sp then pcall(t.call, t, "set_MessageId", sp:get_field("ElemMsgID")) end
-            end
+    TITLE.sl, TITLE.steps = sl, steps
+    title_texts()
+    TITLE.selected = sl:call("get_SelectedIndex") == TITLE.idx and tsm:get_field("IsMainListControl") == true
+end
+
+-- On the title screen the co-op screen goes on the Options table (v0.43): the title menu's own
+-- camera move there and back (app.TitleSubMenu.changeMotionCamera: VoiceRecorder_to_Option 2,
+-- Optin_to_VoiceRecorder 3; tried live 2026-11-09), with the sheets drawn on the table.
+local function title_table(on)
+    local tsm = title_menu()
+    if on then
+        if tsm == nil then return end
+        if pcall(tsm.call, tsm, "changeMotionCamera", 2) then
+            M.table_mode = true
+            log("title: camera to the Options table")
+        end
+    elseif M.table_mode then
+        M.table_mode = false
+        if tsm and on_title() then
+            pcall(tsm.call, tsm, "changeMotionCamera", 3)
+            log("title: camera back to the tape recorder")
         end
     end
-    TITLE.selected = sl:call("get_SelectedIndex") == TITLE.idx and tsm:get_field("IsMainListControl") == true
 end
 
 -- The title-screen and in-game prompts, while the menu is closed.
@@ -1750,6 +1804,15 @@ re.on_frame(function()
             a, ms = {}, {}
         end
         if M.open and M.open_wanted == false then set_open(false) end
+        -- The table on the title screen (once per opening), and back when the screen closes.
+        if M.open and not M.table_mode and not M.table_tried and on_title() and not TITLE.broken then
+            M.table_tried = true
+            pcall(title_table, true)
+        end
+        if not M.open then
+            M.table_tried = nil
+            if M.table_mode then pcall(title_table, false) end
+        end
         if not M.open then
             -- Watchdog: nothing of ours may stay held while the menu is closed.
             if M.locked then hold_game(false) end

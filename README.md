@@ -66,7 +66,7 @@ The Lobby then says "Full character models: installed".
    (co-op menu > Options), then answer Yes.
 2. On the title screen, choose **CO-OP** on the tape recorder (under EXIT). In play, press **F9** (or both sticks,
    **L3+R3**, on a controller). The **co-op screen** opens: two sheets of paper like the game's Options, the
-   sections on sheet A, the chosen one on sheet B. Keyboard (arrows or WASD, Enter, Backspace), controller
+   sections on sheet A, the chosen one on sheet B. Keyboard (arrows or WASD, Enter or F, Esc or Backspace), controller
    (D-pad or left stick, A, B) or mouse (point at a row, click to pick it, right click to go back). The first
    time, it explains the basics.
 3. **Friends**: pick your friend and **Invite** them. (Friends appear once they've started RE7 Co-op too.)

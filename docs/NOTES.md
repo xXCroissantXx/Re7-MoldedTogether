@@ -1387,3 +1387,16 @@ Not synced / broken, as reported by the owner:
   held while the screen is open). Quick messages 'talk ammo' / 'talk meds' set coop_give_ask, which
   Give items uses once to pick that friend. Tests: menu_test.py 78 (title list filled over frames,
   the repair, the mouse; the title checks fail on v0.42's coop_menu.lua).
+- v0.43 rebuilt (2026-11-09): user saw CO-OP's text go blank while scrolling (the row still opened the menu).
+  Now every m_name under a slot (depth 4) gets the text, and it's set again in re.on_pre_gui_draw_element for
+  GUI_menu's via.gui.GUI (after the game's slot update). Esc = back (B -> A -> close), F = OK (the game's own
+  prompt shows F / right mouse). Status line uses coop_menu_key_name(). Asked for: the co-op screen on the
+  real Options table: give the row the Options step, hide the game's sheets in the pre-draw callback, draw ours,
+  run the game's own Back on close: needs live research (which GUI, which back call).
+- v0.43 table (live, 2026-11-09): app.TitleSubMenu.changeMotionCamera(app.TitleSubMenu.CameraMotionID):
+  VoiceRecorder_to_SaveSlot 0, SaveSlot_to_VoiceRecorder 1, VoiceRecorder_to_Option 2, Optin_to_VoiceRecorder 3,
+  VoiceRecorder 4; MotCam (via.motion.MotionCamera) layer 0 MotionID shows it (60 frames). Tried live: 2 to the
+  table, 3 back, clean. The game sets IsMainListControl back itself every frame. Also on TitleSubMenu:
+  openOptionMenu(app.OptionMenu.OptionScreenType Option 0, ExtraGame 1, SpecialFeature 2, Record 3),
+  changeStepOption/Main/ExtraGame(Int32), _OptionMenuHandle (app.MenuHandle: getMenu, requestClose). GUIs on
+  the title: GUI_menu (tape recorder), GUI_option (the table's sheets), MouseCursorGUI (the game's cursor).

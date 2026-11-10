@@ -203,6 +203,20 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 - [ ] **The mouse**: open the co-op screen (CO-OP or F9) and move the mouse: the row under it lights up and a
       small dot shows where it is. Click a section, click a setting (it changes), right click to go back.
       Note it if nothing moves (the game may keep the mouse to itself in play; the keys still work).
+- [ ] **The table**: pick CO-OP on the tape recorder: the camera moves to the Options table and the co-op
+      sheets show on it; close it (Esc): the camera goes back to the tape recorder and the list works.
+- [ ] **Esc and F**: on sheet B, Esc goes back to sheet A, Esc again closes; F picks like Enter. The top-left
+      line names the menu key you picked (Options).
+- [ ] **I need ammo / I need healing**: one of you picks it under Quick messages; the other sees the message,
+      opens **Give items**, and the one who asked is already picked, with their health.
+
+## 15. New in v0.43
+
+- [ ] **CO-OP on the tape recorder**: on the title screen, scroll through the whole list: EXIT is there and
+      says EXIT, CO-OP comes after it, and no line is blank. Scroll up and down past both a few times.
+- [ ] **The mouse**: open the co-op screen (CO-OP or F9) and move the mouse: the row under it lights up and a
+      small dot shows where it is. Click a section, click a setting (it changes), right click to go back.
+      Note it if nothing moves (the game may keep the mouse to itself in play; the keys still work).
 - [ ] **I need ammo / I need healing**: one of you picks it under Quick messages; the other sees the message,
       opens **Give items**, and the one who asked is already picked, with their health.
 
