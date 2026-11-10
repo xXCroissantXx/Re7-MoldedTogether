@@ -875,8 +875,8 @@ local PAGES = {}
 -- Shown once, the first time the menu opens (and from Help).
 function PAGES.welcome()
     local items = {
-        { info = true, text = "Welcome to RE7 Co-op.", color = 0xFFFFFFFF },
-        { info = true, text = "1. Friends: invite a friend who runs RE7 Co-op, or accept their invite." },
+        { info = true, text = "Welcome to Molded Together.", color = 0xFFFFFFFF },
+        { info = true, text = "1. Friends: invite a friend who runs Molded Together, or accept their invite." },
         { info = true, text = "2. Lobby: one of you hosts and picks where to start; everyone gets ready; Start." },
         { info = true, text = "   To start at a chapter, everyone loads a save first (Continue), then Start." },
         { info = true, text = "3. Play. Doors, items, enemies and story scenes are shared; if you go down," },
@@ -1041,14 +1041,14 @@ function PAGES.friends()
                 status, verb = "hosting a lobby", "Join"
                 act = function() command((#members() == 0 and "steam " or "steamadd ") .. f.id) say("Asking to join " .. f.name .. "...", 0xFF7FFF8C) end
             elseif f.coop then
-                status, verb = "RE7 Co-op " .. tostring(f.version or ""), "Invite"
+                status, verb = "Molded Together " .. tostring(f.version or ""), "Invite"
                 act = function() command((#members() == 0 and "steam " or "steamadd ") .. f.id) say("Invited " .. f.name .. ": they accept in their co-op menu", 0xFF7FFF8C) end
             elseif f.in_re7 then
                 status, verb = "in RE7, co-op not running", "Invite"
-                act = function() command((#members() == 0 and "steam " or "steamadd ") .. f.id) say("Invited " .. f.name .. " for when they start RE7 Co-op") end
+                act = function() command((#members() == 0 and "steam " or "steamadd ") .. f.id) say("Invited " .. f.name .. " for when they start Molded Together") end
             else
                 status, verb = "online", "Invite"
-                act = function() command((#members() == 0 and "steam " or "steamadd ") .. f.id) say("Invited " .. f.name .. " for when they start RE7 Co-op") end
+                act = function() command((#members() == 0 and "steam " or "steamadd ") .. f.id) say("Invited " .. f.name .. " for when they start Molded Together") end
             end
             local full = not in_party[f.id] and #members() >= 3
             local k = kv()
@@ -1062,13 +1062,13 @@ function PAGES.friends()
         end
     end
     if shown == 0 then
-        items[#items + 1] = { info = true, text = "No friends running RE7 Co-op right now.", color = 0xFF969696 }
+        items[#items + 1] = { info = true, text = "No friends running Molded Together right now.", color = 0xFF969696 }
         items[#items + 1] = { info = true, text = "They appear here as soon as they start it.", color = 0xFF969696 }
     end
     items[#items + 1] = { text = "Show all online friends", value = (friends and friends.show_all) and "Yes" or "No",
         on = function() if friends then friends.show_all = not friends.show_all end end,
         left = function() if friends then friends.show_all = false end end, right = function() if friends then friends.show_all = true end end,
-        hint = "Invite a friend who hasn't started RE7 Co-op yet: they get it when they do." }
+        hint = "Invite a friend who hasn't started Molded Together yet: they get it when they do." }
     if #members() > 0 then
         items[#items + 1] = { text = "Disconnect from everyone", on = function() ask("Disconnect from everyone?", "Disconnect", function()
             if L.state ~= nil and i_host() then lobby_close("you left") end
@@ -1361,7 +1361,7 @@ local function draw_paper(title, items, is_confirm)
     local ax, ay = math.floor(w * 0.07), math.floor(h * 0.12)
     local aw, ah = math.floor(w * 0.29), math.floor(h * 0.72)
     sheet(ax, ay, aw, ah, "A")
-    local head = "Co-op"
+    local head = "Molded Together"
     text(head, ax + (aw - text_w(head, "big")) / 2, ay + 26, PAPER.ink, "big")
     local ver = kv().version
     if ver then text("v" .. ver, ax + aw - 30 - text_w("v" .. ver, "small"), ay + 34, PAPER.faint, "small") end
@@ -1676,10 +1676,10 @@ local function draw_prompts(now)
             text(d, (w - text_w(d)) / 2 + 1, h * 0.927 + 1, 0xC0000000)
             text(d, (w - text_w(d)) / 2, h * 0.927, 0xFFE6E6E6)
         elseif TITLE.idx == nil then
-            lines[#lines + 1] = { "RE7 Co-op: press " .. menu_key().name .. " (or L3+R3 on a controller) for the co-op menu", 0xFFE6E6E6 }
+            lines[#lines + 1] = { "Molded Together: press " .. menu_key().name .. " (or L3+R3 on a controller) for the co-op menu", 0xFFE6E6E6 }
         end
     elseif (M.first_hint_until or 0) > now then
-        lines[#lines + 1] = { "RE7 Co-op: " .. menu_key().name .. " or L3+R3 opens the co-op menu", 0xFFBFBFBF }
+        lines[#lines + 1] = { "Molded Together: " .. menu_key().name .. " or L3+R3 opens the co-op menu", 0xFFBFBFBF }
     end
     if #lines == 0 then return end
     local lh = line_h("small")
@@ -1879,7 +1879,7 @@ end)
 function coop_menu_debug_items() return current_items() end
 function coop_menu_debug_title() return TITLE end
 
--- For the RE7 Co-op window and the status line.
+-- For the Molded Together window and the status line.
 function coop_menu_status()
     if L.state == nil then return "Lobby: none (" .. menu_key().name .. " opens the co-op menu)" end
     return string.format("Lobby: %s, host %s, start %s", L.state, host_name(), start_label(L.start))

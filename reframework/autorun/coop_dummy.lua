@@ -2,7 +2,7 @@
 -- Builds the friend's body from RE7's VR dummy-player prefab
 -- (Prefab/System/VrDummyPlayer.pfb, app.vr.VrManager.DummyPlayerPrefab) dressed in the
 -- player's own Shadow* meshes, animates it from the network samples (walk/jog/crouch,
--- head look, footsteps), rebuilds it after loads, and owns the RE7 Co-op window, the
+-- head look, footsteps), rebuilds it after loads, and owns the Molded Together window, the
 -- on-screen status, connecting, the chapter switcher and the testing tools.
 -- Log: <game>/reframework/data/coop_dummy_log.txt; the previous script load's log is kept
 -- as coop_dummy_log_prev.txt, so a Reset scripts doesn't wipe the last test.
@@ -1682,7 +1682,7 @@ local function connection_text()
 end
 
 -- Steam friends list (CoopNet writes coopnet_friends.txt every 2 s). Friends running
--- RE7 Co-op show a Connect button; connecting also shows up on their side as an invite
+-- Molded Together show a Connect button; connecting also shows up on their side as an invite
 -- (Steam rich presence), which they accept with one click.
 friends = { list = {}, t = -100, show_all = false, dismissed = {} }
 
@@ -1774,7 +1774,7 @@ local function friend_row(f, i)
     if in_party then
         label = label .. "  (connected)"
     elseif f.coop then
-        label = label .. "  (RE7 Co-op " .. tostring(f.version) .. ")"
+        label = label .. "  (Molded Together " .. tostring(f.version) .. ")"
     elseif f.in_re7 then
         label = label .. "  (in RE7, co-op not running)"
     end
@@ -1806,7 +1806,7 @@ local function draw_friend_list()
         imgui.same_line()
         if imgui.button("Not now##invite") then friends.dismissed[inv.id] = true end
     end
-    imgui.text("Your Steam friends in RE7 Co-op:")
+    imgui.text("Your Steam friends in Molded Together:")
     local shown = 0
     for i, f in ipairs(friends.list) do
         if f.coop or friends.show_all or f.id == current_peer_id() then
@@ -1815,12 +1815,12 @@ local function draw_friend_list()
         end
     end
     if shown == 0 then
-        imgui.text("  Nobody yet. Your friend needs to start RE7 Co-op too; they'll appear here.")
+        imgui.text("  Nobody yet. Your friend needs to start Molded Together too; they'll appear here.")
     end
     local c, v = imgui.checkbox("Show all online friends", friends.show_all)
     if c then friends.show_all = v end
     if friends.show_all then
-        imgui.text("Connecting to a friend who isn't running RE7 Co-op yet invites them for when they start it.")
+        imgui.text("Connecting to a friend who isn't running Molded Together yet invites them for when they start it.")
     end
 end
 
@@ -2611,7 +2611,7 @@ local function draw_lobby()
     end
 end
 
--- Floating "RE7 Co-op" window (shown while the REFramework menu is open) ------------
+-- Floating "Molded Together" window (shown while the REFramework menu is open) ------------
 coop_window = { open = true }
 
 local function section(title, fn)
@@ -2737,12 +2737,12 @@ end
 
 on_draw_ui_1(function()
     local ok, err = pcall(function()
-        local c, v = imgui.checkbox("Show the RE7 Co-op window", coop_window.open)
+        local c, v = imgui.checkbox("Show the Molded Together window", coop_window.open)
         if c then coop_window.open = v end
     end)
     if not coop_window.open or not imgui.begin_window then return end
     -- end_window must run after every begin_window, even if the body fails.
-    if imgui.begin_window("RE7 Co-op", true, 0) then
+    if imgui.begin_window("Molded Together", true, 0) then
         local ok, err = pcall(function()
             imgui.text("Status: " .. connection_text())
             imgui.text("In-game co-op menu: F9, or L3+R3 on a controller (no REFramework window needed)")

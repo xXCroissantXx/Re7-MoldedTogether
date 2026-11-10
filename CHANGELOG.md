@@ -1,27 +1,18 @@
 # Changelog
 
 ## v0.43 (2026-11-09)
+- **New name: Molded Together** (it was coop-re7 / RE7 Co-op). The installer makes a "Start Molded Together"
+  shortcut and removes the old "Start RE7 Co-op" one; your settings stay.
 - **Fixed: CO-OP on the tape recorder took EXIT's place**, with a blank line under it. The game fills its
   list over several frames, and CO-OP was added before the game had added EXIT. CO-OP now waits until the
   list is complete, goes after EXIT, and moves back to the end if a row ever comes after it.
-- **The mouse works on the co-op screen.** Point at a row to highlight it, click to pick it (like Enter / A),
-  right click to go back (like Backspace / B); click "more above" / "more below" to scroll. A click with CO-OP
-  highlighted on the tape recorder opens the co-op screen. Pointing only moves the highlight when the mouse
-  moves, so it never fights the keys or the controller.
-- **"I need ammo" and "I need healing"** in Quick messages. Your friend sees it with "co-op screen > Give
-  items", and their Give items has you picked, with your health shown next to your name.
-
-## v0.43 (2026-11-09)
-- **Fixed: CO-OP on the tape recorder took EXIT's place**, with a blank line under it. The game fills its
-  list over several frames, and CO-OP was added before the game had added EXIT. CO-OP now waits until the
-  list is complete, goes after EXIT, and moves back to the end if a row ever comes after it.
-- **The mouse works on the co-op screen.** Point at a row to highlight it, click to pick it (like Enter / A),
-  right click to go back (like Backspace / B); click "more above" / "more below" to scroll. A click with CO-OP
-  highlighted on the tape recorder opens the co-op screen. Pointing only moves the highlight when the mouse
-  moves, so it never fights the keys or the controller.
 - **On the title screen the co-op screen sits on the Options table**: CO-OP moves the camera from the tape
   recorder to the table (the game's own camera move), the sheets lie there without the dark cover, and
   closing moves the camera back.
+- **The mouse works on the co-op screen.** Point at a row to highlight it, click to pick it (like Enter / A),
+  right click to go back (like Backspace / B); click "more above" / "more below" to scroll. A click with CO-OP
+  highlighted on the tape recorder opens the co-op screen. Pointing only moves the highlight when the mouse
+  moves, so it never fights the keys or the controller.
 - **Esc goes back** a sheet and then closes the co-op screen, and **F** picks, like on the game's own screens.
 - **The top-left line names your menu key** (it always said F9).
 - **CO-OP's text while scrolling**: set on every text of the row, and again right before the title menu is

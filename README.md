@@ -1,4 +1,4 @@
-# coop-re7: online co-op for Resident Evil 7 (prototype, v0.43)
+# Molded Together: online co-op for Resident Evil 7 (prototype, v0.43; formerly coop-re7)
 
 Play Resident Evil 7 with a friend over the internet. Each of you sees the other as a full-body character (Ethan,
 or anyone you pick in the Lobby) who walks, jogs, crouches, sidesteps, looks around, blocks and acts where they do,
@@ -39,7 +39,7 @@ Made with [coop-anything](https://github.com/cranebeaker/coop-anything). MIT lic
      Documents folder is synced by OneDrive). Your normal install is not changed; the copy needs as much free
      space as your RE7 install;
    - download **REFramework** and its C# add-on from the official release and **check each file's SHA-256**;
-   - install the co-op files, back up your saves, and put a **Start RE7 Co-op** shortcut on your desktop.
+   - install the co-op files, back up your saves, and put a **Start Molded Together** shortcut on your desktop.
 4. If the installer says **.NET 10 runtime not found**, install ".NET Runtime 10" (Windows x64) from
    https://dotnet.microsoft.com/download/dotnet/10.0 and run Install.cmd again.
 
@@ -60,7 +60,7 @@ The Lobby then says "Full character models: installed".
 
 ## Play
 
-1. Start Steam, then **Start RE7 Co-op** (desktop shortcut). **Never played RE7?** Start a **New Game** and play
+1. Start Steam, then **Start Molded Together** (desktop shortcut). **Never played RE7?** Start a **New Game** and play
    through the opening drive until you can walk around before connecting; joining from the very first screen
    (no save yet) leaves the screen black. If the game asks to create save data, switch on **Allow saving** first
    (co-op menu > Options), then answer Yes.
@@ -69,7 +69,7 @@ The Lobby then says "Full character models: installed".
    sections on sheet A, the chosen one on sheet B. Keyboard (arrows or WASD, Enter or F, Esc or Backspace), controller
    (D-pad or left stick, A, B) or mouse (point at a row, click to pick it, right click to go back). The first
    time, it explains the basics.
-3. **Friends**: pick your friend and **Invite** them. (Friends appear once they've started RE7 Co-op too.)
+3. **Friends**: pick your friend and **Invite** them. (Friends appear once they've started Molded Together too.)
 4. Your friend sees "*<your name>* invited you to co-op: press F9 to answer" at the bottom left. They press F9 and
    **Accept**.
 5. The top-left corner shows **Co-op: connected to <name> - <ping> ms**, and they appear with their name over
@@ -134,13 +134,13 @@ fights** (Options, the same for both) if she acts oddly.
 
 ### No Insert key
 
-REFramework opens and closes its menu (and the RE7 Co-op window with it) with Insert only. Without that key the
+REFramework opens and closes its menu (and the Molded Together window with it) with Insert only. Without that key the
 menu stays on screen, with an extra mouse pointer. Give it another key once: click the REFramework window's title
 bar to expand it, open **Configuration**, click **Menu Key** and press a key the game doesn't use, for example
 **F10** (F9 opens the co-op menu, F5-F8 are the quick messages). Tick **Remember Menu State** there too, so the menu stays closed when the game
 starts. Wherever this guide says Insert, use that key.
 
-### The RE7 Co-op window
+### The Molded Together window
 
 Everything in the co-op menu, plus connecting by SteamID and the developer tools. Press **Insert**; the window
 opens next to the REFramework menu. Its sections:
@@ -149,7 +149,7 @@ opens next to the REFramework menu. Its sections:
 |---|---|
 | **Lobby** | Both players, their chapters, and **You appear to your friend as**: Default (whoever you're playing), Ethan, Mia, Mia (ship), Clancy, Zoe, Chris, Joe. Without the full-model mod some lack a face. |
 | **Talk and catch up** | Quick-message buttons (the same as F5-F8, plus "Go on ahead"), a switch for the F5-F8 keys, your catch-up list, **Catch up now** (both ways, if something looks out of step), and **Start a fresh list** (when you start a new game together; you're reminded if your list has changes from a later chapter than your friend's). |
-| **Connect and saving** | Your Steam friends in RE7 Co-op (**Connect**, **Accept**), **Show all online friends**, connecting by SteamID, **Allow saving** and **Back up saves now**. |
+| **Connect and saving** | Your Steam friends in Molded Together (**Connect**, **Accept**), **Show all online friends**, connecting by SteamID, **Allow saving** and **Back up saves now**. |
 | **Options** | What's shown and what's shared (below). |
 | **Help** | **Go to my friend's chapter**, **Teleport to my friend**, **Fast-forward this cutscene**, **Fix my friend's character**, **Reload last save**, **Make a bug report**. |
 | **Show developer tools** | Off by default: the test bot and research tools (below). |
@@ -233,7 +233,7 @@ the other sees "Your friend saved" so you can both save at the same point.
 
 | What you see | Try |
 |---|---|
-| Your friend isn't in the list | They need RE7 Co-op running and to be your Steam friend; or tick **Show all online friends** |
+| Your friend isn't in the list | They need Molded Together running and to be your Steam friend; or tick **Show all online friends** |
 | "Waiting for your friend" | They need to **Accept** in their co-op screen; if their game is closed, it clears by itself after 30 seconds |
 | "Friend's packets don't match" | You're on different coop-re7 versions; both install the same release |
 | "Friend is in another chapter" | F9 > **Help and fixes** > **Go to your friend's chapter**, or a lobby with **The host's chapter** |
@@ -248,7 +248,7 @@ the other sees "Your friend saved" so you can both save at the same point.
 | Pause menu won't open | Wait 5 seconds out of any cutscene (the mod clears a stuck video flag), or restart |
 | You see the inside of a head in first person | The full-model mod's files are in place but not set up: close the game and run **Use full models.cmd** |
 
-For a bug report, choose **Make a bug report** (co-op menu > Help and fixes, or the RE7 Co-op window) and send the
+For a bug report, choose **Make a bug report** (co-op menu > Help and fixes, or the Molded Together window) and send the
 zip it puts on your desktop. The logs are in your co-op folder's `reframework\data`: `coop_dummy_log.txt`, `coop_menu_log.txt`,
 `coop_enemies_log.txt`, `coop_world_log.txt`, `coop_story_log.txt`, `coop_revive_log.txt` and
 `coopnet_status.txt`. `coopnet_status.txt` contains your SteamID and Steam name; remove them before posting
@@ -264,7 +264,7 @@ that happen once (a kill, a door, a pickup, a cutscene) and 10-a-second enemy up
 
 | Script | Does |
 |---|---|
-| `coop_dummy.lua` | Your friend's character, the Lobby, connecting, the RE7 Co-op window, on-screen status, footsteps |
+| `coop_dummy.lua` | Your friend's character, the Lobby, connecting, the Molded Together window, on-screen status, footsteps |
 | `coop_enemies.lua` | Shared enemy damage, deaths and movement (who runs each enemy), pausing |
 | `coop_world.lua` | Shared doors, drawers, breakable boxes and supplies |
 | `coop_talk.lua` | The catch-up list, quick messages, pings and health |

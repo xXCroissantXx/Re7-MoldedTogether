@@ -125,7 +125,7 @@ local function note(msg)
     log(msg)
 end
 
--- "Share story" (RE7 Co-op window, off by default): off = neither send nor apply.
+-- "Share story" (Molded Together window, off by default): off = neither send nor apply.
 -- Off unless ticked: in the first real session it pushed the player who was behind
 -- (tape ended early, washed-out picture, chapter change stuck), 2026-11-02.
 local function sharing() return settings ~= nil and settings.share_story == true end

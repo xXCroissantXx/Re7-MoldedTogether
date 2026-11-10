@@ -13,7 +13,7 @@
 -- The outgoing event file keeps only the last 30 lines, so the list goes out in batches:
 -- "catchup <ev>|<ev>|..." with up to 20 changes per line, one line every half second.
 --
--- Pings and quick messages. F5-F8 (or the buttons in the RE7 Co-op window) send
+-- Pings and quick messages. F5-F8 (or the buttons in the Molded Together window) send
 -- "talk <kind> <chapter> <x> <y> <z>": the friend sees the message in the middle of the
 -- screen and, for a ping, a marker where you stood, with the distance and a pointer when
 -- it's off screen.
@@ -295,7 +295,7 @@ local function send_opt(o)
         tonumber(settings[o.key .. "_t"]) or 0))
 end
 
--- Called by the RE7 Co-op window's checkboxes instead of setting the value directly.
+-- Called by the Molded Together window's checkboxes instead of setting the value directly.
 function coop_set_shared_option(key, value)
     if not settings then return end
     settings[key] = value == true
@@ -641,7 +641,7 @@ re.on_frame(function()
     if not ok and not talk.err then talk.err = true log("frame ERR " .. tostring(err)) end
 end)
 
--- The "Talk and catch up" section of the RE7 Co-op window (drawn by coop_dummy.lua).
+-- The "Talk and catch up" section of the Molded Together window (drawn by coop_dummy.lua).
 function coop_talk_ui()
     imgui.text("Quick messages (your friend sees them on screen):")
     for i, kd in ipairs(KEY_ORDER) do

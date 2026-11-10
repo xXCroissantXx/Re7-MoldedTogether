@@ -6,7 +6,7 @@
 #     each file's SHA-256 before using it.
 #  3. Installs the co-op files from this kit, keeping any friend ID you already set.
 #  4. Backs up your RE7 saves.
-#  5. Creates "Start RE7 Co-op" (in the co-op folder and on your desktop).
+#  5. Creates "Start Molded Together" (in the co-op folder and on your desktop).
 #
 # Run it with Install.cmd (double-click). Options for advanced use:
 #   -Destination <folder>   where the co-op copy goes (default: Documents\RE7-coop, or C:\RE7-coop
@@ -177,23 +177,28 @@ if ($any) { Ok "saves backed up to $BackupDir\$stamp" } else { Warn "no RE7 save
 
 # ---------------------------------------------------------------- 6. launcher
 Step 6 "Creating the launcher"
-$launcher = Join-Path $Destination "Start RE7 Co-op.cmd"
+$launcher = Join-Path $Destination "Start Molded Together.cmd"
 Set-Content -Path $launcher -Encoding Ascii -Value "@echo off`r`ncd /d `"%~dp0`"`r`nstart `"`" `"%~dp0re7.exe`""
-Ok "Start RE7 Co-op.cmd created"
+Ok "Start Molded Together.cmd created"
+# Renamed in v0.43 (it was "RE7 Co-op"): the old launcher and desktop shortcut go.
+foreach ($old in @((Join-Path $Destination "Start RE7 Co-op.cmd"),
+                   (Join-Path ([Environment]::GetFolderPath("Desktop")) "Start RE7 Co-op.lnk"))) {
+    if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue }
+}
 if (-not $NoShortcut) {
     try {
-        $lnk = Join-Path ([Environment]::GetFolderPath("Desktop")) "Start RE7 Co-op.lnk"
+        $lnk = Join-Path ([Environment]::GetFolderPath("Desktop")) "Start Molded Together.lnk"
         $sh = New-Object -ComObject WScript.Shell
         $s = $sh.CreateShortcut($lnk)
         $s.TargetPath = Join-Path $Destination "re7.exe"
         $s.WorkingDirectory = $Destination
         $s.Save()
         Ok "desktop shortcut created"
-    } catch { Warn "couldn't create the desktop shortcut; use Start RE7 Co-op.cmd in $Destination" }
+    } catch { Warn "couldn't create the desktop shortcut; use Start Molded Together.cmd in $Destination" }
 }
 
 Write-Host ""
 Write-Host "All done." -ForegroundColor Green
-Write-Host "1. Start Steam, then launch 'Start RE7 Co-op' and load a save."
-Write-Host "2. Press Insert. In the RE7 Co-op window, open 'Connect, saving and display'."
+Write-Host "1. Start Steam, then launch 'Start Molded Together' and load a save."
+Write-Host "2. Press Insert. In the Molded Together window, open 'Connect, saving and display'."
 Write-Host "3. Click Connect next to your friend's name; they click Accept."

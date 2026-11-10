@@ -107,4 +107,4 @@ if (Test-Path $cfg) {
     Ok "switched on REFramework's Loose File Loader"
 }
 Write-Host ""
-Write-Host "Done. Start RE7 Co-op; the Lobby should say 'Full character models: installed'." -ForegroundColor Cyan
+Write-Host "Done. Start Molded Together; the Lobby should say 'Full character models: installed'." -ForegroundColor Cyan

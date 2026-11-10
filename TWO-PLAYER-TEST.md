@@ -14,8 +14,8 @@ two real players through every shared feature once, so problems show up in a kno
 
 ## 1. Connect (5 min)
 
-- [ ] Both start **Start RE7 Co-op** and load any save.
-- [ ] Each sees the other under *Your Steam friends in RE7 Co-op*.
+- [ ] Both start **Start Molded Together** and load any save.
+- [ ] Each sees the other under *Your Steam friends in Molded Together*.
 - [ ] Player A clicks **Connect** next to Player B. Player B sees "*A* invited you to co-op" at the top left.
 - [ ] Player B presses Insert and clicks **Accept**.
 - [ ] Both see **Co-op: connected to *name* - *ping* ms** at the top left. Note the ping: ____ ms
@@ -40,7 +40,7 @@ two real players through every shared feature once, so problems show up in a kno
 Jack appears soon after dinner. Saving is off, so getting hurt costs nothing.
 
 - [ ] Both see Jack in the same place, doing the same thing.
-- [ ] Shooting Jack on one screen lowers his health on the other (the RE7 Co-op window, *Developer tools*, shows
+- [ ] Shooting Jack on one screen lowers his health on the other (the Molded Together window, *Developer tools*, shows
       "Enemy sync" with his health).
 - [ ] Knocking Jack down on one screen knocks him down on the other.
 - [ ] Walk away from Jack while your friend stays near him. He should keep chasing the nearer player
@@ -200,27 +200,19 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 
 - [ ] **CO-OP on the tape recorder**: on the title screen, scroll through the whole list: EXIT is there and
       says EXIT, CO-OP comes after it, and no line is blank. Scroll up and down past both a few times.
+- [ ] **The table**: pick CO-OP on the tape recorder: the camera moves to the Options table and the co-op
+      sheets show on it; close it (Esc): the camera goes back to the tape recorder and the list works.
 - [ ] **The mouse**: open the co-op screen (CO-OP or F9) and move the mouse: the row under it lights up and a
       small dot shows where it is. Click a section, click a setting (it changes), right click to go back.
       Note it if nothing moves (the game may keep the mouse to itself in play; the keys still work).
-- [ ] **The table**: pick CO-OP on the tape recorder: the camera moves to the Options table and the co-op
-      sheets show on it; close it (Esc): the camera goes back to the tape recorder and the list works.
 - [ ] **Esc and F**: on sheet B, Esc goes back to sheet A, Esc again closes; F picks like Enter. The top-left
       line names the menu key you picked (Options).
 - [ ] **I need ammo / I need healing**: one of you picks it under Quick messages; the other sees the message,
       opens **Give items**, and the one who asked is already picked, with their health.
-
-## 15. New in v0.43
-
-- [ ] **CO-OP on the tape recorder**: on the title screen, scroll through the whole list: EXIT is there and
-      says EXIT, CO-OP comes after it, and no line is blank. Scroll up and down past both a few times.
-- [ ] **The mouse**: open the co-op screen (CO-OP or F9) and move the mouse: the row under it lights up and a
-      small dot shows where it is. Click a section, click a setting (it changes), right click to go back.
-      Note it if nothing moves (the game may keep the mouse to itself in play; the keys still work).
-- [ ] **I need ammo / I need healing**: one of you picks it under Quick messages; the other sees the message,
-      opens **Give items**, and the one who asked is already picked, with their health.
+- [ ] **The new name**: the co-op screen says Molded Together, and the installer leaves one "Start Molded
+      Together" shortcut on the desktop (the old "Start RE7 Co-op" one is gone).
 
 ## Afterwards
 
-Each player clicks **Make a bug report** (RE7 Co-op window, *Help*) and sends the zip
+Each player clicks **Make a bug report** (Molded Together window, *Help*) and sends the zip
 it puts on their desktop. SteamIDs and names are already blanked out.
