@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (prototype, v0.43; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (prototype, v0.44; formerly coop-re7)
 
 Play Resident Evil 7 with a friend over the internet. Each of you sees the other as a full-body character (Ethan,
 or anyone you pick in the Lobby) who walks, jogs, crouches, sidesteps, looks around, blocks and acts where they do,

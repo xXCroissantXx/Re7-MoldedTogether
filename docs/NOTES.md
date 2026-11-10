@@ -1400,3 +1400,27 @@ Not synced / broken, as reported by the owner:
   openOptionMenu(app.OptionMenu.OptionScreenType Option 0, ExtraGame 1, SpecialFeature 2, Record 3),
   changeStepOption/Main/ExtraGame(Int32), _OptionMenuHandle (app.MenuHandle: getMenu, requestClose). GUIs on
   the title: GUI_menu (tape recorder), GUI_option (the table's sheets), MouseCursorGUI (the game's cursor).
+- v0.44 (2026-11-10): bot tests with two real copies (local/bottest, test only, never shipped).
+  RE7 has no single-instance check: two copies run side by side (gamepool from coop-anything, config
+  local/bottest/re7_gamepool.json: hard links to the owner's copy, private settings and reframework/;
+  CoopNet 'udp' 127.0.0.1:27960 <-> 27961; saving off; savehash.py proves the saves untouched). Each copy
+  is driven through coop_devexec (bridge.py) with bot_prelude.lua; re7bots.py runs 13 checks.
+  Title screen by script: app.TitleScreen close() hides it but the menu stays shut; app.TitleSubMenu
+  open() opens the tape recorder. Continue (changeStepNextUpdate(12)) shows a confirm (app.CutinMenu, a
+  via.gui.SimpleList; eventListInput only takes Prev/Next) that reads decide from the device, not from
+  app.Pad (_ButtonTrigger/_ButtonDown bits 1 << button, Decide 19) or UICommand.isSatisfy. What works:
+  SaveDataManager.loadFileAutoRequest(slot, false, false, false) straight from the title screen (5 s).
+  The newest save (slot 11) starts at the Chapter 3 dinner: c03e00_* event, player locked
+  (PlayerOrder.get_isPlayerNoneOperatable), so local_cutscene() is right there; slot 0 (Chapter 1) is free.
+  Bugs found and fixed: (1) Give items: createItemInstance + addItem merging into an existing stack left the
+  new object orphaned; the receiver crashed at the next load (c0000005 at re7.exe+0x2407253 in
+  via.dti.finalize, 3 times; Inventory.addItem on a world item by a bot crashed the same way). Now: top up
+  existing stacks with Item.setStackNum (getStackNum/getMaxStackNum, ItemData.MaxStackNum 30 for handgun
+  ammo) and only create an item for a new slot. (2) A friend's door close refused in the doorway was
+  dropped: now ws.pending_close, closed once out of the doorway (60 s). (3) The spawn plays
+  processLand/ClimbOn/GuardStart: 'pv' quiet 6 s after the player object changes (watched each frame).
+  (4) 'udp' mode was off for most features (checks for 'steam' or 'steam'/'bot'): coop_link_friend /
+  coop_link_any, coop_udp_role (udpHost in coopnet_config.json, else the lower port), linked_members() in
+  the menu, 'give ... 0 ...' for the udp friend. Passing live: link, ghost, move, doors both ways, health,
+  talk ammo, give, voice, revive, difficulty/stats. Not yet: enemies (Chapter 3 slot 7 has Em3100 and
+  Em8000 asleep until a trigger), pickups (need the game's own pickup call).

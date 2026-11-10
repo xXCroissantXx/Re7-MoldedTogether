@@ -407,6 +407,27 @@ local net = {
 function coop_net_state() return net end
 function coop_ghost() return dummy end
 
+-- Link kinds (v0.44): "udp" (LAN or direct IP) is a real friend too, like "steam"; the bot
+-- counts where a test friend makes sense. Until v0.43 most features checked for "steam".
+function coop_link_friend(kv) local m = kv and kv.mode return m == "steam" or m == "udp" end
+function coop_link_any(kv) local m = kv and kv.mode return m == "steam" or m == "udp" or m == "bot" end
+-- Who runs the enemies on a udp link: "udpHost" true/false in coopnet_config.json, else the
+-- lower port (two copies on one PC); nil when nothing tells them apart (both run them).
+UDP_ROLE = { t = -100 }
+function coop_udp_role()
+    if os.clock() - UDP_ROLE.t < 5 then return UDP_ROLE.v end
+    UDP_ROLE.t, UDP_ROLE.v = os.clock(), nil
+    local ok, cfg = pcall(json.load_file, "coopnet_config.json")
+    if not ok or type(cfg) ~= "table" then return nil end
+    if cfg.udpHost == true then UDP_ROLE.v = "host"
+    elseif cfg.udpHost == false then UDP_ROLE.v = "guest"
+    else
+        local mine, theirs = tonumber(cfg.localPort) or 0, tonumber(cfg.peerPort) or 0
+        if mine ~= theirs then UDP_ROLE.v = mine < theirs and "host" or "guest" end
+    end
+    return UDP_ROLE.v
+end
+
 -- Actions (2026-11-03 recording): the player's body plays its walk on layer 0 and actions
 -- on top: blocking (Hands_Guard_*) on layers 1 and 2 with an upper-body joint mask, door
 -- and wall touches on layer 4. The action clip (bank 0 motion ID) rides in the packet's
@@ -1918,7 +1939,7 @@ local function draw_connect_body()
     imgui.text("Status: " .. connection_text())
     draw_friend_list()
     local last = net.history[#net.history]
-    if (kv.mode == "steam" or kv.mode == "bot") and last ~= nil and (os.clock() - last.t) < (NET_TIMEOUT or 2) then
+    if coop_link_any(kv) and last ~= nil and (os.clock() - last.t) < (NET_TIMEOUT or 2) then
         imgui.text("Friend's chapter: " .. chapter_name(net.peer_chapter) .. "   yours: " .. chapter_name(local_chapter()))
     end
     if imgui.tree_node("Connect with a SteamID instead") then
@@ -2438,7 +2459,7 @@ re.on_frame(function()
     if now - (held.check_t or 0) < 0.25 then return end   -- was 1 s: the healing bottle showed late
     held.check_t = now
     local kv = net.kv or {}
-    if SLOT == 1 and (kv.mode == "steam" or kv.mode == "bot") and coop_send_event then
+    if SLOT == 1 and coop_link_any(kv) and coop_send_event then
         local w = local_weapon()
         -- A knife only counts once it has been out for half a second (see local_weapon).
         if w:find("Knife", 1, true) and w ~= held.sent then
@@ -2492,7 +2513,7 @@ on_frame_1(function()
     if now - (held.bank_t or 0) < 0.1 then return end
     held.bank_t = now
     local kv = net.kv or {}
-    if not ((kv.mode == "steam" or kv.mode == "bot") and coop_send_event) then return end
+    if not (coop_link_any(kv) and coop_send_event) then return end
     local player = get_player()
     if player == nil then return end
     if act.motion_go ~= player then
@@ -2558,7 +2579,7 @@ re.on_frame(function()
         log("lobby: full-model state now known; dressing again")
         pcall(build_ethan)
     end
-    if kv.mode ~= "steam" and kv.mode ~= "bot" then return end
+    if not coop_link_any(kv) then return end
     local last = net.history[#net.history]
     if last == nil or os.clock() - last.t > 2 then return end
     if SLOT == 1 and (lobby.sent_look ~= (settings.look or "default") or os.clock() - lobby.sent_t > 15) then pcall(send_look) end

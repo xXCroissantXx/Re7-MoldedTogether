@@ -593,6 +593,11 @@ local function pv_send(kind)
     pv.calls[kind] = now
     if last and now - last < (PV_GAP[kind] or 0.15) then return end
     if not coop_send_event then return end
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local p = om and om:get_field("PlayerObj")
+    local addr = p and p:get_address()
+    if addr ~= pv.player_addr then pv.player_addr, pv.spawn_t = addr, now end
+    if now - (pv.spawn_t or -100) < 6 then return end
     pv.sent = pv.sent + 1
     coop_send_event("pv " .. kind)
     -- The session page (v0.42): hits taken, heals.
@@ -602,6 +607,13 @@ local function pv_send(kind)
     end
 end
 coop_voice_send = pv_send
+coop_voice_state = pv   -- read only: what was sent and played (tests, the session page)
+re.on_frame(function()
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local p = om and om:get_field("PlayerObj")
+    local addr = p and p:get_address() or nil
+    if addr ~= pv.player_addr then pv.player_addr, pv.spawn_t = addr, os.clock() end
+end)
 
 do
     for _, h in ipairs(PV_HOOKS) do

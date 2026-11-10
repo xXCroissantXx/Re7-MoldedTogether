@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.44 (2026-11-10)
+Found by bots: two copies of RE7 on one PC, joined over a local link and driven by scripts through the
+game's own calls, checked after every step that both games agree. Nobody played.
+- **Fixed: Give items could crash the receiver's game** at their next load (three times in the bot runs, at
+  the same spot in the game's clean-up). Given ammo and healing now top up the stacks already in the
+  inventory; only what needs a slot of its own becomes a new item, owned by the inventory like any other.
+- **Fixed: a door could stay open in one game and shut in the other.** A friend's close is held while you
+  stand in the doorway, so it doesn't shut on you; it was then forgotten. It now closes once you step out.
+- **Fixed: grunts at every load.** Loading a save played a landing, a climbing and a blocking grunt for your
+  friend. The friend's voice is now quiet for 6 seconds after a load.
+- **LAN and direct IP links work like Steam** (CoopNet's "udp" mode). Your friend's held weapon, the catch-up
+  list, health, healing your friend, shared options, enemy hand-offs, who runs the enemies, the session page
+  and its counts, quick messages and Give items were off or broken over it. The lobby and invites still need
+  Steam.
+- **Seen working in real games by the bots** (until now only in stand-ins): each game shows the other player
+  where they stand, movement, doors both ways, health, "I need ammo", Give items, your friend's voice, going
+  down and being revived, the difficulty check, and CO-OP coming after EXIT on the tape recorder.
+
 ## v0.43 (2026-11-09)
 - **New name: Molded Together** (it was coop-re7 / RE7 Co-op). The installer makes a "Start Molded Together"
   shortcut and removes the old "Start RE7 Co-op" one; your settings stay.

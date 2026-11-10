@@ -159,6 +159,20 @@ local function slot_of(id)
     for _, m in ipairs(members()) do if m.id == id then return m.slot end end
     return nil
 end
+-- Everyone we play with (v0.44): members() (Steam), or the one friend of a "udp" link (LAN or
+-- direct IP; no SteamID, "0" in give messages). The lobby and invites stay Steam only.
+local function linked_members()
+    local ms = members()
+    local k = kv()
+    if #ms == 0 and k.mode == "udp" and k.peer and k.peer ~= "-" and k.peer ~= "" then
+        local st = coop_net_state and safe(coop_net_state)
+        local last = st and st.history and st.history[#st.history]
+        ms = { { slot = 1, id = "0", name = (k.peerName and k.peerName ~= "") and k.peerName or "Your friend",
+            fresh = last ~= nil and (os.clock() - last.t) < 3, chapter = st and st.peer_chapter,
+            ping = st and tonumber(st.ping) } }
+    end
+    return ms
+end
 
 -- This session (v0.42) ---------------------------------------------------------------------
 -- Each game counts its own player's: enemies taken down, shots, hits taken, times down, times
@@ -172,7 +186,7 @@ function coop_stat(key, n)
 end
 local function pump_stats(now)
     local any = false
-    for _, m in ipairs(members()) do if m.fresh then any = true end end
+    for _, m in ipairs(linked_members()) do if m.fresh then any = true end end
     if STATS.last_t and any then STATS.together = STATS.together + math.min(1, now - STATS.last_t) end
     STATS.last_t = now
     if any and now - STATS.sent_t > 20 and coop_send_event then
@@ -846,7 +860,7 @@ local function setting_toggle(label, key, default_on, shared, hint, after)
 end
 
 local function party_line()
-    local ms = members()
+    local ms = linked_members()
     if #ms == 0 then
         local k = kv()
         if k.mode == "bot" then return "Test bot is on (no friend connected)" end
@@ -1080,7 +1094,7 @@ end
 
 function PAGES.talk()
     local items = {}
-    if #members() == 0 or coop_talk_send == nil then
+    if #linked_members() == 0 or coop_talk_send == nil then
         items[#items + 1] = { info = true, text = "Nobody's connected: invite a friend under Friends." }
         return "Quick messages", items
     end
@@ -1104,7 +1118,7 @@ local GIVE = { to = 1, amount = 1, list = nil, list_t = -100 }
 local AMOUNTS = { "One", "Half", "All" }
 function PAGES.give()
     local items = {}
-    local ms = members()
+    local ms = linked_members()
     if #ms == 0 or coop_give_item == nil then
         items[#items + 1] = { info = true, text = "Nobody's connected: invite a friend under Friends." }
         return "Give items", items
@@ -1169,7 +1183,7 @@ function PAGES.session()
         and string.format("Together for %d h %02d min", math.floor(mins / 60), mins % 60)
         or string.format("Together for %d min", mins) }
     items[#items + 1] = { info = true, text = "  You: " .. stat_line(STATS.me), color = 0xFF7FFF8C }
-    for _, m in ipairs(members()) do
+    for _, m in ipairs(linked_members()) do
         local t = STATS.friends[m.slot]
         items[#items + 1] = { info = true, text = "  " .. m.name .. ": " .. (t and stat_line(t) or "nothing heard yet (they need v0.42)"),
             color = 0xFF7FE6FF }
@@ -1179,7 +1193,7 @@ function PAGES.session()
     local name = coop_difficulty_name and mine and safe(coop_difficulty_name, mine)
     if name then
         local diff = {}
-        for _, m in ipairs(members()) do
+        for _, m in ipairs(linked_members()) do
             local d = coop_friend_difficulty and safe(coop_friend_difficulty, m.slot)
             if d and d ~= mine then diff[#diff + 1] = m.name .. " " .. tostring(safe(coop_difficulty_name, d)) end
         end
@@ -1382,7 +1396,7 @@ local function draw_paper(title, items, is_confirm)
     local foot = {}
     local inv = pending_invite and safe(pending_invite)
     if inv then foot[#foot + 1] = { inv.name .. " invited you: Friends", 0xFF7FFF8C } end
-    foot[#foot + 1] = { party_line(), #members() > 0 and 0xFF7FFF8C or 0xFF969696 }
+    foot[#foot + 1] = { party_line(), #linked_members() > 0 and 0xFF7FFF8C or 0xFF969696 }
     local fy = ay + ah - 24 - line_h("small") * #foot
     for _, f in ipairs(foot) do
         text(fit(f[1], aw - 60, "small"), ax + 30, fy, ink(f[2]), "small")

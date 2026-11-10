@@ -288,6 +288,15 @@ local function poll_doors(now)
             local locked = safe(d.call, d, "get_isLocked") == true
             local state = safe(d.call, d, "get_doorState") or 0
             local open = is_open(state)
+            local pc = ws.pending_close and ws.pending_close[id]
+            if pc and (now - pc > 60 or not open) then
+                ws.pending_close[id] = nil
+            elseif pc and not player_near_door(s, 1.5) then
+                ws.pending_close[id] = nil
+                ws.applying[id] = now
+                local ok, err = door_close(d)
+                log("closing door " .. id .. " now that you've stepped out" .. (ok and "" or (" ERR " .. tostring(err))))
+            end
             local ours = ws.applying[id] and now - ws.applying[id] < 3
             if s.locked and not locked and not ours then send_once("unlock", id) end
             -- A door that swings shut by itself goes through state 6 (auto-closing): that's the
@@ -341,6 +350,7 @@ local function apply_door(kind, id, ch)
             log("door " .. id .. ": locked here but your friend opened it: unlocked")
         end
         local before = s.d:call("get_doorState")
+        if ws.pending_close then ws.pending_close[id] = nil end
         if not is_open(before) and not s.d:call("get_isLocked") then
             local ok, err = door_open(s.d)
             log(string.format("opening door %s (state %s)%s", id, tostring(before), ok and "" or (" ERR " .. tostring(err))))
@@ -352,7 +362,9 @@ local function apply_door(kind, id, ch)
     elseif kind == "close" then
         door_release(s)
         if player_near_door(s, 1.5) then
-            log("close door " .. id .. ": not closed, you're in the doorway")
+            ws.pending_close = ws.pending_close or {}
+            ws.pending_close[id] = os.clock()
+            log("close door " .. id .. ": you're in the doorway; it closes once you step out")
         elseif is_open(s.d:call("get_doorState")) then
             local ok, err = door_close(s.d)
             log("closing door " .. id .. (ok and "" or (" ERR " .. tostring(err))))
@@ -1409,6 +1421,26 @@ local function give_one(inv, id, n)
     local player = om and om:get_field("PlayerObj")
     local can = safe(inv.call, inv, "isCanAddItem(System.String, System.Int32)", id, n)
     if can == false then return 0, "no room" end
+    -- Stacks we already have first (v0.44): no new object for what fits in them.
+    local before0 = inv_count(inv, id)
+    local list = safe(inv.get_field, inv, "_ItemList")
+    local left = n
+    for i = 0, (list and (safe(list.call, list, "get_Count") or 0) or 0) - 1 do
+        if left <= 0 then break end
+        local info = safe(list.call, list, "get_Item", i)
+        local it = info and safe(info.get_field, info, "Item")
+        if it and tostring(safe(it.get_field, it, "ItemDataID")) == id then
+            local cur = tonumber(safe(it.call, it, "getStackNum")) or 0
+            local max = tonumber(safe(it.call, it, "getMaxStackNum")) or 0
+            local add = math.min(left, max - cur)
+            if add > 0 and pcall(it.call, it, "setStackNum(System.Int32)", cur + add) then left = left - add end
+        end
+    end
+    if left <= 0 or left < n then
+        local topped = inv_count(inv, id) - before0
+        if left <= 0 or topped <= 0 then return math.max(0, topped), topped > 0 and "ok" or "it didn't go in" end
+        return topped, "ok"   -- the rest comes in the caller's next round (a new slot)
+    end
     local td = sdk.find_type_definition("app.ItemManager")
     local m = td and td:get_method("createItemInstance(via.GameObject, System.String)")
     local go = (m and player) and safe(m.call, m, nil, player, id) or nil
@@ -1418,6 +1450,9 @@ local function give_one(inv, id, n)
     local before = inv_count(inv, id)
     local ok, res = pcall(inv.call, inv, "addItem(app.Item, via.GameObject)", item, go)
     local got = inv_count(inv, id) - before
+    if ok and tonumber(res) == 1 or tonumber(res) == 2 then
+        log("give: " .. id .. " merged into a stack as a new object (result " .. tostring(res) .. ")")
+    end
     if got > 0 then return got, "ok" end
     -- Not counted. Inventory.AddItemResult: Put 0, Integration 1, IntegrationAndNoPut 2, NoPut 3,
     -- LimitOver 4. Only when the game says it wasn't added is the new object removed (one it
@@ -1509,7 +1544,8 @@ end
 local function on_give(token, to, id, n)
     local st = coop_net_state and coop_net_state()
     local me = st and st.kv and st.kv.steamSelf
-    if me == nil or to ~= me then return end   -- for someone else
+    local udp = st and st.kv and st.kv.mode == "udp"
+    if not ((me ~= nil and to == me) or (udp and to == "0")) then return end   -- for someone else ("0": the udp friend)
     if ws.give_seen[token] then return end
     ws.give_seen[token] = true
     local inv = active_inventory()

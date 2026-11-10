@@ -160,7 +160,7 @@ function coop_talk_record(text)
     local k = kv()
     -- The bot echoes catch-up lines back, so a bot test replays your own changes on
     -- yourself (all no-ops) through the real path; its list is dropped for a real friend.
-    if k.mode ~= "steam" and k.mode ~= "bot" then return end
+    if not (coop_link_any and coop_link_any(k)) then return end
     local key = list_key(text)
     if key == nil then return end
     for i = #talk.list, 1, -1 do
@@ -597,7 +597,8 @@ re.on_frame(function()
         -- The list belongs to one friend: a different friend starts a fresh one.
         local k = kv()
         local who = (k.mode == "bot" and "bot") or
-            (k.mode == "steam" and k.peer and k.peer ~= "steam:0" and k.peer ~= "-" and k.peer) or nil
+            (k.mode == "steam" and k.peer and k.peer ~= "steam:0" and k.peer ~= "-" and k.peer) or
+            (k.mode == "udp" and k.peer and k.peer ~= "-" and ("udp:" .. k.peer)) or nil
         if who and who ~= talk.peer then
             if talk.peer ~= nil and talk.peer ~= "-" and #talk.list > 0 then coop_talk_clear_list("new friend") end
             talk.peer = who
@@ -607,7 +608,7 @@ re.on_frame(function()
             talk.check_fresh_at = nil
             pcall(check_fresh_list)
         end
-        if k.mode == "steam" or k.mode == "bot" then
+        if coop_link_any and coop_link_any(k) then
             watch_friend()
             pump_queue()
             send_health()

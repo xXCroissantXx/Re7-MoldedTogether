@@ -212,6 +212,14 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 - [ ] **The new name**: the co-op screen says Molded Together, and the installer leaves one "Start Molded
       Together" shortcut on the desktop (the old "Start RE7 Co-op" one is gone).
 
+## 16. New in v0.44
+
+- [ ] **Give, then load**: give your friend some ammo, then both load a save (or the one who got it does):
+      no crash. Give again after the load.
+- [ ] **A door while you stand in it**: your friend closes a door you're standing in: it stays open for you
+      until you step out, then closes, so it ends up shut in both games.
+- [ ] **Loading**: load a save while connected: your friend hears no grunts from you as you appear.
+
 ## Afterwards
 
 Each player clicks **Make a bug report** (Molded Together window, *Help*) and sends the zip

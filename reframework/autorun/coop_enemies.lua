@@ -618,6 +618,10 @@ local function decide_role()
     if mv.replay then return "guest" end
     if mv.role_pref ~= "auto" then return mv.role_pref end
     local kv = net_kv()
+    if kv.mode == "udp" then
+        local r = coop_udp_role and coop_udp_role()
+        if r then return r end
+    end
     if kv.mode == "steam" then
         local me, ids = party_ids()
         if me and next(ids) then
@@ -1029,7 +1033,7 @@ function check_handoffs(now)
     -- Only to a real friend: the bot can't run enemies (in bot mode only the test button
     -- hands one over). Require "steam" rather than "not bot": a status file read while
     -- it was being rewritten has no mode line, and that once handed Jack to the bot.
-    if net_kv().mode ~= "steam" then return end
+    if not (coop_link_friend and coop_link_friend(net_kv())) then return end
     -- See watch_pause. A "paused" that never got its "back" (they quit) expires after 10 min.
     if mv.friend_paused and now - (mv.friend_paused_t or 0) > 600 then mv.friend_paused = false end
     if mv.paused then return end
@@ -1093,7 +1097,7 @@ local function watch_pause(now)
     local paused = is_paused()
     if paused == (mv.paused or false) then return end
     mv.paused = paused
-    if net_kv().mode ~= "steam" then return end
+    if not (coop_link_friend and coop_link_friend(net_kv())) then return end
     send_event(paused and "pause 1" or "pause 0")
     if not paused then return end
     for _, e in pairs(es.tracked) do
