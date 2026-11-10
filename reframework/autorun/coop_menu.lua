@@ -1338,7 +1338,7 @@ local function current_items()
 end
 
 -- Drawing (v0.41): two sheets of paper on the desk, like the game's Options and Extra Content.
-local PAPER = { dim = 0xC8000000, paper = 0xFFBCCFD8, paper_edge = 0xFF8C9FA9, rule = 0xFF95A6B0, ink = 0xFF242729,
+local PAPER = { dim = 0xC8000000, paper = 0xFFC2D0D5, paper_edge = 0xFF8C9FA9, rule = 0xFF8E9AA0, ink = 0xFF1E2021,
     faint = 0xFF5E676D, off = 0xFF88939B, bar = 0xFF2F3133, bar_text = 0xFFE2E9EE, bar_dim = 0xFF66717A, letter = 0xFF2C3033 }
 -- Item colours are picked for a dark screen: on paper, the same meaning in ink.
 local INK = { [0xFF7FFF8C] = 0xFF2E6A24, [0xFF7FE6FF] = 0xFF105E95, [0xFF6B6BFF] = 0xFF2020A8, [0xFFFFFFFF] = 0xFF242729,
@@ -1357,12 +1357,84 @@ local function screen()
     return w, h
 end
 
-local function sheet(x, y, w, h, letter)
-    pcall(draw.filled_rect, x + 6, y + 8, w, h, 0x60000000)   -- shadow on the desk
-    pcall(draw.filled_rect, x, y, w, h, PAPER.paper)
-    pcall(draw.outline_rect, x, y, w, h, PAPER.paper_edge)
-    pcall(draw.outline_rect, x + 10, y + 10, w - 20, h - 20, PAPER.rule)
-    text(letter, x + 24, y + 22, PAPER.letter, "big")
+-- The paper (v0.46), like the game's Options and Extra Content sheets: old paper lying a little
+-- crooked on the table, faint stains, darker towards the edges, and the form printed at the top
+-- (the letter in its box, Date / N.R., Source with Mono and Stereo boxes, and No.).
+local function corners(x, y, w, h, deg)
+    local cx, cy, a = x + w / 2, y + h / 2, math.rad(deg or 0)
+    local ca, sa = math.cos(a), math.sin(a)
+    local function p(px, py) local dx, dy = px - cx, py - cy return cx + dx * ca - dy * sa, cy + dx * sa + dy * ca end
+    local x1, y1 = p(x, y) local x2, y2 = p(x + w, y) local x3, y3 = p(x + w, y + h) local x4, y4 = p(x, y + h)
+    return x1, y1, x2, y2, x3, y3, x4, y4
+end
+local function paper_quad(x, y, w, h, deg, c)
+    local x1, y1, x2, y2, x3, y3, x4, y4 = corners(x, y, w, h, deg)
+    if draw.filled_quad then pcall(draw.filled_quad, x1, y1, x2, y2, x3, y3, x4, y4, c)
+    else pcall(draw.filled_rect, x, y, w, h, c) end
+end
+local STAINS = {}
+local function stains_for(letter)
+    if STAINS[letter] then return STAINS[letter] end
+    local seed = letter == "A" and 7 or 13
+    local function rnd() seed = (seed * 1103515245 + 12345) % 2147483648 return seed / 2147483648 end
+    local s = {}
+    for _ = 1, 6 do
+        local cx, cy, r, a = rnd(), rnd(), 0.025 + rnd() * 0.06, 0x07 + math.floor(rnd() * 0x07)
+        for _ = 1, 3 do s[#s + 1] = { cx, cy, r * (0.55 + rnd() * 0.5), a, false, (rnd() - 0.5) * r * 1.3, (rnd() - 0.5) * r * 1.3 } end
+    end
+    for _ = 1, 14 do s[#s + 1] = { rnd(), rnd(), 0.0015 + rnd() * 0.003, 0x28 + math.floor(rnd() * 0x28), true, 0, 0 } end
+    STAINS[letter] = s
+    return s
+end
+local function sheet(x, y, w, h, letter, tilt)
+    paper_quad(x + 7, y + 9, w, h, tilt, 0x70000000)      -- its shadow on the table
+    paper_quad(x, y, w, h, tilt, PAPER.paper)
+    for _, st in ipairs(stains_for(letter)) do           -- stains and specks, kept on the paper
+        local r = st[3] * w
+        local cx = x + 10 + r + st[1] * (w - 20 - 2 * r) + st[6] * w
+        local cy = y + 10 + r + st[2] * (h - 20 - 2 * r) + st[7] * w
+        cx = math.max(x + r + 6, math.min(x + w - r - 6, cx))
+        cy = math.max(y + r + 6, math.min(y + h - r - 6, cy))
+        local col = (st[4] << 24) | (st[5] and 0x2A3440 or 0x3E6E92)
+        if draw.filled_circle then pcall(draw.filled_circle, cx, cy, r, col, st[5] and 8 or 28) end
+    end
+    for k = 1, 3 do                                       -- darker towards the edges
+        local t, c = 3 + 5 * k, 0x0D3C5F78
+        pcall(draw.filled_rect, x + 3, y + 3, w - 6, t, c)
+        pcall(draw.filled_rect, x + 3, y + h - 3 - t, w - 6, t, c)
+        pcall(draw.filled_rect, x + 3, y + 3 + t, t, h - 6 - 2 * t, c)
+        pcall(draw.filled_rect, x + w - 3 - t, y + 3 + t, t, h - 6 - 2 * t, c)
+    end
+end
+-- The printed form at the top of a sheet; returns where the sheet's own lines start.
+local function form_header(x, y, w, letter, number)
+    local s = line_h("small")
+    local bsz = line_h("big") + 12
+    for k = 0, 2 do pcall(draw.outline_rect, x + 24 + k, y + k, bsz - 2 * k, bsz - 2 * k, PAPER.letter) end
+    text(letter, x + 24 + (bsz - text_w(letter, "big")) / 2, y + (bsz - line_h("big")) / 2 + 2, PAPER.letter, "big")
+    local fx, nx = x + 24 + bsz + 18, x + w - 100
+    local mid = fx + (nx - 16 - fx) * 0.55
+    local y1, y2 = y + 2, y + 2 + s + 8
+    local function blank(label, lx, ly, to)
+        text(label, lx, ly, PAPER.faint, "small")
+        pcall(draw.line, lx + text_w(label .. " ", "small"), ly + s - 2, to, ly + s - 2, PAPER.rule)
+    end
+    blank("Date", fx, y1, mid - 12)
+    blank("N.R.:", mid, y1, nx - 16)
+    blank("Source", fx, y2, mid - 12)
+    local mx = mid
+    for _, lab in ipairs({ "Mono", "Stereo" }) do
+        local bx2 = mx + text_w(lab .. " ", "small")
+        if bx2 + s < nx - 8 then
+            text(lab, mx, y2, PAPER.faint, "small")
+            pcall(draw.outline_rect, bx2, y2 + 3, s - 6, s - 6, PAPER.faint)
+        end
+        mx = bx2 + s + 10
+    end
+    pcall(draw.outline_rect, nx, y - 2, 76, bsz + 4, PAPER.rule)
+    text("No.", nx + 8, y + 2, PAPER.faint, "small")
+    if number then text(tostring(number), nx + 8, y + 4 + s, PAPER.ink, "small") end
+    return y + bsz + 10
 end
 
 local function draw_paper(title, items, is_confirm)
@@ -1374,12 +1446,10 @@ local function draw_paper(title, items, is_confirm)
     -- Sheet A: the sections.
     local ax, ay = math.floor(w * 0.07), math.floor(h * 0.12)
     local aw, ah = math.floor(w * 0.29), math.floor(h * 0.72)
-    sheet(ax, ay, aw, ah, "A")
+    sheet(ax, ay, aw, ah, "A", -0.45)
     local head = "Molded Together"
-    text(head, ax + (aw - text_w(head, "big")) / 2, ay + 26, PAPER.ink, "big")
-    local ver = kv().version
-    if ver then text("v" .. ver, ax + aw - 30 - text_w("v" .. ver, "small"), ay + 34, PAPER.faint, "small") end
-    local y = ay + 26 + line_h("big") + 18
+    text(head, ax + (aw - text_w(head, "big")) / 2, ay + 20, PAPER.ink, "big")
+    local y = form_header(ax, ay + 20 + line_h("big") + 12, aw, "A", kv().version) + 16
     pcall(draw.line, ax + 24, y - 10, ax + aw - 24, y - 10, PAPER.rule)
     local lh = line_h("body")
     for i, c in ipairs(CATS) do
@@ -1405,9 +1475,10 @@ local function draw_paper(title, items, is_confirm)
     -- Sheet B: the section's page.
     local bx, by = math.floor(w * 0.385), math.floor(h * 0.09)
     local bw, bh = math.floor(w * 0.545), math.floor(h * 0.78)
-    sheet(bx, by, bw, bh, "B")
-    text(title, bx + 90, by + 30, PAPER.ink, "big")
-    local top = by + 30 + line_h("big") + 14
+    sheet(bx, by, bw, bh, "B", -0.25)
+    local ty = form_header(bx, by + 22, bw, "B", nil) + 4
+    text(fit(title, bw - 120, "big"), bx + 46, ty, PAPER.ink, "big")
+    local top = ty + line_h("big") + 14
     pcall(draw.line, bx + 24, top - 8, bx + bw - 24, top - 8, PAPER.rule)
     local selectable = {}
     for i, it in ipairs(items) do if not it.info then selectable[#selectable + 1] = i end end
@@ -1441,9 +1512,17 @@ local function draw_paper(title, items, is_confirm)
         local left_w = it.value and (value_x - (bx + 46) - 16) or (bw - 92)
         text(fit(it.text, left_w), bx + 46, y, color)
         if it.value then
-            local v = it.value
-            if it.left or it.right then v = "<   " .. v .. "   >" end
-            text(fit(v, bx + bw - 46 - value_x), value_x, y, it.off and PAPER.off or (on_bar and PAPER.bar_text or PAPER.faint))
+            local vc = it.off and PAPER.off or (on_bar and PAPER.bar_text or PAPER.faint)
+            if it.left or it.right then
+                -- Like the game's Options: "<" and ">" at the ends, the value in the middle.
+                local lx, rx = value_x, bx + bw - 66
+                text("<", lx, y, vc)
+                text(">", rx, y, vc)
+                local v = fit(it.value, rx - lx - 44)
+                text(v, (lx + rx) / 2 - text_w(v) / 2 + 6, y, vc)
+            else
+                text(fit(it.value, bx + bw - 46 - value_x), value_x, y, vc)
+            end
         end
         if not it.info then
             pcall(draw.line, bx + 30, y + lh - 4, bx + bw - 30, y + lh - 4, PAPER.rule)
@@ -1462,6 +1541,12 @@ local function draw_paper(title, items, is_confirm)
             local x0 = mx + (first > 1 and text_w("more above  ", "small") or 0)
             hit.more[#hit.more + 1] = { x0 - 6, my - 4, mx + text_w(more, "small") + 6, my + sh, 1 }
         end
+        -- The game's scroll bar: a black bar down the right edge, its length the part in view.
+        local sx, st0, sb = bx + bw - 28, top - 4, top - 4 + fit_n * lh
+        pcall(draw.line, sx, st0, sx, sb, PAPER.rule)
+        local th = math.max(24, (sb - st0) * fit_n / #items)
+        local sy = st0 + (sb - st0 - th) * (first - 1) / math.max(1, #items - fit_n)
+        pcall(draw.filled_rect, sx - 3, sy, 6, th, 0xFF1C1C1C)
     end
     -- Under the sheets, like the game's own line: what the highlighted thing does, then the keys.
     local it = chosen and items[chosen]
@@ -1476,6 +1561,8 @@ local function draw_paper(title, items, is_confirm)
     if M.msg and os.clock() - M.msg_t < 6 then hint, hint_color = M.msg, M.msg_color end
     hint = fit(hint or "", w - 120)
     local gy = by + bh + 26
+    -- The game's prompt band under the sheets.
+    pcall(draw.filled_rect, 0, gy - 12, w, line_h("body") + line_h("small") + 24, 0x99000000)
     text(hint, (w - text_w(hint)) / 2 + 1, gy + 1, 0xC0000000)
     text(hint, (w - text_w(hint)) / 2, gy, hint_color)
     local controls = (M.focus == "A" and not is_confirm)

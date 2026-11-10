@@ -1438,3 +1438,9 @@ Not synced / broken, as reported by the owner:
   take; lock_hand_open works. Now hand-opened after 8 s in PauseStart. Desk locks run SelectSuccess ->
   PauseStart -> Open_End by themselves. Remembered changes for unloaded rooms are kept (pending_props);
   applying them needs walking back (a warp doesn't stream rooms in).
+- v0.46 (2026-11-10): co-op screen restyled after the game's Options sheets (the user's screenshot):
+  draw.filled_quad for the slightly turned paper and its shadow, draw.filled_circle for stains (three
+  overlapping blots each, seeded per sheet, kept on the paper) and specks, edge strips, form_header()
+  (letter box, Date/N.R./Source blanks, Mono/Stereo boxes, No. = version), '<' value '>' like Options, a
+  scroll bar, the dark help band. menu_preview.py/render_preview.ps1 record and draw quads and circles,
+  on a table-brown background.

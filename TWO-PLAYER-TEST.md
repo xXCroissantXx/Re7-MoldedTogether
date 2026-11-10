@@ -227,6 +227,12 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 - [ ] **A cutscene far away**: one of you starts a cutscene while the other is in another room: the other
       isn't pulled in, and sees it when they get there.
 
+## 18. New in v0.46
+
+- [ ] **The co-op screen's look**: pick CO-OP on the tape recorder: two stained sheets on the Options table,
+      the printed form at the top of each, settings with < and > at the ends. Everything still reads clearly
+      (note anything hard to read, and at which screen size).
+
 ## Afterwards
 
 Each player clicks **Make a bug report** (Molded Together window, *Help*) and sends the zip

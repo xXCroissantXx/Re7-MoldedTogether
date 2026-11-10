@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.46 (2026-11-10)
+- **The co-op screen looks more like the game's Options and Extra Content sheets**: old paper lying a little
+  crooked on the table with faint stains and darker edges; the form printed at the top of each sheet (the
+  letter in its box, Date, N.R., Source, Mono and Stereo boxes, No., with the mod's version as sheet A's
+  number); settings with "<" and ">" at the ends and the value in the middle; a black scroll bar on long
+  pages; and the game's dark band behind the help line at the bottom.
+
 ## v0.45 (2026-11-10)
 Story and world, tested by bots in real games (two copies of RE7 playing together, nobody at the controls),
 in the Chapter 1 and Chapter 3 main house:
