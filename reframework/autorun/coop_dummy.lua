@@ -7,12 +7,29 @@
 -- Log: <game>/reframework/data/coop_dummy_log.txt; the previous script load's log is kept
 -- as coop_dummy_log_prev.txt, so a Reset scripts doesn't wipe the last test.
 
+-- Up to 4 players (v0.29): this whole script runs once per friend. Friend 1 runs it with the
+-- normal globals (so 2-player behaves exactly as before); friends 2 and 3 each run another copy
+-- with private globals (their own body, animation, weapon, look), reading coopnet_in_2/3.txt.
+-- Only friend 1's copy sends our own state, draws the window and the status lines, and owns
+-- the settings and the testing tools ("SLOT == 1" below).
+local function coop_dummy_main(_ENV, SLOT)
+local SLOT_SUFFIX = SLOT == 1 and "" or ("_" .. SLOT)
+local function on_frame_1(f) if SLOT == 1 then re.on_frame(f) end end      -- friend 1's copy only
+local function on_draw_ui_1(f) if SLOT == 1 then re.on_draw_ui(f) end end
+-- This friend's Steam name ("" while unknown); "Bot 2"/"Bot 3" in bot mode.
+local function peer_name(kv)
+    if SLOT == 1 then return (kv.peerName and kv.peerName ~= "") and kv.peerName or nil end
+    if kv.mode == "bot" then return "Bot " .. SLOT end
+    local n = kv["peer" .. SLOT .. "Name"]
+    return (n and n ~= "") and n or nil
+end
+
 -- Lines are collected and written once a second (writing the whole log on every line,
 -- twice, cost a 300 KB+ write per line late in a session).
 local lines, log_dirty, log_t = {}, false, 0
 do
-    local prev = fs.read("coop_dummy_log.txt")
-    if prev and prev ~= "" then fs.write("coop_dummy_log_prev.txt", prev) end
+    local prev = fs.read("coop_dummy_log" .. SLOT_SUFFIX .. ".txt")
+    if prev and prev ~= "" then fs.write("coop_dummy_log" .. SLOT_SUFFIX .. "_prev.txt", prev) end
 end
 local function log(s)
     lines[#lines + 1] = os.date("%H:%M:%S ") .. tostring(s)
@@ -26,7 +43,7 @@ end
 re.on_frame(function()
     if not log_dirty or os.clock() - log_t < 1 then return end
     log_t, log_dirty = os.clock(), false
-    fs.write("coop_dummy_log.txt", table.concat(lines, "\n") .. "\n")
+    fs.write("coop_dummy_log" .. SLOT_SUFFIX .. ".txt", table.concat(lines, "\n") .. "\n")
 end)
 
 local function safe(f, ...)
@@ -86,10 +103,24 @@ function find_full_model()
     local scene = sdk.call_native_func(sm, sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
     local arr = scene and scene:call("findComponents(System.Type)", sdk.typeof("via.render.Mesh"))
     local seen = {}
+    -- Skip the co-op characters themselves (VrDummyPlayer instances): with up to 3 friends
+    -- (v0.29) friend 1's character, built first, carries copies of the player's pieces under
+    -- the same paths, and being first in the scan it hid the real ones from friends 2-3.
+    local function on_ghost(m)
+        local o = safe(m.call, m, "get_GameObject")
+        local tr = o and safe(o.call, o, "get_Transform")
+        while tr do
+            local p = safe(tr.call, tr, "get_Parent")
+            if p == nil then break end
+            tr = p
+        end
+        local r = tr and safe(tr.call, tr, "get_GameObject")
+        return r ~= nil and tostring(safe(r.call, r, "get_Name")) == "VrDummyPlayer"
+    end
     for _, m in ipairs((arr and arr:get_elements()) or {}) do
         local h = safe(m.call, m, "getMesh")
         local path = h and safe(h.call, h, "get_ResourcePath")
-        if path and not seen[path] and path:find("^Character/") and safe(m.call, m, "get_SkinningMesh") then
+        if path and not seen[path] and path:find("^Character/") and safe(m.call, m, "get_SkinningMesh") and not on_ghost(m) then
             seen[path] = true
             local mh = safe(m.call, m, "get_Material")
             local mdf = mh and safe(mh.call, mh, "get_ResourcePath")
@@ -306,6 +337,9 @@ end
 -- method (Motion.setLocalRotation per joint, or a constraint) before it's on.
 -- v1/v2 history is in NOTES.md; v3 (write at PrepareRendering) works, so on by default.
 local look = { yaw = 0, pitch = 0, joints = nil, err = false, enabled = true }
+-- For the friend's flashlight (coop_gunsound.lua, v0.42): where this character looks (yaw from
+-- its body, pitch; radians, smoothed).
+function coop_look_angles() return look.yaw or 0, look.pitch or 0 end
 
 local function qmul_l(a, b)
     return {
@@ -444,7 +478,7 @@ local function net_io()
     if now - net.last_io < 1 / 30 then return end
     net.last_io = now
 
-    local player = get_player()
+    local player = SLOT == 1 and get_player() or nil   -- friends 2-3: read only
     if player then
         local tr = player:call("get_Transform")
         local p, q = tr:call("get_Position"), tr:call("get_Rotation")
@@ -463,7 +497,7 @@ local function net_io()
         if not net.no_read then net.no_read = true log("net: fs.read is not available in this REFramework build") end
         return
     end
-    local text = fs.read("coopnet_in.txt")
+    local text = fs.read("coopnet_in" .. SLOT_SUFFIX .. ".txt")
     if text then
         for line in text:gmatch("[^\r\n]+") do
             local v = {}
@@ -1166,7 +1200,7 @@ function ghost_action(anchor)
 end
 
 local function auto_animate(anchor, anchor_rot)
-    if not anim.auto or anchor == nil then return end
+    if not anim.auto or anchor == nil or anim.motion == nil then return end
     local now = os.clock()
     if now - last_auto.t < 0.1 then return end   -- was 0.25: felt laggy starting to move
     local vx, vz, speed = 0, 0, 0
@@ -1326,7 +1360,7 @@ function assemble_from(c)
         ghost_built_t = os.clock()
         -- The bot's circle was centred during the load (often outside the map): move it
         -- to where the real player now stands.
-        if net.kv and net.kv.mode == "bot" then fs.write("coopnet_command.txt", "botrecenter") end
+        if SLOT == 1 and net.kv and net.kv.mode == "bot" then fs.write("coopnet_command.txt", "botrecenter") end
     end
     local p = get_player():call("get_Transform"):call("get_Position")
     for _, e in ipairs(list) do
@@ -1421,7 +1455,7 @@ end
 -- Finish parts a few frames after spawning (components aren't ready at once),
 -- then keep them glued to the main dummy's position.
 re.on_frame(function()
-    record_player()
+    if SLOT == 1 then record_player() end
     local nok, nerr = pcall(net_io)
     if not nok and not net.io_err then net.io_err = true log("net ERR " .. tostring(nerr)) end
     if #parts == 0 or dummy == nil then return end
@@ -1613,6 +1647,7 @@ local function set_motion_enabled(on)
 end
 
 -- Settings shared with coop_saveguard.lua (reframework/data/coop_settings.json).
+if SLOT == 1 then
 settings = { allow_saving = false, hud = true, nameplate = true, footsteps = true }
 do
     local ok, s = pcall(json.load_file, "coop_settings.json")
@@ -1621,6 +1656,7 @@ end
 function save_settings()
     local ok, err = pcall(json.dump_file, "coop_settings.json", settings)
     if not ok then log("settings save ERR " .. tostring(err)) end
+end
 end
 
 -- Connect panel: no config editing. Writes a one-line command that CoopNet.cs
@@ -1660,7 +1696,8 @@ function read_friends()
         local id, flags, ver, name = line:match("^(%d+)\t(%S+)\t(%S+)\t(.*)$")
         if id then
             list[#list + 1] = { id = id, name = name, version = ver ~= "-" and ver or nil,
-                in_re7 = flags:find("R") ~= nil, coop = flags:find("C") ~= nil, invites = flags:find("I") ~= nil }
+                in_re7 = flags:find("R") ~= nil, coop = flags:find("C") ~= nil, invites = flags:find("I") ~= nil,
+                lobby = flags:find("L") ~= nil }   -- hosting a lobby (v0.40, the co-op menu)
         end
     end
     -- Invites first, then co-op running, then RE7, then everyone else; by name inside each.
@@ -1677,11 +1714,24 @@ local function current_peer_id()
     return kv.mode == "steam" and kv.peer and kv.peer:match("^steam:(%d+)$") or nil
 end
 
+-- Everyone we're connected to (up to 3 friends, v0.29): id -> slot.
+local function party_ids()
+    local kv = net.kv or {}
+    local out, n = {}, 0
+    if kv.mode ~= "steam" then return out, 0 end
+    for slot, key in ipairs({ "peer", "peer2", "peer3" }) do
+        local id = kv[key] and kv[key]:match("^steam:(%d+)$")
+        if id and id ~= "0" then out[id] = slot n = n + 1 end
+    end
+    return out, n
+end
+
 -- A friend who is inviting us and isn't who we're already connected to.
 function pending_invite()
-    local peer = current_peer_id()
+    local party, n = party_ids()
+    if n >= 3 then return nil end   -- party full
     for _, f in ipairs(friends.list) do
-        if f.invites and f.id ~= peer and not friends.dismissed[f.id] then return f end
+        if f.invites and party[f.id] == nil and not friends.dismissed[f.id] then return f end
     end
     return nil
 end
@@ -1694,22 +1744,34 @@ function ensure_chapter_list()
     chapters.list = list_chapter_jumps()
 end
 
+-- Names for players (v0.40); the game's own names otherwise.
+CHAPTER_LABELS = {
+    Chapter0 = "the opening tape", Title = "the title screen", BootLogo = "starting up",
+    Chapter1 = "Chapter 1 (the guest house)", Chapter123 = "between Chapters 1 and 3",
+    Chapter3 = "Chapter 3 (the Baker house)", Chapter324 = "between Chapters 3 and 4",
+    Chapter4 = "Chapter 4 (the ship)", FF000 = "a VHS tape", FF030 = "a VHS tape", FF040 = "a VHS tape",
+    FF050 = "a VHS tape", OpeningMovie = "the opening", OpeningCar = "the drive in", EndingMovie = "the ending",
+}
 function chapter_name(v)
     if v == nil then return "?" end
     ensure_chapter_list()
-    for _, e in ipairs(chapters.list) do if e.value == v then return e.name end end
+    for _, e in ipairs(chapters.list) do if e.value == v then return CHAPTER_LABELS[e.name] or e.name end end
     return tostring(v)
 end
 
 local function connect_to(f)
-    send_command("steam " .. f.id)
+    -- Nobody yet: this friend becomes friend 1. Otherwise they join the party (up to 4 players);
+    -- the others link to them automatically.
+    local _, n = party_ids()
+    send_command((n == 0 and "steam " or "steamadd ") .. f.id)
     friends.dismissed[f.id] = nil
 end
 
 local function friend_row(f, i)
-    local peer = current_peer_id()
+    local party, n = party_ids()
+    local in_party = party[f.id] ~= nil
     local label = f.name
-    if f.id == peer then
+    if in_party then
         label = label .. "  (connected)"
     elseif f.coop then
         label = label .. "  (RE7 Co-op " .. tostring(f.version) .. ")"
@@ -1719,8 +1781,16 @@ local function friend_row(f, i)
     if f.coop and f.version and net.kv and net.kv.version and f.version ~= net.kv.version then
         label = label .. "  - different version, update both to the same"
     end
-    if f.id ~= peer then
-        if imgui.button((f.invites and "Accept" or "Connect") .. "##fr" .. i) then connect_to(f) end
+    if in_party then
+        if n > 1 then
+            if imgui.button("Remove##fr" .. i) then send_command("steamremove " .. f.id) end
+            imgui.same_line()
+        end
+    elseif n >= 3 then
+        label = label .. "  (party full: 4 players)"
+    else
+        local verb = f.invites and "Accept" or (n == 0 and "Connect" or "Add")
+        if imgui.button(verb .. "##fr" .. i) then connect_to(f) end
         imgui.same_line()
     end
     imgui.text(label)
@@ -1781,20 +1851,24 @@ end
 join = { msg = "-" }
 
 function join_friend()
+    -- Returns true when the jump was requested.
     local last = net.history[#net.history]
     local fresh = last ~= nil and (os.clock() - last.t) < (NET_TIMEOUT or 2)
-    if not fresh or net.peer_chapter == nil then join.msg = "no friend connected" return end
-    if net.peer_chapter == local_chapter() then join.msg = "you're already in the same chapter" return end
+    if not fresh or net.peer_chapter == nil then join.msg = "no friend connected" return false end
+    if net.peer_chapter == local_chapter() then join.msg = "you're already in the same chapter" return false end
     chapters.list_t = nil
     ensure_chapter_list()
     local target
     for _, e in ipairs(chapters.list) do if e.value == net.peer_chapter then target = e end end
-    if target == nil then join.msg = "can't jump to the friend's chapter (" .. tostring(net.peer_chapter) .. ")" return end
+    if target == nil then join.msg = "can't jump to the friend's chapter (" .. tostring(net.peer_chapter) .. ")" return false end
     local busy = jump_busy()
-    if busy then join.msg = "not yet: " .. busy return end
+    if busy then join.msg = "not yet: " .. busy return false end
     jump_to_chapter(target)
+    -- "jumping to ..." now, or "saving switched OFF ...; jumping to ... in 2 s" (queued): both count.
+    if not tostring(chapters.last or ""):find("jumping to", 1, true) then join.msg = "not yet: " .. tostring(chapters.last) return false end
     join.msg = "going to " .. target.name .. " (start of the chapter)"
     log("join: " .. join.msg)
+    return true
 end
 
 -- Following into VHS tapes. Each tape is a chapter of its own (FF000, FF030, FF040,
@@ -1804,7 +1878,7 @@ end
 -- the tape ends and returns us the normal way.
 TAPE_CHAPTERS = { [7] = true, [10] = true, [11] = true, [12] = true }
 local follow = { was_together = false, want_t = nil, done_for = nil }
-re.on_frame(function()
+on_frame_1(function()
     local now = os.clock()
     if now - (follow.check_t or 0) < 1 then return end
     follow.check_t = now
@@ -1819,12 +1893,23 @@ re.on_frame(function()
     if local_cutscene() then follow.want_t = nil return end
     follow.want_t = follow.want_t or now
     if now - follow.want_t < 4 then return end
-    follow.done_for = theirs
-    log("follow: friend went into tape chapter " .. chapter_name(theirs) .. "; following")
-    join_friend()
+    -- Retry every 2 s for 30 s while the jump is refused (v0.30: the one try came while our game
+    -- was loading, "a chapter jump is still loading", and the tape was never followed).
+    if follow.first_try == nil or follow.first_for ~= theirs then
+        follow.first_try, follow.first_for = now, theirs
+        log("follow: friend went into tape chapter " .. chapter_name(theirs) .. "; following")
+    end
+    if now - (follow.try_t or 0) < 2 then return end
+    follow.try_t = now
+    if join_friend() then
+        follow.done_for = theirs
+    elseif now - follow.first_try > 30 then
+        follow.done_for = theirs
+        log("follow: gave up after 30 s (" .. tostring(join.msg) .. ")")
+    end
 end)
 
-re.on_frame(function()
+on_frame_1(function()
     read_friends()   -- also feeds the on-screen invite line
 end)
 
@@ -1873,6 +1958,12 @@ local function draw_options()
     imgui.same_line()
     local fchanged, fv = imgui.checkbox("Friend's footsteps", settings.footsteps ~= false)
     if fchanged then settings.footsteps = fv save_settings() end
+    imgui.same_line()
+    local vchanged, vv = imgui.checkbox("Friend's voice", settings.friend_voice ~= false)
+    if vchanged then settings.friend_voice = vv save_settings() end
+    imgui.same_line()
+    local lchanged, lv = imgui.checkbox("Friend's flashlight (experimental)", settings.friend_light == true)
+    if lchanged then settings.friend_light = lv save_settings() end
     -- Story cutscenes and progress follow whichever player reaches them first. One setting
     -- for both players (coop_talk.lua keeps the two games matched).
     local sc, sv = imgui.checkbox("Share story (cutscenes and progress, experimental; same for both)", settings.share_story == true)
@@ -1882,6 +1973,8 @@ local function draw_options()
     local hc, hv = imgui.checkbox("Heal my friend (use a healing item next to them: it heals them, not you; experimental)",
         settings.heal_friend == true)
     if hc then settings.heal_friend = hv save_settings() end
+    local bc, bv = imgui.checkbox("Bump into your friend (lets go in scripted scenes and when you're stuck)", settings.bump_friend ~= false)
+    if bc then settings.bump_friend = bv save_settings() end
     local lc, lv = imgui.checkbox("Hide my friend on ladders (there's no climbing animation)", settings.hide_on_ladders ~= false)
     if lc then settings.hide_on_ladders = lv save_settings() end
     local tc, tv = imgui.checkbox("Follow my friend into VHS tapes", settings.follow_tapes ~= false)
@@ -1892,6 +1985,12 @@ local function draw_options()
     if pc then if coop_set_shared_option then coop_set_shared_option("share_physics", pv) else settings.share_physics = pv save_settings() end end
     local phc, phv = imgui.checkbox("Share phone calls (one of you answers, both get the call)", settings.share_phones ~= false)
     if phc then if coop_set_shared_option then coop_set_shared_option("share_phones", phv) else settings.share_phones = phv save_settings() end end
+    local bfc, bfv = imgui.checkbox("Share boss fights (one game runs Mia, the other copies her; untick if she acts oddly)",
+        settings.share_bosses ~= false)
+    if bfc then if coop_set_shared_option then coop_set_shared_option("share_bosses", bfv) else settings.share_bosses = bfv save_settings() end end
+    local egc, egv = imgui.checkbox("Share enemies with 3-4 players (untick if enemies act oddly; same for everyone)",
+        settings.share_enemies_group ~= false)
+    if egc then if coop_set_shared_option then coop_set_shared_option("share_enemies_group", egv) else settings.share_enemies_group = egv save_settings() end end
     local suc, suv = imgui.checkbox("Share supplies (harder: one copy of ammo and healing; same for both)",
         settings.share_supplies == true)
     if suc then if coop_set_shared_option then coop_set_shared_option("share_supplies", suv) else settings.share_supplies = suv save_settings() end end
@@ -1959,7 +2058,17 @@ end
 JUMP_SETTLE = 10   -- s of control after a jump before another is allowed
 
 function jump_busy()
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    if om == nil or safe(om.get_field, om, "PlayerObj") == nil then
+        return "load your save first (Continue or Load Game), then press it again"
+    end
     local gm = sdk.get_managed_singleton("app.GameManager")
+    -- Title screen / boot (chapter 3 = Title, 0 = BootLogo): a jump from there leaves a black
+    -- screen, and an autosave made afterwards keeps it (2026-11-08).
+    local cur = gm and tonumber(safe(gm.get_field, gm, "_CurrentChapter") or -1) or -1
+    if (gm and safe(gm.get_field, gm, "IsTitleDisp") == true) or cur == 3 or cur == 0 then
+        return "load your save first (Continue or Load Game), then press it again"
+    end
     if gm and safe(gm.get_field, gm, "RequestChapterJump") then return "a chapter jump is still loading" end
     if chapters.jump_t and (respawn_t == nil or respawn_t < chapters.jump_t) and os.clock() - chapters.jump_t < 120 then
         return "waiting for the last jump to finish loading"
@@ -1989,12 +2098,19 @@ function jump_to_chapter(e)
     end
     local gm = sdk.get_managed_singleton("app.GameManager")
     local ok, err = pcall(gm.call, gm, "chapterJumpRequest(System.String, System.Boolean, System.String)", e.key, false, "")
-    if ok then chapters.jump_t = os.clock() end
+    if ok then
+        chapters.jump_t = os.clock()
+        -- The chapter starts over (v0.40): what the other scripts kept about it is from the old run.
+        for _, fn in ipairs({ coop_story_reset_chapter, coop_world_reset_chapter, coop_enemies_reset_chapter }) do
+            if fn then pcall(fn, e.value) end
+        end
+        if coop_talk_rewind then pcall(coop_talk_rewind, e.value, -math.huge) end
+    end
     chapters.last = ok and ("jumping to " .. e.name .. " (" .. e.key .. ")") or ("ERR " .. tostring(err))
     log("chapters: " .. chapters.last)
 end
 
-re.on_frame(function()
+on_frame_1(function()
     if chapters.pending and os.clock() >= chapters.pending_t then
         local e = chapters.pending
         chapters.pending = nil
@@ -2196,6 +2312,14 @@ local function send_look()
     lobby.sent_t = os.clock()
     coop_send_event("look " .. lobby.sent_look)
 end
+-- For the in-game co-op menu (coop_menu.lua, v0.40): pick how your friends see you.
+if SLOT == 1 then
+    function coop_set_look(key)
+        settings.look = key
+        save_settings()
+        pcall(send_look)
+    end
+end
 
 -- Incoming "look" (coop_enemies.lua passes every event here first).
 -- The friend's weapon in their character's hand. Our side: the drawn weapon model under the
@@ -2314,7 +2438,7 @@ re.on_frame(function()
     if now - (held.check_t or 0) < 0.25 then return end   -- was 1 s: the healing bottle showed late
     held.check_t = now
     local kv = net.kv or {}
-    if (kv.mode == "steam" or kv.mode == "bot") and coop_send_event then
+    if SLOT == 1 and (kv.mode == "steam" or kv.mode == "bot") and coop_send_event then
         local w = local_weapon()
         -- A knife only counts once it has been out for half a second (see local_weapon).
         if w:find("Knife", 1, true) and w ~= held.sent then
@@ -2363,7 +2487,7 @@ end)
 
 -- Which weapon animation set our body uses (Motion.TargetBankType), checked 10 times a
 -- second: a swing follows a weapon switch quickly.
-re.on_frame(function()
+on_frame_1(function()
     local now = os.clock()
     if now - (held.bank_t or 0) < 0.1 then return end
     held.bank_t = now
@@ -2437,7 +2561,7 @@ re.on_frame(function()
     if kv.mode ~= "steam" and kv.mode ~= "bot" then return end
     local last = net.history[#net.history]
     if last == nil or os.clock() - last.t > 2 then return end
-    if lobby.sent_look ~= (settings.look or "default") or os.clock() - lobby.sent_t > 15 then pcall(send_look) end
+    if SLOT == 1 and (lobby.sent_look ~= (settings.look or "default") or os.clock() - lobby.sent_t > 15) then pcall(send_look) end
 end)
 
 local function draw_lobby()
@@ -2445,8 +2569,8 @@ local function draw_lobby()
     local last = net.history[#net.history]
     local fresh = last ~= nil and (os.clock() - last.t) < (NET_TIMEOUT or 2)
     local me = (kv.steamName and kv.steamName ~= "") and kv.steamName or "You"
-    local friend = (kv.peerName and kv.peerName ~= "") and kv.peerName or "your friend"
-    imgui.text("Player 1: " .. me .. " (you), chapter " .. chapter_name(local_chapter()))
+    local friend = peer_name(kv) or "your friend"
+    imgui.text("Player 1: " .. me .. " (you), in " .. chapter_name(local_chapter()))
     local names, idx = {}, 1
     for i, c in ipairs(CHARACTERS) do
         names[#names + 1] = c.name
@@ -2474,7 +2598,7 @@ local function draw_lobby()
     if kv.mode == "bot" then
         imgui.text("Player 2: the test bot, appears as " .. character_by_key(lobby.friend_look).name)
     elseif fresh then
-        imgui.text("Player 2: " .. friend .. ", chapter " .. chapter_name(net.peer_chapter) ..
+        imgui.text("Player 2: " .. friend .. ", in " .. chapter_name(net.peer_chapter) ..
             ", appears as " .. character_by_key(lobby.friend_look).name)
         if net.peer_chapter ~= local_chapter() then
             imgui.text("  In another chapter: click Go to my friend's chapter (below) to join them.")
@@ -2506,6 +2630,12 @@ end
 local function draw_testing()
     local kvt = net.kv or {}
     if imgui.button("Test with bot") then send_command("bot") end
+    imgui.same_line()
+    imgui.text("Bots:")
+    for b = 1, 3 do
+        imgui.same_line()
+        if imgui.button(tostring(b) .. "##bots") then send_command("botcount " .. b) end
+    end
     if kvt.mode == "bot" then
         imgui.same_line()
         imgui.text("(the bot is on: it follows you)")
@@ -2605,7 +2735,7 @@ local function draw_testing()
     end
 end
 
-re.on_draw_ui(function()
+on_draw_ui_1(function()
     local ok, err = pcall(function()
         local c, v = imgui.checkbox("Show the RE7 Co-op window", coop_window.open)
         if c then coop_window.open = v end
@@ -2615,6 +2745,8 @@ re.on_draw_ui(function()
     if imgui.begin_window("RE7 Co-op", true, 0) then
         local ok, err = pcall(function()
             imgui.text("Status: " .. connection_text())
+            imgui.text("In-game co-op menu: F9, or L3+R3 on a controller (no REFramework window needed)")
+            if coop_menu_status then imgui.text(coop_menu_status()) end
             section("Lobby", draw_lobby)
             if coop_talk_ui then section("Talk and catch up", coop_talk_ui) end
             section("Connect and saving", draw_connect_body)
@@ -2678,7 +2810,7 @@ local function draw_connect_panel()
     end
 end
 
-re.on_draw_ui(function()
+on_draw_ui_1(function()
     if not (settings and settings.dev_tools) then return end
     if not imgui.tree_node("coop_dummy (ghost body test)") then return end
     draw_connect_panel()
@@ -2923,7 +3055,7 @@ function start_reload_test()
     reload_note(string.format("start: %d rounds, one every %d s", reload.total, reload.every))
 end
 
-re.on_frame(function()
+on_frame_1(function()
     if not reload.running then return end
     local now = os.clock()
     if reload.stage == "next" then
@@ -2974,7 +3106,7 @@ function fast_forward(on)
     ff.on = on
     log("fast-forward: " .. (on and "on" or "off"))
 end
-re.on_frame(function()
+on_frame_1(function()
     local playing = local_cutscene()
     if ff.on and not playing then fast_forward(false)
     elseif not ff.on and playing and settings and settings.ff_cutscenes then fast_forward(true) end
@@ -2984,7 +3116,7 @@ end)
 -- "full-screen movie playing" flag on, and with it on the pause menu never opens. Clear it
 -- once nothing has been playing and the player has been in control for 5 s.
 local movie_flag = { since = nil }
-re.on_frame(function()
+on_frame_1(function()
     local mm = sdk.get_managed_singleton("app.MenuManager")
     local stuck = mm ~= nil and safe(mm.call, mm, "get_IsPlayInGameFullScreenMovie") == true
         and not local_cutscene() and safe(mm.call, mm, "isCanInteract") == true
@@ -3016,6 +3148,12 @@ re.on_frame(function()
             cutscene_now = want
             log(string.format("cutscene: %s (%d running events)", want and "started" or "ended", cutscene_events or 0))
         end
+    end
+    -- The friend is in a cutscene (v0.39): coop_enemies stops following their enemies then.
+    do
+        local lastp = net.history[#net.history]
+        local fresh = lastp ~= nil and (now - lastp.t) <= NET_TIMEOUT + (net.delay or 0)
+        friend_cutscene = (fresh and lastp.flags ~= nil and (lastp.flags & STANCE_CUTSCENE) ~= 0) or false
     end
     if not net.enabled or #parts == 0 then return end
     local last = net.history[#net.history]
@@ -3083,7 +3221,9 @@ end
 re.on_frame(function()
     frames = frames + 1
     if phase == "wait" then
-        if get_player() and frames > 60 and player_is_ethan(get_player()) then
+        local last = net.history[#net.history]
+        local wanted = SLOT == 1 or (last ~= nil and os.clock() - last.t < 3)
+        if wanted and get_player() and frames > 60 and player_is_ethan(get_player()) then
             local vr = sdk.get_managed_singleton("app.vr.VrManager")
             prefab = vr and vr:get_field("DummyPlayerPrefab")
             if prefab == nil then log("FAIL: VrManager.DummyPlayerPrefab is nil") phase = "done" return end
@@ -3179,9 +3319,9 @@ re.on_frame(function()
             -- Nameplate over the other player's head (their Steam name; "Bot" in bot mode).
             if not ghost_hidden and #parts > 0 and settings and settings.nameplate ~= false then
                 local kv = net.kv or {}
-                local name = (kv.mode == "bot") and (bot_test_name and BOT_TEST_NAME or "Bot")
-                    or ((kv.peerName and kv.peerName ~= "") and kv.peerName or "Friend")
-                local fhp = coop_friend_health and coop_friend_health()
+                local name = (kv.mode == "bot" and SLOT == 1) and (bot_test_name and BOT_TEST_NAME or "Bot")
+                    or (peer_name(kv) or ("Friend " .. SLOT))
+                local fhp = coop_friend_health and coop_friend_health(SLOT)
                 if fhp then name = string.format("%s (%d%%)", name, fhp) end
                 pcall(friend_marker, name, p)
             end
@@ -3379,9 +3519,9 @@ local function hud_lines()
     if kv.mode == "bot" then
         out[#out + 1] = { "Co-op: bot test" .. ping, 0xFFFFD27F }
     elseif kv.mode == "steam" and (kv.peer == nil or kv.peer == "steam:0") then
-        out[#out + 1] = { "Co-op: not connected (press Insert, RE7 Co-op window)", 0xFF9EB7FF }
+        out[#out + 1] = { "Co-op: not connected (press F9 for the co-op menu)", 0xFF9EB7FF }
     elseif fresh then
-        local who = (kv.peerName and kv.peerName ~= "") and kv.peerName or "your friend"
+        local who = peer_name(kv) or "your friend"
         out[#out + 1] = { "Co-op: connected to " .. who .. ping, 0xFF7FFF8C }
     else
         out[#out + 1] = { "Co-op: waiting for your friend...", 0xFF7FE6FF }
@@ -3390,18 +3530,31 @@ local function hud_lines()
     if fhp then
         out[#out + 1] = { string.format("Friend's health: %d%%", fhp), coop_friend_health_color(fhp) }
     end
+    -- Friends 2 and 3 (v0.29): name, and health when known.
+    for k = 2, 3 do
+        local env = coop_slot_envs and coop_slot_envs[k]
+        local st = env and rawget(env, "coop_net_state") and env.coop_net_state()
+        local last = st and st.history and st.history[#st.history]
+        if last and os.clock() - last.t < (NET_TIMEOUT or 2) then
+            local nm = kv.mode == "bot" and ("Bot " .. k) or kv["peer" .. k .. "Name"]
+            if nm == nil or nm == "" then nm = "Friend " .. k end
+            local h = coop_friend_health and coop_friend_health(k)
+            out[#out + 1] = { h and string.format("%s: here, health %d%%", nm, h) or (nm .. ": here"),
+                h and coop_friend_health_color(h) or 0xFF7FFF8C }
+        end
+    end
     local tl, tc = nil, nil
     if coop_talk_hud then tl, tc = coop_talk_hud() end
     if tl then out[#out + 1] = { tl, tc } end
     local inv = pending_invite and pending_invite()
     if inv then
-        out[#out + 1] = { inv.name .. " invited you to co-op: press Insert, then Accept in the RE7 Co-op window", 0xFF7FFF8C }
+        out[#out + 1] = { inv.name .. " invited you to co-op: press F9 to answer", 0xFF7FFF8C }
     end
     if fresh and anim.flags and (anim.flags & STANCE_CUTSCENE) ~= 0 then
         out[#out + 1] = { "Friend is watching a cutscene", 0xFF7FE6FF }
     end
     if fresh and net.peer_chapter and net.peer_chapter ~= local_chapter() then
-        out[#out + 1] = { string.format("Friend is in %s (you're in %s): Go to my friend's chapter in the RE7 Co-op window",
+        out[#out + 1] = { string.format("Friend is in %s (you're in %s): F9 > Help and fixes > Go to your friend's chapter",
             chapter_name(net.peer_chapter), chapter_name(local_chapter())), 0xFF7FE6FF }
     end
     local vw = coop_talk_version_warning and coop_talk_version_warning()
@@ -3427,10 +3580,20 @@ local function hud_lines()
     return out
 end
 
-re.on_frame(function()
+on_frame_1(function()
     if not (settings and settings.hud) then return end
     local ok, err = pcall(function()
-        for i, l in ipairs(hud_lines()) do draw.text(l[1], 16, 16 + (i - 1) * 18, l[2]) end
+        -- In the co-op menu's font, with a shadow, when it's loaded (v0.40); else the default one.
+        local lh = coop_ui_line_h and coop_ui_line_h("small") or 18
+        for i, l in ipairs(hud_lines()) do
+            local y = 16 + (i - 1) * lh
+            if coop_ui_text then
+                coop_ui_text(l[1], 17, y + 1, 0xC0000000, "small")
+                coop_ui_text(l[1], 16, y, l[2], "small")
+            else
+                draw.text(l[1], 16, y, l[2])
+            end
+        end
     end)
     if not ok and not hud.err then hud.err = true log("hud ERR " .. tostring(err)) end
 end)
@@ -3445,11 +3608,34 @@ COLLIDE_RADIUS = 0.6     -- m, both bodies combined
 COLLIDE_HEIGHT = 1.7     -- m, vertical overlap that counts as touching
 collide = { enabled = true, pushes = 0, err = false }   -- global: the menu (defined earlier) reads it
 
+-- When not to bump (v0.34). Bumping is on again by default, but it lets go around scripted
+-- scenes: pushing each other apart kept one player off the spot where a scene starts, so the
+-- scene played for one of you only (2026-11-08). No pushes:
+--   * while a cutscene plays here or for the friend (their character is hidden then),
+--   * for SCENE_QUIET s after a scripted scene set up here or the friend's story event came in,
+--   * after STUCK_LET_GO s of touching without getting apart (you walk through, until apart).
+SCENE_QUIET = 10
+STUCK_LET_GO = 0.6
+collide.touch_t, collide.let_go = nil, false
+local function bump_quiet(now)
+    if local_cutscene() then return "cutscene" end
+    if coop_scene_t and now - coop_scene_t < SCENE_QUIET then return "scene" end
+    return nil
+end
+
 re.on_frame(function()
     if not (collide.enabled and follow and dummy) or #parts == 0 then return end
+    if settings and settings.bump_friend == false then return end
     local ok, err = pcall(function()
         local player = get_player()
         if player == nil or ghost_hidden then return end
+        local now = os.clock()
+        local quiet = bump_quiet(now)
+        if quiet ~= collide.quiet then
+            collide.quiet = quiet
+            log("collide: " .. (quiet and ("off for a moment (" .. quiet .. ")") or "on again"))
+        end
+        if quiet then collide.touch_t, collide.let_go = nil, false return end
         -- Only push while the local player is actually walking: never during
         -- cutscenes, loads or scripted moves (a warp there can strand the player).
         local pm = player_movement(player)
@@ -3460,7 +3646,18 @@ re.on_frame(function()
         if math.abs(p.y - g.y) > COLLIDE_HEIGHT then return end
         local dx, dz = p.x - g.x, p.z - g.z
         local d = math.sqrt(dx * dx + dz * dz)
-        if d >= COLLIDE_RADIUS then return end
+        if d >= COLLIDE_RADIUS then
+            -- Apart again: bumping comes back once there's a little room.
+            if d > COLLIDE_RADIUS + 0.3 then collide.touch_t, collide.let_go = nil, false end
+            return
+        end
+        -- Caught on each other (a doorway, a scene spot): let go after STUCK_LET_GO s.
+        collide.touch_t = collide.touch_t or now
+        if collide.let_go or now - collide.touch_t > STUCK_LET_GO then
+            if not collide.let_go then log("collide: let go (stuck on each other)") end
+            collide.let_go = true
+            return
+        end
         if d < 1e-3 then dx, dz, d = 1, 0, 1 end   -- exactly inside: pick a side
         local push = COLLIDE_RADIUS - d
         local np = Vector3f.new(p.x + dx / d * push, p.y, p.z + dz / d * push)
@@ -3480,3 +3677,16 @@ re.on_script_reset(function()
 end)
 
 log("coop_dummy loaded")
+
+end   -- coop_dummy_main
+
+coop_slot_envs = { [1] = _G }
+coop_dummy_main(_G, 1)
+for k = 2, 3 do
+    local env = setmetatable({ COOP_SLOT = k }, { __index = _G })
+    coop_slot_envs[k] = env
+    local ok, err = pcall(coop_dummy_main, env, k)
+    if not ok then
+        pcall(fs.write, "coop_dummy_slot" .. k .. "_error.txt", tostring(err))
+    end
+end

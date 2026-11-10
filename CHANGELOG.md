@@ -1,5 +1,212 @@
 # Changelog
 
+## v0.43 (2026-11-09)
+- **Fixed: CO-OP on the tape recorder took EXIT's place**, with a blank line under it. The game fills its
+  list over several frames, and CO-OP was added before the game had added EXIT. CO-OP now waits until the
+  list is complete, goes after EXIT, and moves back to the end if a row ever comes after it.
+- **The mouse works on the co-op screen.** Point at a row to highlight it, click to pick it (like Enter / A),
+  right click to go back (like Backspace / B); click "more above" / "more below" to scroll. A click with CO-OP
+  highlighted on the tape recorder opens the co-op screen. Pointing only moves the highlight when the mouse
+  moves, so it never fights the keys or the controller.
+- **"I need ammo" and "I need healing"** in Quick messages. Your friend sees it with "co-op screen > Give
+  items", and their Give items has you picked, with your health shown next to your name.
+
+## v0.42 (2026-11-09)
+Your friend's voice, giving items, a session page, difficulty checks, and fixes found in the game's own code.
+Tested in stand-in games (new tests for each part), not yet in a real session.
+- **Your friend's voice.** You hear them grunt when they're hit (light and heavy hits), block, land from a drop
+  or climb up, scream if they die, and get back up after being revived; and pour the First Aid Med. The game
+  picks these moves in its own code (the damage, guard, landing and climbing moves), which is caught and sent;
+  your game plays the same sound from your own character's voice, where your friend is. Options: **Friend's
+  voice**.
+- **Give items.** A new section of the co-op screen: give a friend ammo, healing or crafting materials (one,
+  half or all). Their game puts it in their inventory with the game's own calls and counts what arrived; only
+  then does it leave yours. No room, no answer within 10 seconds, or anything that didn't arrive: nothing moves.
+- **This session.** Another new section: time together, and for each of you enemies taken down, shots, hits
+  taken, times down and back up, heals and items given (each game counts its own and tells the others).
+- **Difficulty check.** Each game says which difficulty it plays (Casual, Normal, Madhouse); the Lobby marks a
+  friend on another one, and you're told once, since enemies won't match.
+- **Your friend's flashlight** (experimental, off by default: Options). In dark places, a copy of your own
+  flashlight's light shines from your friend's head where they look.
+- **Item names.** "Your friend picked up ..." and "took ..." now use the game's own item names (in your
+  language) instead of internal ones like Chapter1Map.
+- **Fixed: Get the host's key items and weapons always found nothing.** It read the item's id from the wrong
+  place in the game's inventory list, so the list was always empty; it now reads it from the item itself.
+- **Fixed: the co-op screen with Close highlighted.** Sheet B showed the Lobby and the menu stopped drawing it
+  properly (an error every frame); it now shows "Back to the game". Each different menu error is now logged.
+
+## v0.41 (2026-11-09)
+The co-op menu moves onto the tape recorder; disconnecting; every gun's sound. Partly tested live.
+- **CO-OP on the title screen's tape recorder.** A CO-OP row in the game's own list and lettering, under EXIT;
+  picking it opens the co-op screen (worked out and tried live on the title screen; F9 and L3+R3 still work).
+- **The co-op screen looks like the game's Options and Extra Content**: two sheets of paper, sections on sheet A
+  (Lobby, Friends, Quick messages, Your character, Options, Help and fixes), the chosen one on sheet B.
+- **Every gun is heard.** The game names its sounds, and every gun's shot has the same name (and every blade's
+  swing): your friend's shotgun, magnum, M19 handgun and the rest now play their own shot, the axe its own swing,
+  and reloads are heard too. The handgun's bang stands in if a gun's own sound files don't have it.
+- **Disconnecting.** A friend whose game has closed is disconnected after 30 seconds (it no longer says "waiting
+  for your friend" all night); one who lost connection after 3 minutes. Friends you played with in the last week
+  reconnect by themselves when they invite you. **Disconnect from everyone** (Help and fixes) tells your friends
+  at once, and the host can remove a player from the lobby (pick their row).
+- **Lobby: Continue.** "Continue: everyone's own latest save": whoever is on the title screen loads their
+  latest save when the host starts; whoever is playing carries on.
+- **Key items used up go for everyone.** When one of you uses a key item on something (the VHS tape in the VCR,
+  a key in its last lock) and it's gone, it's taken from your friends' inventories too.
+- **Catching up with the host.** The lobby shows who's behind or ahead in the story; a friend who's behind can
+  get the host's key items and weapons (experimental). A friend who's ahead keeps their own.
+
+## v0.40 (2026-11-09)
+An in-game co-op menu and lobbies. Untested in play.
+- **The co-op menu: F9, or both sticks (L3+R3) on a controller.** Drawn over the game, on the title screen and in
+  play, with the keyboard (arrows or WASD, Enter, Backspace) or the controller (D-pad or left stick, A, B); no
+  REFramework window needed. Pages: Lobby, Friends, Quick messages, You appear as, Options, Help and fixes. The
+  first time it opens, a welcome page explains the basics. The key can be changed (Options), for when F9 is your
+  REFramework menu key.
+- **Lobbies.** One of you hosts and picks where to start: where each of you is now, the host's chapter, or Chapter
+  1, 3 or 4 from its start. Friends join by accepting the host's invite or choosing **Join** on a friend who hosts
+  (the host's game lets them in). Everyone marks themselves ready, the host presses Start, and every game goes
+  there together. A chapter start waits until everyone has loaded a save (a jump from the title screen leaves a
+  black screen), and the menu says who it's waiting for.
+- **The game holds still while the menu is open.** Your character, the camera and the game's own menus (title,
+  pause) don't react to the keys you use in it, through the game's own switches; all given back when it closes.
+- **A chapter start is a clean start.** The story's played scenes, the world changes still waiting for that
+  chapter, and your catch-up list for it start over, for **Go to my friend's chapter** too.
+- **Friendlier names**: chapters show as "Chapter 3 (the Baker house)"; the status lines point to the menu and
+  use the menu's larger font, with a shadow.
+- Controller players can send quick messages (from the menu).
+
+## v0.39 (2026-11-09)
+A sync overhaul from every log and note so far. Untested in play.
+- **Scenes in a row play in order.** Once your game has started a run of scenes (the dinner, then the escape),
+  it plays the rest itself as you get to each one; your friend's later scene is no longer forced into the
+  middle of yours. If you haven't started that run yet, it starts from its first scene. This is what kept the
+  chapter from moving on after the dinner, so Jack never came.
+- **Story progress waits while your own run of scenes is still playing out** (it skipped the chair before).
+- **Loading a save works with the story.** After either of you loads an earlier save, the scenes from after
+  that save can play again for both of you, and your catch-up list stops sending changes from after it, so
+  your friend's game doesn't get changes your world no longer has.
+- **Enemies aren't copied during cutscenes.** While either of you is in a cutscene, or between the scenes of a run
+  (rocking the chair at the dinner), enemies run in each game on their own: the scene moves them. Following picks
+  up again when it ends. Bosses like Mia are still copied between the scenes of a run.
+- **Jack's scripted moments happen in each game when its own player sets them off** (each of you picks up the
+  hatch key). Starting them in the other game moved that game's Jack out of whatever he was doing.
+- **No lost or half messages.** The network plugin now sends only whole messages: one read halfway through a
+  write sent half a message before. More messages are kept between sends, so a burst no longer loses the oldest.
+- **Rooms full of enemies keep following.** An update with more than about 11 enemies was dropped every time;
+  now up to 24 (the nearest) go in each one.
+- **Old messages after a long load are skipped.** A friend's scene or enemy hand-off from a minute ago no longer
+  starts when your load finishes; lasting changes (doors, drawers, pickups) still apply.
+- **The logs show when each scene starts and ends**, and flag one still running after 5 minutes.
+
+## v0.38 (2026-11-09)
+Untested in play.
+- **Chains cut with the bolt cutters are cut for everyone.** Before, the friend's game counted the chain as used
+  but left it hanging (the cabinet chain in Chapter 1). Now the chain's own cut runs there; if it's still there
+  10 seconds later, it's taken away.
+- **Late joiners get cut chains and picked locks.** They're kept in the catch-up list, and remembered for an area
+  the friend hasn't loaded yet.
+- **Jack shows up in Chapter 3.** After the dinner neither game moved the chapter on, so Jack never came. Two causes,
+  both fixed: the friend's tied-up chair was copied onto yours while your escape scene played (scene props are no
+  longer copied), and your escape scenes were forced into the friend's game in the middle of their dinner (a scene
+  from a sequence your own game is already playing now plays in its own time).
+
+## v0.37 (2026-11-09)
+More of what led to the Mia crash, closed off. Untested in play.
+- **Your cutscene is left alone.** While a cutscene plays in your game, your friend's doors, drawers, switches,
+  crates, pickups, takedowns and catch-ups wait, and are applied a second after it ends; their pushed objects and
+  hits are dropped (the scene moves those itself).
+- **A friend's scene waits until you're free.** It no longer starts in your game while you're paused, in a menu,
+  down, loading or in another cutscene; it starts when you're back (for up to 2 minutes, if they're still near).
+
+## v0.36 (2026-11-09)
+Fixes the crash when Mia throws Ethan through the wall. Untested in play.
+- **No copied damage in scripted scenes.** The wall throw takes 1300 of Mia's health as part of the scene; that
+  was sent to the other game as a normal hit and applied there, with a forced hit reaction (the crawling
+  animation you saw), in the same second the scene started there, and the game crashed soon after. Damage, boss
+  takedowns and hit reactions are no longer sent or applied while a scene plays or just started: each game's scene
+  does its own.
+- **Bosses never get a forced hit reaction** from the friend's hits (their reactions are scripted).
+- **Hands off while a scene sets up.** For a moment after a scripted scene starts, the mod touches no enemies,
+  doors or objects (the scene swaps characters in and out; reading one that was just removed damaged the game's
+  state), then looks everything up again.
+
+## v0.35 (2026-11-08)
+Untested in play.
+- **Bug reports** are zipped by the mod itself instead of a hidden PowerShell window, which showed Windows' busy
+  mouse pointer over the game.
+- Every script now goes through a stand-in game before each build: it loads them, runs their frames and menus,
+  and feeds them every kind of friend event (nothing escaped the scripts' own error handling). The plugin is
+  compiled against REFramework before each build too.
+- The two-player test list has a section for everything new since v0.32.
+
+## v0.34 (2026-11-08)
+Untested in play.
+- **Bumping into each other is back on, and lets go when it matters.** No bumping while a cutscene plays for
+  either of you, or for 10 s after a scripted scene starts (yours or your friend's), so you can both stand where
+  a scene starts and watch it together. If you get caught on each other (a doorway, a scene spot), you walk
+  through after about half a second, until you're apart again. Options: **Bump into your friend**.
+
+## v0.33 (2026-11-08)
+Overhaul pass over every report so far. Untested in play.
+- **Reviving with 3-4 players.** Any friend who is still up can get you up (stand next to them for 3 s); it's a
+  real death only when everyone is down or nobody comes within 90 s. The screen shows the nearest friend who is
+  down.
+- **Pushed objects**: only what your own player pushes is sent. Knives an enemy carries and props a cutscene moves
+  (the dinner chair) were sent too, and both games fought over them. A prop you are pushing yourself isn't moved by
+  the friend's game at the same time.
+- **Catch-up** goes once, not five times in a row, when a reconnect, the button and the friend's request come
+  together; smashed crates are part of it.
+- Two script errors from the reports fixed (a scene list read while loading, the friend's animation read while
+  their character was being rebuilt).
+- Checked every script for names used before they exist (a new build check).
+
+## v0.32 (2026-11-08)
+Fixes from the session on v0.31 (2 players, Mia fight into Chapter 3). Untested in play.
+- **One Mia for both players.** In her boss fights one game (the host) runs Mia and the other copies her
+  moves, attacks and chainsaw; before, each game ran its own Mia and only her health was shared. Options:
+  **Share boss fights** (the same for both) turns it off if she acts oddly.
+- **No black screen at the end of a chapter.** A story step from the friend is no longer copied while your own
+  cutscene plays or in the 8 s after it: copying it in the second your game was about to take that step itself
+  stopped your game from loading the next chapter (end of the Mia fight).
+- **Boxes and crates without an item** break for both players (only boxes with an item were shared).
+- **Doors**: a door your friend opens is unlocked first if it's still locked in your game (after one of you
+  reloaded), so they no longer walk through a shut door.
+- **Connecting while loading**: nothing from the friend is applied until your game has loaded and you have been
+  in control for 5 s (it waits, nothing is lost).
+- If your friend goes on to the next chapter and your game doesn't follow within 40 s, a message tells you to
+  press **Go to my friend's chapter**.
+
+## v0.31 (2026-11-08)
+Fixes from the second session on v0.30 (2 players). Untested in play.
+- **No black screen from the title screen**: **Go to my friend's chapter** (and following into a tape) waits
+  until a save is loaded; it says "load your save first" instead of jumping with no game loaded.
+- **No invisible walls after scenes you both played** (Mia's kidnap room): story steps are copied while you
+  stand together (within about 12 m), not only right after a shared cutscene. Steps that arrive while you are
+  apart are kept and copied when you meet up in the same chapter.
+
+## v0.30 (2026-11-08)
+Fixes from the first session on v0.29 (2 players). Untested in play.
+- **Following into VHS tapes retries** for up to 30 s: the one try came while the game was loading, and the
+  friend went into the tape alone.
+- **Story moments after a long shared cutscene go through**: a story step is accepted until 30 s after the
+  shared cutscene ends (it was 30 s after it started; Mia froze for one player after a 31 s scene).
+- **You can stand in the same spot**: bumping into each other is off by default (it pushed one player off the
+  spot where a scripted scene starts); Options: **Bump into your friend**.
+- **Pushed chairs and other props stay matched** after an area reloads: a move for a prop the other game knows
+  by another name now finds the same prop nearby.
+
+## v0.29 (2026-11-08)
+Tested on one PC with 3 bots; enemy hand-offs between 3-4 games are untested.
+- **Up to 4 players.** Connect to one friend, then **Add** up to two more; everyone links to each other by
+  themselves (a party list goes around every 3 s). Each friend gets their own character, nameplate, status line
+  (name and health), and their own gunshots, flashes, smoke and knife swings.
+- **Enemies with 3-4 players**: each enemy is run by the game of whoever is closest and copied by everyone else;
+  hand-offs name the new owner, the lowest SteamID starts as host. Fallback switch **Share enemies with 3-4
+  players** (Options, the same for everyone).
+- **Story with 3-4 players**: a friend's cutscene checks the distance to that friend.
+- Downed-and-revive stays a 2-player feature; with more players a fatal hit is a normal death.
+- Bot testing: **Bots: 1 / 2 / 3** next to Test with bot (developer tools).
+
 ## v0.28 (2026-11-04)
 Tested on one PC with the bot.
 - **Your friend's gunshots are heard and seen**: each shot plays the gun's real bang, muzzle flash and powder

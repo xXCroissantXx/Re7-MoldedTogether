@@ -78,9 +78,10 @@ end
 -- same thing replaces (a drawer opened then shut keeps only "shut").
 local function list_key(text)
     local kind, id = text:match("^(%a+) (%S+)")
-    if kind == "unlock" or kind == "break" or kind == "took" then return kind .. ":" .. id end
+    if kind == "unlock" or kind == "break" or kind == "dbreak" or kind == "took" then return kind .. ":" .. id end
     if kind == "drawer" or kind == "switch" then return kind .. ":" .. id end
     if kind == "intr" and text:match(" phone$") then return "intr:" .. id end   -- answered calls
+    if kind == "intr" and text:match(" lock$") then return "intr:" .. id end    -- cut chains, picked locks (v0.38)
     if kind == "kill" then
         local name = text:match("^kill %S+ %-?%d+ (%S+)")
         -- Only the Molded die for good; Jack and bosses get back up, so their kills aren't replayed.
@@ -90,6 +91,16 @@ local function list_key(text)
 end
 coop_talk_list_key = list_key
 
+-- The chapter a change belongs to, from its text: "<kind> <id> <chapter> ...", or
+-- "<kind> <id> <0|1> <chapter>" for drawers and switches.
+local function change_chapter(text)
+    local kind = text:match("^(%a+)")
+    if kind == "drawer" or kind == "switch" then return tonumber(text:match("^%a+ %S+ [01] (%-?%d+)")) end
+    return tonumber(text:match("^%a+ %S+ (%-?%d+)"))
+end
+
+-- Lines: "<os.time>\t<text>", and since v0.39 "<os.time>\tc<story clock>\t<text>" (where in the
+-- story it was done, coop_story_clock; see coop_talk_rewind).
 local function load_list()
     talk.loaded = true
     local text = fs.read(LIST_FILE) or ""
@@ -101,8 +112,12 @@ local function load_list()
             local t, body = line:match("^(%d+)\t(.+)$")
             t = tonumber(t)
             if t and now - t < KEEP_HOURS * 3600 then
+                local c, rest = body:match("^c(%-?%d+)\t(.+)$")
+                if c then body = rest end
                 local key = list_key(body)
-                if key then talk.list[#talk.list + 1] = { t = t, text = body, key = key } end
+                if key then
+                    talk.list[#talk.list + 1] = { t = t, text = body, key = key, clock = tonumber(c), ch = change_chapter(body) }
+                end
             end
         end
     end
@@ -111,9 +126,26 @@ end
 
 local function save_list()
     local out = { "peer\t" .. tostring(talk.peer or "-") }
-    for _, e in ipairs(talk.list) do out[#out + 1] = e.t .. "\t" .. e.text end
+    for _, e in ipairs(talk.list) do
+        out[#out + 1] = e.t .. "\t" .. (e.clock and ("c" .. e.clock .. "\t") or "") .. e.text
+    end
     fs.write(LIST_FILE, table.concat(out, "\n") .. "\n")
     talk.dirty = false
+end
+
+-- We loaded a save (coop_story, v0.39): our changes in that chapter from that point on are no
+-- longer in our world, so they're not sent to the friend any more. Changes with no story clock
+-- (made before v0.39) go too: it can't be told whether they came before the save.
+function coop_talk_rewind(ch, clock)
+    if not talk.loaded then load_list() end
+    local n = 0
+    for i = #talk.list, 1, -1 do
+        local e = talk.list[i]
+        if e.ch == ch and (e.clock == nil or e.clock >= clock) then table.remove(talk.list, i) n = n + 1 end
+    end
+    talk.queue = {}
+    if n > 0 then talk.dirty = true end
+    log(string.format("save loaded (chapter %d, story clock %d): %d changes from after it left the catch-up list", ch, clock, n))
 end
 
 function coop_talk_clear_list(why)
@@ -134,11 +166,16 @@ function coop_talk_record(text)
     for i = #talk.list, 1, -1 do
         if talk.list[i].key == key then table.remove(talk.list, i) end
     end
-    talk.list[#talk.list + 1] = { t = os.time(), text = text, key = key }
+    local clock = coop_story_clock and safe(coop_story_clock) or nil
+    talk.list[#talk.list + 1] = { t = os.time(), text = text, key = key, clock = clock, ch = change_chapter(text) }
     talk.dirty = true
 end
 
 local function queue_all(why)
+    -- Once per 10 s (v0.33): a reconnect, the button and the friend's request came together
+    -- and sent the same catch-up five times in 4 s (2026-11-08).
+    if os.clock() - (talk.queued_t or -100) < 10 then log("catch-up: already sent just now (" .. why .. ")") return end
+    talk.queued_t = os.clock()
     talk.queue = {}
     for _, e in ipairs(talk.list) do talk.queue[#talk.queue + 1] = e.text end
     talk.last_catchup = string.format("%s: sending %d changes (%s)", os.date("%H:%M"), #talk.queue, why)
@@ -189,6 +226,9 @@ local KINDS = {
     wait = { label = "Wait for me", color = 0xFFFFFFFF, mark = false },
     go = { label = "Go on ahead", color = 0xFFFFFFFF, mark = false },
     help = { label = "Help!", color = 0xFF5050FF, mark = true },
+    -- v0.43: asking for supplies; the friend can give some under Give items (co-op screen).
+    ammo = { label = "I need ammo", color = 0xFF7FE6FF, mark = false, tip = " - co-op screen > Give items" },
+    meds = { label = "I need healing", color = 0xFF7FE6FF, mark = false, tip = " - co-op screen > Give items" },
 }
 local KEY_ORDER = { { vk = 0x74, kind = "ping", name = "F5" }, { vk = 0x75, kind = "come", name = "F6" },
     { vk = 0x76, kind = "wait", name = "F7" }, { vk = 0x77, kind = "help", name = "F8" } }
@@ -214,7 +254,9 @@ local function on_talk(kind, ch, x, y, z)
     local p = player_pos()
     local dist = (here and p) and math.sqrt((x - p.x) ^ 2 + (y - p.y) ^ 2 + (z - p.z) ^ 2) or nil
     show_msg("Your friend: " .. def.label .. (dist and string.format(" (%d m)", math.floor(dist + 0.5)) or
-        (here and "" or " (in another chapter)")), def.color)
+        (here and "" or " (in another chapter)")) .. (def.tip or ""), def.color)
+    -- v0.43: asked for ammo or healing: Give items picks that friend the next time it's opened.
+    if def.tip then coop_give_ask = { slot = coop_event_slot or 1, kind = kind, t = os.clock() } end
     if def.mark and here then
         talk.marks = { { kind = kind, label = def.label, pos = Vector3f.new(x, y + 1.0, z), t = os.clock() } }
     end
@@ -236,6 +278,8 @@ local SHARED_OPTS = {
     { key = "share_phones", label = "Share phone calls", on = true },
     { key = "share_interactions", label = "Share interactions", on = true },
     { key = "share_physics", label = "Share pushed objects", on = true },
+    { key = "share_enemies_group", label = "Share enemies with 3-4 players", on = true },
+    { key = "share_bosses", label = "Share boss fights", on = true },
 }
 local opts = { sent_t = -100 }
 
@@ -332,7 +376,10 @@ function coop_talk_on_event(text)
     end
     local fh = tonumber(text:match("^hp (%d+)$"))
     if fh then
-        hp.friend, hp.friend_t = fh, os.clock()
+        local slot = coop_event_slot or 1
+        hp.slots = hp.slots or {}
+        hp.slots[slot] = { v = fh, t = os.clock() }
+        if slot == 1 then hp.friend, hp.friend_t = fh, os.clock() end   -- friend 1 (heal my friend uses it)
         return true
     end
     local kind, ch, x, y, z = text:match("^talk (%a+) (%-?%d+) (%S+) (%S+) (%S+)")
@@ -447,10 +494,28 @@ end
 coop_talk_apply_heal = on_heal
 
 -- The friend's health in percent, or nil when we haven't heard for 40 s.
-function coop_friend_health()
+function coop_friend_health(slot)
+    if slot and slot > 1 then
+        local e = hp.slots and hp.slots[slot]
+        if e == nil or os.clock() - e.t > 40 then return nil end
+        return e.v
+    end
     if hp.friend == nil or os.clock() - hp.friend_t > 40 then return nil end
     return hp.friend
 end
+-- How many friends are in the session (v0.29): 1 for 2 players, up to 3 for 4 players.
+function coop_party_size()
+    local n = coop_net_state and coop_net_state()
+    local kv = n and n.kv or {}
+    if kv.mode == "bot" then return math.max(1, tonumber(kv.botCount or 1) or 1) end
+    local c = 0
+    for _, key in ipairs({ "peer", "peer2", "peer3" }) do
+        local id = kv[key] and kv[key]:match("^steam:(%d+)$")
+        if id and id ~= "0" then c = c + 1 end
+    end
+    return math.max(1, c)
+end
+
 
 function coop_friend_health_color(pct)
     if pct >= 60 then return 0xFF7FFF8C elseif pct >= 30 then return 0xFF7FE6FF end

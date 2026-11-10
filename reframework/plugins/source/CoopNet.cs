@@ -15,6 +15,13 @@
 //   "bot":   a simulated friend (follow me / circle / stay) through the normal
 //            receive path, with latency, jitter and loss. For testing alone.
 //
+// Up to 4 players (v0.29): friend 1 is peerSteamId, friends 2 and 3 are extraPeers. Every
+// player sends to every other ("mesh"); a "R7P1" party packet with our friend list goes out
+// every 3 s, so connecting to two friends links them to each other too. Friend 1 keeps the
+// original file names (coopnet_in.txt, coopnet_es_in.txt); friends 2 and 3 get
+// coopnet_in_2.txt / coopnet_in_3.txt and coopnet_es_in_2/3.txt, and their events arrive in
+// coopnet_ev_in.txt as "@2 <text>" / "@3 <text>".
+//
 // Packets:
 //   "R7C2" player state, 64 bytes, little endian, ~30 a second, unreliable:
 //     u32 seq | f64 senderTime | f32 px py pz | f32 qx qy qz qw
@@ -49,6 +56,8 @@ public class CoopNet
         public int peerPort { get; set; } = 27777;
         public int sendHz { get; set; } = 30;
         public string peerSteamId { get; set; } = "";   // friend's SteamID64, "steam" mode
+        public List<string> extraPeers { get; set; } = new List<string>();   // friends 2 and 3 (v0.29)
+        public int botCount { get; set; } = 1;              // bot mode: 1-3 bots (v0.29)
         public int steamChannel { get; set; } = 7;
         // "bot" mode: a fake remote player walking a circle around where we stand,
         // delivered through the normal receive path with simulated network trouble.
@@ -402,8 +411,8 @@ public class CoopNet
         const int FriendFlagImmediate = 4;   // k_EFriendFlagImmediate: regular friends
         const uint Re7AppId = 418370;
 
-        static IntPtr s_msgs, s_utils, s_peerIdentity, s_friends, s_user, s_gameInfo;
-        static ulong s_peerId;
+        static IntPtr s_msgs, s_utils, s_friends, s_user, s_gameInfo;
+        static readonly Dictionary<ulong, IntPtr> s_ids = new Dictionary<ulong, IntPtr>();   // peer -> identity
         static int s_channel;
         static readonly IntPtr[] s_inbox = new IntPtr[32];
         public static ulong SelfId;
@@ -424,15 +433,13 @@ public class CoopNet
             SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess(s_utils);
 
             s_channel = channel;
-            s_peerIdentity = Marshal.AllocHGlobal(IdentitySize);
-            SteamAPI_SteamNetworkingIdentity_Clear(s_peerIdentity);
         }
 
         // Friend's Steam name for the nameplate; Steam may need a moment to fetch it.
-        public static string PeerName()
+        public static string PeerName(ulong id)
         {
-            if (s_friends == IntPtr.Zero || s_peerId == 0) return "";
-            var name = Marshal.PtrToStringUTF8(SteamAPI_ISteamFriends_GetFriendPersonaName(s_friends, s_peerId)) ?? "";
+            if (s_friends == IntPtr.Zero || id == 0) return "";
+            var name = Marshal.PtrToStringUTF8(SteamAPI_ISteamFriends_GetFriendPersonaName(s_friends, id)) ?? "";
             return name == "[unknown]" ? "" : name;
         }
 
@@ -448,7 +455,7 @@ public class CoopNet
         static string Presence(ulong id, string key) =>
             Marshal.PtrToStringUTF8(SteamAPI_ISteamFriends_GetFriendRichPresence(s_friends, id, Utf8z(key))) ?? "";
 
-        public struct Friend { public ulong Id; public string Name, CoopVersion; public bool InRe7, InvitesMe; }
+        public struct Friend { public ulong Id; public string Name, CoopVersion; public bool InRe7, InvitesMe, HostsLobby; }
 
         static readonly HashSet<ulong> s_presenceAsked = new HashSet<ulong>();
 
@@ -472,7 +479,8 @@ public class CoopNet
                 {
                     if (s_presenceAsked.Add(id)) SteamAPI_ISteamFriends_RequestFriendRichPresence(s_friends, id);
                     f.CoopVersion = Presence(id, "coop_re7");
-                    f.InvitesMe = Presence(id, "coop_re7_to") == SelfId.ToString(Inv);
+                    f.InvitesMe = Array.IndexOf(Presence(id, "coop_re7_to").Split(','), SelfId.ToString(Inv)) >= 0;
+                    f.HostsLobby = Presence(id, "coop_re7_lobby") != "";   // v0.40: the in-game co-op menu
                 }
                 list.Add(f);
             }
@@ -489,31 +497,45 @@ public class CoopNet
             return Encoding.UTF8.GetString(buf, 0, n < 0 ? buf.Length : n);
         }
 
-        public static void SetPeer(ulong peer)
+        // The friends we talk to (0 entries are skipped). Identities of friends no longer in the
+        // list are freed; new ones are made and their sessions accepted.
+        public static void SetPeers(IEnumerable<ulong> peers)
         {
-            SteamAPI_SteamNetworkingIdentity_Clear(s_peerIdentity);
-            s_peerId = peer;
-            if (peer == 0) return;
-            if (s_friends != IntPtr.Zero) SteamAPI_ISteamFriends_RequestUserInformation(s_friends, peer, true);
-            SteamAPI_SteamNetworkingIdentity_SetSteamID64(s_peerIdentity, peer);
-            SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser(s_msgs, s_peerIdentity);
+            var want = new HashSet<ulong>();
+            foreach (var p in peers) if (p != 0) want.Add(p);
+            foreach (var old in new List<ulong>(s_ids.Keys))
+                if (!want.Contains(old)) { Marshal.FreeHGlobal(s_ids[old]); s_ids.Remove(old); }
+            foreach (var p in want)
+            {
+                if (s_ids.ContainsKey(p)) continue;
+                var ident = Marshal.AllocHGlobal(IdentitySize);
+                SteamAPI_SteamNetworkingIdentity_Clear(ident);
+                SteamAPI_SteamNetworkingIdentity_SetSteamID64(ident, p);
+                if (s_friends != IntPtr.Zero) SteamAPI_ISteamFriends_RequestUserInformation(s_friends, p, true);
+                SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser(s_msgs, ident);
+                s_ids[p] = ident;
+            }
         }
+        public static bool HasPeers => s_ids.Count > 0;
 
         // ESteamNetworkingAvailability: 100 = Current, 3 = Attempting, <0 = failed
         public static int RelayStatus() =>
             s_utils == IntPtr.Zero ? 0 : SteamAPI_ISteamNetworkingUtils_GetRelayNetworkStatus(s_utils, IntPtr.Zero);
 
+        // To every friend.
         public static void Send(byte[] pkt)
         {
-            LastSendResult = SteamAPI_ISteamNetworkingMessages_SendMessageToUser(
-                s_msgs, s_peerIdentity, pkt, (uint)pkt.Length, SendUnreliableNoNagle | SendAutoRestart, s_channel);
+            foreach (var ident in s_ids.Values)
+                LastSendResult = SteamAPI_ISteamNetworkingMessages_SendMessageToUser(
+                    s_msgs, ident, pkt, (uint)pkt.Length, SendUnreliableNoNagle | SendAutoRestart, s_channel);
         }
 
         // Events (enemy deaths...) must arrive: Steam retransmits and keeps them in order.
         public static void SendReliable(byte[] pkt)
         {
-            LastSendResult = SteamAPI_ISteamNetworkingMessages_SendMessageToUser(
-                s_msgs, s_peerIdentity, pkt, (uint)pkt.Length, SendFlagReliable | SendAutoRestart, s_channel);
+            foreach (var ident in s_ids.Values)
+                LastSendResult = SteamAPI_ISteamNetworkingMessages_SendMessageToUser(
+                    s_msgs, ident, pkt, (uint)pkt.Length, SendFlagReliable | SendAutoRestart, s_channel);
         }
 
         // Non-blocking: drains whatever arrived since the last call.
@@ -536,7 +558,8 @@ public class CoopNet
 
         public static void Shutdown()
         {
-            if (s_peerIdentity != IntPtr.Zero) { Marshal.FreeHGlobal(s_peerIdentity); s_peerIdentity = IntPtr.Zero; }
+            foreach (var ident in s_ids.Values) Marshal.FreeHGlobal(ident);
+            s_ids.Clear();
         }
     }
 
@@ -550,7 +573,7 @@ public class CoopNet
         public float LookYaw, LookPitch;   // camera relative to body, radians
     }
 
-    const string Version = "0.28";
+    const string Version = "0.43";
     const int PacketSize = 64;
     static readonly byte[] Magic = { (byte)'R', (byte)'7', (byte)'C', (byte)'2' };
     const int KeepSamples = 32;
@@ -563,8 +586,12 @@ public class CoopNet
     static volatile bool s_running;
 
     static readonly object s_lock = new object();
-    static readonly LinkedList<Sample> s_received = new LinkedList<Sample>();
-    static bool s_inDirty;
+    // Per friend slot (1-3; index 0 unused).
+    const int MaxSlots = 3;
+    static readonly LinkedList<Sample>[] s_rx = { null, new LinkedList<Sample>(), new LinkedList<Sample>(), new LinkedList<Sample>() };
+    static readonly bool[] s_rxDirty = new bool[MaxSlots + 1];
+    static readonly ulong[] s_slot = new ulong[MaxSlots + 1];   // steam id per slot
+    static readonly string[] s_snapInS = new string[MaxSlots + 1];
     static long s_sent, s_recv, s_bad;
     static string s_lastFrom = "-";
     static uint s_lastSentSeq;
@@ -590,12 +617,8 @@ public class CoopNet
             if (IsSteam)
             {
                 if (!s_steamReady) throw new InvalidOperationException("steam mode but Steam is unavailable");
-                var want = (s_cfg.peerSteamId ?? "").Trim();
-                s_peerSteam = want == "self" ? Steam.SelfId          // loopback experiment
-                    : ulong.TryParse(want, NumberStyles.None, Inv, out var id) ? id : 0;  // 0: just show our own id
-                Steam.SetPeer(s_peerSteam);
-                if (s_peerSteam != Steam.SelfId) Steam.SetPresence("coop_re7_to", s_peerSteam == 0 ? "" : s_peerSteam.ToString(Inv));
-                API.LogInfo($"[CoopNet] steam self={Steam.SelfId} ({Steam.SelfName}) peer={s_peerSteam}");
+                RebuildSlots();
+                API.LogInfo($"[CoopNet] steam self={Steam.SelfId} ({Steam.SelfName}) peers={PeerText}");
             }
             else if (s_cfg.mode == "bot")
             {
@@ -631,12 +654,95 @@ public class CoopNet
         try { s_sock?.Close(); } catch { }
         s_recvThread?.Join(1000);
         s_ioThread?.Join(1000);
-        if (s_steamReady) { Steam.SetPresence("coop_re7", ""); Steam.SetPresence("coop_re7_to", ""); }
+        if (s_steamReady) { Steam.SetPresence("coop_re7", ""); Steam.SetPresence("coop_re7_to", ""); Steam.SetPresence("coop_re7_lobby", ""); }
         if (IsSteam) Steam.Shutdown();
         API.LogInfo("[CoopNet] stopped");
     }
 
-    static ulong s_peerSteam;
+    static ulong s_peerSteam;   // friend 1
+
+    static ulong ParseId(string s) =>
+        s != null && ulong.TryParse(s.Trim(), NumberStyles.None, Inv, out var id) && id > 76561197960265728UL ? id : 0;
+
+    // Slots from the config: friend 1 = peerSteamId, friends 2-3 = extraPeers (no duplicates,
+    // not ourselves). Applied to Steam and to the invite shown to friends.
+    static void RebuildSlots()
+    {
+        var want = (s_cfg.peerSteamId ?? "").Trim();
+        s_slot[1] = want == "self" && s_steamReady ? Steam.SelfId : ParseId(want);
+        var seen = new HashSet<ulong> { s_slot[1] };
+        var extras = new List<string>();
+        int k = 2;
+        foreach (var e in s_cfg.extraPeers ?? new List<string>())
+        {
+            var id = ParseId(e);
+            if (id == 0 || seen.Contains(id) || (s_steamReady && id == Steam.SelfId) || k > MaxSlots) continue;
+            seen.Add(id);
+            s_slot[k++] = id;
+            extras.Add(id.ToString(Inv));
+        }
+        for (; k <= MaxSlots; k++) s_slot[k] = 0;
+        s_cfg.extraPeers = extras;
+        s_peerSteam = s_slot[1];
+        if (!s_steamReady) return;
+        Steam.SetPeers(new[] { s_slot[1], s_slot[2], s_slot[3] });
+        var invite = new List<string>();
+        for (int i = 1; i <= MaxSlots; i++) if (s_slot[i] != 0 && s_slot[i] != Steam.SelfId) invite.Add(s_slot[i].ToString(Inv));
+        Steam.SetPresence("coop_re7_to", string.Join(",", invite));
+    }
+
+    static int SlotOf(ulong id)
+    {
+        if (id == 0) return 0;
+        for (int i = 1; i <= MaxSlots; i++) if (s_slot[i] == id) return i;
+        return 0;
+    }
+
+    // Party: every 3 s each player tells the others whom it's connected to; a friend we don't
+    // have yet is added in a free slot (they're already in co-op with one of our friends).
+    static readonly byte[] PartyMagic = { (byte)'R', (byte)'7', (byte)'P', (byte)'1' };
+    static void SendParty()
+    {
+        if (!IsSteam || !Steam.HasPeers) return;
+        var ids = new List<string> { Steam.SelfId.ToString(Inv) };
+        for (int i = 1; i <= MaxSlots; i++) if (s_slot[i] != 0) ids.Add(s_slot[i].ToString(Inv));
+        var body = Encoding.UTF8.GetBytes(string.Join(",", ids));
+        var pkt = new byte[4 + body.Length];
+        Buffer.BlockCopy(PartyMagic, 0, pkt, 0, 4);
+        Buffer.BlockCopy(body, 0, pkt, 4, body.Length);
+        Steam.SendReliable(pkt);
+    }
+    // Players taken out of the party (v0.41: kicked, or they left) aren't added back from the
+    // others' party lists for a while: id -> until (UTC ticks).
+    static readonly Dictionary<ulong, long> s_blocked = new Dictionary<ulong, long>();
+    static bool IsBlocked(ulong id)
+    {
+        lock (s_blocked)
+        {
+            if (!s_blocked.TryGetValue(id, out var until)) return false;
+            if (DateTime.UtcNow.Ticks < until) return true;
+            s_blocked.Remove(id);
+            return false;
+        }
+    }
+    static void OnParty(string text)
+    {
+        bool changed = false;
+        foreach (var part in text.Split(','))
+        {
+            var id = ParseId(part);
+            if (id == 0 || id == Steam.SelfId || SlotOf(id) != 0 || IsBlocked(id)) continue;
+            if (s_slot[1] == 0) { s_cfg.peerSteamId = id.ToString(Inv); s_slot[1] = id; changed = true; continue; }
+            if (s_cfg.extraPeers.Count >= MaxSlots - 1) continue;
+            s_cfg.extraPeers.Add(id.ToString(Inv));
+            changed = true;
+        }
+        if (!changed) return;
+        RebuildSlots();
+        SaveConfig();
+        s_lastCommand = "party: now " + PeerText;
+        API.LogInfo("[CoopNet] " + s_lastCommand);
+    }
     static bool s_steamReady;
     static string s_lastCommand = "-";
 
@@ -655,10 +761,83 @@ public class CoopNet
         {
             s_cfg.mode = "steam";
             s_cfg.peerSteamId = parts[1];
-            s_peerSteam = id;
-            Steam.SetPeer(id);
-            Steam.SetPresence("coop_re7_to", parts[1]);   // shows as an invite on the friend's side
+            lock (s_blocked) s_blocked.Remove(id);   // connecting by hand lifts a block
+            RebuildSlots();   // also shows as an invite on the friend's side
             s_lastCommand = "connected to " + parts[1];
+        }
+        else if (parts.Length == 2 && parts[0] == "steamadd" && s_steamReady && ParseId(parts[1]) != 0)
+        {
+            // Another friend (v0.29): friend 1 if there's none yet, else the next free slot.
+            s_cfg.mode = "steam";
+            var addId = ParseId(parts[1]);
+            lock (s_blocked) s_blocked.Remove(addId);   // adding by hand lifts a block
+            if (SlotOf(addId) == 0)
+            {
+                if (s_slot[1] == 0) s_cfg.peerSteamId = parts[1];
+                else if (s_cfg.extraPeers.Count < MaxSlots - 1) s_cfg.extraPeers.Add(parts[1]);
+                else { s_lastCommand = "party full (4 players)"; WriteStatus("running"); return; }
+            }
+            RebuildSlots();
+            s_lastCommand = "added " + parts[1];
+            SaveConfig();
+            WriteStatus("running");
+            return;   // the other friends' samples stay
+        }
+        else if (parts.Length == 2 && parts[0] == "steamremove")
+        {
+            var rid = ParseId(parts[1]);
+            int rs = SlotOf(rid);
+            if (rs == 1)
+            {
+                // Friend 2 moves up to friend 1.
+                s_cfg.peerSteamId = s_cfg.extraPeers.Count > 0 ? s_cfg.extraPeers[0] : "";
+                if (s_cfg.extraPeers.Count > 0) s_cfg.extraPeers.RemoveAt(0);
+            }
+            else if (rs > 1) s_cfg.extraPeers.Remove(rid.ToString(Inv));
+            RebuildSlots();
+            lock (s_lock) for (int i = 1; i <= MaxSlots; i++) { s_rx[i].Clear(); s_rxDirty[i] = true; }
+            s_lastCommand = "removed " + parts[1];
+            SaveConfig();
+            WriteStatus("running");
+            return;
+        }
+        else if (parts.Length == 1 && parts[0] == "steamleave")
+        {
+            // Leave the party (v0.40, the in-game co-op menu): no friends, no invites.
+            s_cfg.peerSteamId = "";
+            s_cfg.extraPeers = new List<string>();
+            RebuildSlots();
+            lock (s_lock) for (int i = 1; i <= MaxSlots; i++) { s_rx[i].Clear(); s_rxDirty[i] = true; }
+            s_lastCommand = "left the party";
+            SaveConfig();
+            WriteStatus("running");
+            return;
+        }
+        else if (parts.Length == 3 && parts[0] == "steamblock" && ParseId(parts[1]) != 0
+            && int.TryParse(parts[2], NumberStyles.None, Inv, out var blockSec))
+        {
+            // Not added back from party lists for a while (v0.41: a kick, or they left).
+            lock (s_blocked) s_blocked[ParseId(parts[1])] = DateTime.UtcNow.AddSeconds(Math.Min(blockSec, 3600)).Ticks;
+            s_lastCommand = "blocked " + parts[1] + " for " + blockSec + " s";
+            WriteStatus("running");
+            return;
+        }
+        else if (parts.Length == 3 && parts[0] == "presence" && parts[1] == "lobby")
+        {
+            // "Hosting a lobby" for friends' co-op menus (Steam rich presence); "-" clears it.
+            if (s_steamReady) Steam.SetPresence("coop_re7_lobby", parts[2] == "-" ? "" : parts[2]);
+            s_lastCommand = parts[2] == "-" ? "lobby closed" : "hosting a lobby";
+            WriteStatus("running");
+            return;
+        }
+        else if (parts.Length == 2 && parts[0] == "botcount" && int.TryParse(parts[1], NumberStyles.None, Inv, out var bc))
+        {
+            s_cfg.botCount = Math.Max(1, Math.Min(MaxSlots, bc));
+            lock (s_lock) for (int i = 2; i <= MaxSlots; i++) { s_rx[i].Clear(); s_rxDirty[i] = true; }
+            s_lastCommand = "bots: " + s_cfg.botCount;
+            SaveConfig();
+            WriteStatus("running");
+            return;
         }
         else if (parts.Length == 1 && parts[0] == "bot")
         {
@@ -716,7 +895,7 @@ public class CoopNet
             WriteStatus("running");
             return;
         }
-        lock (s_lock) { s_received.Clear(); s_inDirty = true; }   // drop the old peer's samples
+        lock (s_lock) for (int i = 1; i <= MaxSlots; i++) { s_rx[i].Clear(); s_rxDirty[i] = true; }   // drop the old peers' samples
         SaveConfig();
         API.LogInfo("[CoopNet] command: " + s_lastCommand);
         WriteStatus("running");
@@ -725,10 +904,10 @@ public class CoopNet
     // Events --------------------------------------------------------------------------
     // Things that happen once (an enemy died) go reliably, as "R7E1" + UTF-8 text.
     // Lua -> coopnet_ev_out.txt: "<id>	<text>" lines with ever-growing ids; we send each
-    // new id once. Received events -> coopnet_ev_in.txt: "<n>	<text>" (last 50), and
+    // new id once. Received events -> coopnet_ev_in.txt: "<n>	<text>" (last 400), and
     // Lua handles each n once.
     static readonly byte[] EventMagic = { (byte)'R', (byte)'7', (byte)'E', (byte)'1' };
-    static readonly List<(long n, string text)> s_evIn = new List<(long, string)>();
+    static readonly List<(long n, long t, string text)> s_evIn = new List<(long, long, string)>();
     static long s_evInCount, s_evOutLast = -1, s_evSent, s_evRecv;
     static bool s_evInDirty;
 
@@ -744,16 +923,21 @@ public class CoopNet
     static bool IsEvent(byte[] d) =>
         d.Length >= 4 && d[0] == EventMagic[0] && d[1] == EventMagic[1] && d[2] == EventMagic[2] && d[3] == EventMagic[3];
 
-    static void OnEvent(string text)
+    static void OnEvent(string text, int slot)
     {
+        if (slot > 1) text = "@" + slot.ToString(Inv) + " " + text;   // friends 2-3 (v0.29)
         lock (s_lock)
         {
-            s_evIn.Add((++s_evInCount, text.Replace('\n', ' ').Replace('\r', ' ')));
-            while (s_evIn.Count > 50) s_evIn.RemoveAt(0);
+            // With the time it arrived (v0.39, Unix seconds): events wait in the file while the
+            // game loads, and Lua skips the ones too old to act on (a scene started minutes ago).
+            s_evIn.Add((++s_evInCount, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), text.Replace('\n', ' ').Replace('\r', ' ')));
+            while (s_evIn.Count > 400) s_evIn.RemoveAt(0);   // v0.32: was 50; events wait in the file while the game loads
             s_evInDirty = true;
             s_evRecv++;
         }
     }
+
+    static long s_evPartial;   // reads that caught the file half-written (v0.39)
 
     static void PumpEventsOut(string path)
     {
@@ -762,7 +946,14 @@ public class CoopNet
         {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var sr = new StreamReader(fs);
-            lines = sr.ReadToEnd().Split('\n');
+            var all = sr.ReadToEnd();
+            // Lua rewrites the whole file for every batch, so a read can land halfway through
+            // the write (v0.39). Only lines ended by '\n' are whole: a cut-off last line went
+            // out cut off before (and its id was marked sent, so the rest was never sent).
+            var end = all.LastIndexOf('\n');
+            if (end < all.Length - 1) s_evPartial++;
+            if (end < 0) return;
+            lines = all.Substring(0, end).Split('\n');
         }
         catch (FileNotFoundException) { if (s_evOutLast < 0) s_evOutLast = 0; return; }   // nothing sent yet
         catch (IOException) { return; }
@@ -778,7 +969,7 @@ public class CoopNet
             s_evOutLast = id;
             var text = line.Substring(tab + 1).TrimEnd('\r');
             var pkt = EncodeEvent(text);
-            if (IsSteam) { if (s_peerSteam != 0) { Steam.SendReliable(pkt); s_evSent++; } }
+            if (IsSteam) { if (Steam.HasPeers) { Steam.SendReliable(pkt); s_evSent++; } }
             else if (s_sock != null) { s_sock.Send(pkt, pkt.Length, s_peer); s_evSent++; }
             // The bot copies our moves, so it also holds what we hold.
             else if (s_cfg.mode == "bot" && (text.StartsWith("weapon ") || text.StartsWith("bank ") || text.StartsWith("grip ")
@@ -797,7 +988,7 @@ public class CoopNet
             if (!s_evInDirty) return;
             s_evInDirty = false;
             var sb = new StringBuilder();
-            foreach (var (n, t) in s_evIn) sb.Append(n.ToString(Inv)).Append('\t').Append(t).Append('\n');
+            foreach (var (n, t, e) in s_evIn) sb.Append(n.ToString(Inv)).Append('\t').Append(t.ToString(Inv)).Append('\t').Append(e).Append('\n');
             text = sb.ToString();
         }
         File.WriteAllText(path + ".tmp", text);
@@ -811,8 +1002,7 @@ public class CoopNet
     // A received snapshot replaces coopnet_es_in.txt.
     static readonly byte[] SnapMagic = { (byte)'R', (byte)'7', (byte)'S', (byte)'1' };
     static string s_snapOutSeq = "";
-    static string s_snapIn;
-    static long s_snapSent, s_snapRecv;
+    static long s_snapSent, s_snapRecv, s_snapPartial, s_snapTooBig;
 
     static bool IsSnap(byte[] d) =>
         d.Length >= 4 && d[0] == SnapMagic[0] && d[1] == SnapMagic[1] && d[2] == SnapMagic[2] && d[3] == SnapMagic[3];
@@ -830,22 +1020,28 @@ public class CoopNet
         catch (UnauthorizedAccessException) { return; }
         var nl = text.IndexOf('\n');
         if (nl <= 0 || !text.StartsWith("seq ")) return;
+        // Whole snapshots only (v0.39): Lua ends each with an "end" line. One read halfway
+        // through a write would send a cut-off list (an enemy missing, a number cut short).
+        if (!text.EndsWith("\nend\n")) { s_snapPartial++; return; }
         var seq = text.Substring(0, nl);
         if (seq == s_snapOutSeq) return;
         s_snapOutSeq = seq;
         var body = Encoding.UTF8.GetBytes(text);
-        if (body.Length > 1100) return;   // stay in one unfragmented message
+        // Up to 6000 bytes (v0.39; was 1100, about 11 enemies: a bigger snapshot was dropped
+        // whole, every time, so a room of Molded stopped following). Steam splits a bigger
+        // unreliable message and drops it only if a piece is lost; the next one follows 1/15 s later.
+        if (body.Length > 6000) { s_snapTooBig++; return; }
         var pkt = new byte[4 + body.Length];
         Buffer.BlockCopy(SnapMagic, 0, pkt, 0, 4);
         Buffer.BlockCopy(body, 0, pkt, 4, body.Length);
-        if (IsSteam) { if (s_peerSteam != 0) { Steam.Send(pkt); s_snapSent++; } }
+        if (IsSteam) { if (Steam.HasPeers) { Steam.Send(pkt); s_snapSent++; } }
         else if (s_sock != null) { s_sock.Send(pkt, pkt.Length, s_peer); s_snapSent++; }
     }
 
-    static void WriteSnapshotInIfNew(string path)
+    static void WriteSnapshotInIfNew(string path, int slot)
     {
         string text;
-        lock (s_lock) { text = s_snapIn; s_snapIn = null; }
+        lock (s_lock) { text = s_snapInS[slot]; s_snapInS[slot] = null; }
         if (text == null) return;
         File.WriteAllText(path + ".tmp", text);
         File.Move(path + ".tmp", path, true);
@@ -924,11 +1120,32 @@ public class CoopNet
                 File.WriteAllText(Path.Combine(dir, Path.GetFileName(f)), text);
                 n++;
             }
-            string q(string x) => x.Replace("'", "''");
-            var psi = new ProcessStartInfo("powershell",
-                $"-NoProfile -WindowStyle Hidden -Command \"Compress-Archive -Path '{q(dir)}\\*' -DestinationPath '{q(dir)}.zip' -Force; if ($?) {{ Remove-Item -Recurse -Force '{q(dir)}' }}\"")
-                { CreateNoWindow = true, UseShellExecute = false };
-            Process.Start(psi);
+            // v0.35: zipped here (no PowerShell: starting it showed Windows' busy pointer over the
+            // game). Found by reflection so the plugin builds even where that library is missing;
+            // PowerShell stays as the fallback.
+            bool zipped = false;
+            try
+            {
+                var zt = Type.GetType("System.IO.Compression.ZipFile, System.IO.Compression.ZipFile")
+                      ?? Type.GetType("System.IO.Compression.ZipFile, System.IO.Compression");
+                var mi = zt?.GetMethod("CreateFromDirectory", new[] { typeof(string), typeof(string) });
+                if (mi != null)
+                {
+                    if (File.Exists(dir + ".zip")) File.Delete(dir + ".zip");
+                    mi.Invoke(null, new object[] { dir, dir + ".zip" });
+                    Directory.Delete(dir, true);
+                    zipped = true;
+                }
+            }
+            catch (Exception ze) { API.LogWarning("[CoopNet] bug report zip: " + ze.Message + " (using PowerShell)"); }
+            if (!zipped)
+            {
+                string q(string x) => x.Replace("'", "''");
+                var psi = new ProcessStartInfo("powershell",
+                    $"-NoProfile -WindowStyle Hidden -Command \"Compress-Archive -Path '{q(dir)}\\*' -DestinationPath '{q(dir)}.zip' -Force; if ($?) {{ Remove-Item -Recurse -Force '{q(dir)}' }}\"")
+                    { CreateNoWindow = true, UseShellExecute = false };
+                Process.Start(psi);
+            }
             API.LogInfo("[CoopNet] bug report: " + dir + ".zip (" + n + " files)");
             return "bug report on your desktop: coop-re7-report-" + stamp + ".zip (" + n + " files)";
         }
@@ -973,23 +1190,53 @@ public class CoopNet
     }
     static bool IsSteam => s_cfg != null && s_cfg.mode == "steam";
     static string PeerText => IsSteam ? $"steam:{s_peerSteam}" : s_peer?.ToString() ?? "-";
+    static string SlotFile(string baseName, int slot) => slot <= 1 ? baseName + ".txt" : baseName + "_" + slot.ToString(Inv) + ".txt";
 
-    static void OnPacket(byte[] data, string from)
+    static void OnPacket(byte[] data, string from) => OnPacket(data, from, 1);
+    static void OnPacket(byte[] data, string from, int slot)
     {
-        if (IsEvent(data)) { OnEvent(Encoding.UTF8.GetString(data, 4, data.Length - 4)); return; }
+        if (slot < 1 || slot > MaxSlots) return;
+        if (data.Length >= 4 && data[0] == PartyMagic[0] && data[1] == PartyMagic[1] && data[2] == PartyMagic[2] && data[3] == PartyMagic[3])
+        {
+            OnParty(Encoding.UTF8.GetString(data, 4, data.Length - 4));
+            return;
+        }
+        if (IsEvent(data)) { OnEvent(Encoding.UTF8.GetString(data, 4, data.Length - 4), slot); return; }
         if (IsSnap(data))
         {
-            lock (s_lock) { s_snapIn = Encoding.UTF8.GetString(data, 4, data.Length - 4); s_snapRecv++; }
+            lock (s_lock) { s_snapInS[slot] = Encoding.UTF8.GetString(data, 4, data.Length - 4); s_snapRecv++; }
             return;
         }
         if (!TryDecode(data, out var s)) { Interlocked.Increment(ref s_bad); return; }
         lock (s_lock)
         {
-            s_received.AddLast(s);
-            while (s_received.Count > KeepSamples) s_received.RemoveFirst();
-            s_inDirty = true;
+            s_rx[slot].AddLast(s);
+            while (s_rx[slot].Count > KeepSamples) s_rx[slot].RemoveFirst();
+            s_rxDirty[slot] = true;
             s_recv++;
             s_lastFrom = from;
+        }
+    }
+
+    // Extra bots (v0.29, bot mode with botCount 2-3): copies of the bot's packets, offset to its
+    // left and right and with their own sequence, delivered as friends 2 and 3.
+    static void DeliverBot(byte[] pkt)
+    {
+        OnPacket(pkt, "bot", 1);
+        int n = Math.Max(1, Math.Min(MaxSlots, s_cfg.botCount));
+        for (int k = 2; k <= n; k++)
+        {
+            if (IsEvent(pkt)) { OnPacket(pkt, "bot" + k, k); continue; }
+            if (IsSnap(pkt) || !TryDecode(pkt, out var s)) continue;
+            double side = k == 2 ? 1.6 : -1.6;
+            // The bot's right: rotate (1,0,0) by its quaternion, flattened.
+            double qx = s.Qx, qy = s.Qy, qz = s.Qz, qw = s.Qw;
+            double rx = 1 - 2 * (qy * qy + qz * qz), rz = 2 * (qx * qz - qw * qy);
+            double len = Math.Sqrt(rx * rx + rz * rz);
+            if (len > 1e-3) { rx /= len; rz /= len; } else { rx = 1; rz = 0; }
+            s.Px += (float)(rx * side);
+            s.Pz += (float)(rz * side);
+            OnPacket(Encode(s), "bot" + k, k);
         }
     }
 
@@ -1036,6 +1283,12 @@ public class CoopNet
         var period = TimeSpan.FromMilliseconds(1000.0 / Math.Max(1, s_cfg.sendHz));
         var lastStatus = Stopwatch.StartNew();
         var lastFriends = Stopwatch.StartNew();
+        var lastParty = Stopwatch.StartNew();
+        for (int k = 2; k <= MaxSlots; k++)
+        {
+            try { File.Delete(Path.Combine(s_dataDir, SlotFile("coopnet_es_in", k))); } catch (IOException) { }
+            try { File.Delete(Path.Combine(s_dataDir, SlotFile("coopnet_in", k))); } catch (IOException) { }
+        }
 
         while (s_running)
         {
@@ -1048,7 +1301,7 @@ public class CoopNet
                     var pkt = Encode(s);
                     if (IsSteam)
                     {
-                        if (s_peerSteam != 0) { Steam.Send(pkt); s_sent++; }
+                        if (Steam.HasPeers) { Steam.Send(pkt); s_sent++; }
                     }
                     else if (s_cfg.mode == "bot")
                     {
@@ -1063,13 +1316,17 @@ public class CoopNet
                     }
                 }
                 PollCommand();
-                if (IsSteam) Steam.Poll((data, from) => OnPacket(data, "steam:" + from));
-                if (s_cfg.mode == "bot") { Bot.Tick(s_cfg, pkt => OnPacket(pkt, "bot")); s_sent++; }
+                if (IsSteam) Steam.Poll((data, from) => OnPacket(data, "steam:" + from, SlotOf(from)));
+                if (s_cfg.mode == "bot") { Bot.Tick(s_cfg, DeliverBot); s_sent++; }
                 PumpEventsOut(evOutPath);
                 PumpSnapshotOut(esOutPath);
-                WriteSnapshotInIfNew(esInPath);
-                WriteInFileIfDirty(inPath);
+                for (int k = 1; k <= MaxSlots; k++)
+                {
+                    WriteSnapshotInIfNew(Path.Combine(s_dataDir, SlotFile("coopnet_es_in", k)), k);
+                    WriteInFileIfDirty(Path.Combine(s_dataDir, SlotFile("coopnet_in", k)), k);
+                }
                 WriteEventsInIfDirty(evInPath);
+                if (lastParty.ElapsedMilliseconds > 3000) { lastParty.Restart(); SendParty(); }
                 if (lastStatus.ElapsedMilliseconds > 1000)
                 {
                     lastStatus.Restart();
@@ -1097,22 +1354,26 @@ public class CoopNet
         {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var sr = new StreamReader(fs);
-            line = sr.ReadLine();
+            var all = sr.ReadToEnd();
+            // A whole line only (v0.39): a read halfway through Lua's write could cut the last
+            // number short (the stance flags, the look direction) and still parse.
+            var nl = all.IndexOf('\n');
+            line = nl > 0 ? all.Substring(0, nl) : null;
         }
         catch (IOException) { return false; }
         catch (UnauthorizedAccessException) { return false; }
         return line != null && TryParseLine(line, out s);
     }
 
-    static void WriteInFileIfDirty(string path)
+    static void WriteInFileIfDirty(string path, int slot)
     {
         string text;
         lock (s_lock)
         {
-            if (!s_inDirty) return;
-            s_inDirty = false;
+            if (!s_rxDirty[slot]) return;
+            s_rxDirty[slot] = false;
             var sb = new StringBuilder();
-            foreach (var s in s_received) sb.AppendLine(FormatLine(s));
+            foreach (var s in s_rx[slot]) sb.AppendLine(FormatLine(s));
             text = sb.ToString();
         }
         // Replace atomically so Lua never reads a half-written file.
@@ -1131,8 +1392,12 @@ public class CoopNet
             if (s_cfg.mode == "bot") text += $"botExpect={Bot.Expect}\n";
             if (s_steamReady)
                 text += $"steamSelf={Steam.SelfId}\nsteamName={Steam.SelfName}\nrelayStatus={Steam.RelayStatus()}\n";
-            if (IsSteam) text += $"lastSendResult={Steam.LastSendResult}\npeerName={Steam.PeerName()}\n";
-            text += $"lastCommand={s_lastCommand}\nlastBackup={s_lastBackup}\nbackups={s_backupCount}\nversion={Version}\nevSent={s_evSent}\nevRecv={s_evRecv}\nsnapSent={s_snapSent}\nsnapRecv={s_snapRecv}\n";
+            if (IsSteam) text += $"lastSendResult={Steam.LastSendResult}\npeerName={Steam.PeerName(s_slot[1])}\n";
+            for (int k = 2; k <= MaxSlots; k++)
+                if (IsSteam && s_slot[k] != 0) text += $"peer{k}=steam:{s_slot[k]}\npeer{k}Name={Steam.PeerName(s_slot[k])}\n";
+            if (s_cfg.mode == "bot") text += $"botCount={Math.Max(1, Math.Min(MaxSlots, s_cfg.botCount))}\n";
+            text += $"lastCommand={s_lastCommand}\nlastBackup={s_lastBackup}\nbackups={s_backupCount}\nversion={Version}\nevSent={s_evSent}\nevRecv={s_evRecv}\nsnapSent={s_snapSent}\nsnapRecv={s_snapRecv}\n"
+                + $"evPartial={s_evPartial}\nsnapPartial={s_snapPartial}\nsnapTooBig={s_snapTooBig}\n";
             text += $"fullModels={FullModels()}\n";
         }
         WriteStatusSafe(text);
@@ -1171,7 +1436,7 @@ public class CoopNet
         var sb = new StringBuilder();
         foreach (var f in Steam.Friends())
         {
-            var flags = (f.InRe7 ? "R" : "") + (f.CoopVersion != "" ? "C" : "") + (f.InvitesMe ? "I" : "");
+            var flags = (f.InRe7 ? "R" : "") + (f.CoopVersion != "" ? "C" : "") + (f.InvitesMe ? "I" : "") + (f.HostsLobby ? "L" : "");
             var name = f.Name.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
             sb.Append(f.Id.ToString(Inv)).Append('\t').Append(flags == "" ? "-" : flags).Append('\t')
               .Append(f.CoopVersion == "" ? "-" : f.CoopVersion).Append('\t').Append(name).Append('\n');

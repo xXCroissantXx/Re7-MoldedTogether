@@ -1214,3 +1214,176 @@ Not synced / broken, as reported by the owner:
   hits add 3927833586/1334339743/1632895245. A built container plays the whoosh silently (the knife's 4 files are
   wcc, wel and two switch files: the switches have no values on a new object); played through the receiver's own
   weapon copy (wpXXXX*_Item under the player) it works. Sender: app.Weapon.IsAttacking rising edge, no GunSmoke.
+- v0.29 (2026-11-08): 4 players. CoopNet: extraPeers (slots 2-3), mesh sends, R7P1 party packets every 3 s (auto-add),
+  commands steamadd/steamremove/botcount, per-slot coopnet_in[_k]/coopnet_es_in[_k], events '@k <text>', botCount
+  copies offset +-1.6 m. coop_dummy wrapped in coop_dummy_main(_ENV, SLOT): slot 1 = _G, slots 2-3 private envs
+  (coop_slot_envs); only slot 1 sends/draws UI/owns settings; find_full_model skips VrDummyPlayer roots (friend 1's
+  copies hid the player's pieces). Events dispatched with coop_event_slot. Gun sounds via trigger(UInt32, GameObject)
+  on each friend's character (one shared source played one of three simultaneous shots); fx per slot. Enemies:
+  own[id] = 'me' | slot, 'own ... <steamid>', per-slot snapshots, nearest-friend hand-offs, lowest SteamID host, tie
+  -> lower SteamID; fallback share_enemies_group (shared option). Revive only with one friend. Untested: hand-offs
+  between 3-4 real games.
+- v0.30 (2026-11-08): session on v0.29 (2 players, 4 reports): tape follow refused once ('a chapter jump is still
+  loading') and never retried -> retry 2 s for 30 s (join_friend returns success; a queued jump counts); Mia froze for
+  the friend: evend 46ba27ae arrived 38 s after the shared 31 s cutscene started, outside IN_STEP -> window counts from
+  the cutscene's end; ghost collision now off unless settings.bump_friend; phys keys name@first-seen-pos diverge after
+  a reload -> unknown key matched to the same-named prop within 3 m (ws.phys_alias). Friend's game sent only 2 phys
+  moves all session.
+- v0.31 (2026-11-08): session on v0.30: black screen = Go to my friend's chapter pressed on the title screen
+  (join 8 s after load, no PlayerObj) -> jump_busy refuses without PlayerObj. Invisible walls in Mia's kidnap
+  room: both games played c01e01_01 themselves, in-step window never opened, friend dropped prog 46ba27ae 500
+  -> prog/evend copied while in step OR friend within NEAR; 'already played here' opens the window; dropped
+  steps kept in ss.missed and applied when together in the same chapter.
+- v0.32 (2026-11-08): session on v0.31 (Mia fight -> Chapter 3, 4 reports). No move logs at all for Em2000:
+  bosses were never shared (each game ran its own) -> BOSS_FOLLOW Em2000/Em2100: host runs, no hand-offs, copies
+  released during a local cutscene (shared option share_bosses). Chapter-end black screen: friend's c01e07_01 ended
+  20:13:33, same second evend 46ba27ae + prog 1500 copied -> his game never asked for Chapter123 -> prog/evend held
+  while a local cutscene plays and 8 s after (ss.missed, applied only if still behind). Boxes: no 'break' ever sent;
+  item-less breakables have no SaveGUID -> 'dbreak name@pos' for RigidBodyDestruct-like types (names logged at load).
+  Door 4b5a5f25 locked on the friend after the user's reload -> open/dang unlock first. Events wait in
+  coopnet_ev_in (now 400 kept) until PlayerObj exists 5 s. Jack missing for the friend in Chapter 3: he got there by
+  Go to my friend's chapter (Chapter3_Start), not the natural flow; not otherwise explained.
+- v0.33 (2026-11-08): overhaul pass. Revive for 3-4 (down_slots per friend slot, any up friend within 2.8 m for
+  3 s; real death when no up friend is shown). phys: sent only while 'mine' (started moving within 2.5 m of our
+  player, 3 s), never in a local cutscene, never weapon-named props, jumps > 3 m ignored; receiver skips props it
+  is pushing. elems() for all scene arrays (get_elements not callable during a load); auto_animate guards
+  anim.motion. queue_all once per 10 s (5 identical catch-up batches 2026-11-08); dbreak in the catch-up list.
+  New build check local/build/globals_check.py (luaparser): globals read but never defined.
+- v0.34 (2026-11-08): bump_friend on by default again; no pushes during a local cutscene, for SCENE_QUIET=10 s
+  after GameEventController.requestSetup (any event, coop_scene_t) or a received story event, and after 0.6 s
+  of continuous touching (let go until 0.3 m apart). Owner's ask: collision off briefly so scenes play matched.
+- v0.35 (2026-11-08): bug report zipped in-process (ZipFile.CreateFromDirectory by reflection, PowerShell
+  fallback; the hidden powershell showed the busy cursor). Build checks in v035_pack.py: globals_check.py,
+  harness/run.py (fakegame.lua stand-in: empty/nil/rich modes, menus, every event kind; clean), and
+  cscheck/ (dotnet build of CoopNet.cs against REFramework.NET.dll, also at LangVersion 9). No cutscene skip
+  API is known (NOTES: GameEventController + via.timeline), so skips are not shared.
+- v0.36 (2026-11-09): crash 2026-11-08 20:02 (owner): friend's c01e04_00 (Mia wall throw) played here at 20:02:04;
+  20:02:05 friend's scripted dmg 1300 applied to Em2000 + flinch (requestDamageAction); 20:02:05.158 get_Transform
+  threw 'VMContext was already corrupted'; c0000005 at 20:02:23. Wall didn't break here, crawl clip flashed.
+  Fix: scripted_now() (local cutscene or coop_scene_t < 4 s): dmg not sent/applied, boss kills not sent/applied;
+  flinch only for Em4xxx; coop_scene_settling() (1.5 s after requestSetup/apply_story): enemies and world skip
+  all object calls, then rescan/refresh. Wall break: if it's a RigidBodyDestruct, v0.32 dbreak carries it.
+- v0.37 (2026-11-09): read_events holds HELD_IN_CUTSCENE kinds (doors, drawers, switch, intr, break, dbreak,
+  took, got, kill, catchup, own) while local_cutscene(), applied 1 s after it ends (es.held, max 300); drops
+  phys/dang/dmg/ehp then. apply_story waits (ss.pending) while busy_here(): no player, paused, pause menu,
+  revive.downed, local cutscene; kept alive up to 120 s while busy. Harness now ends the cutscene and checks
+  the held changes are applied (16 applied, 4 dropped).
+- v0.38 (2026-11-09): chains (intr names contain "chain": sm0316_CutChain01A_ChainCut under
+  sm0250_ChainLocker01A_DrawerChainLock) got successInteract on 2026-11-08: count up, chain stayed. Now
+  start_chain_cut: ItemSelectReaction success state (logs every StateName=Result), then poll_chains: cut =
+  interaction or chain model not drawn; else after 10 s chain_hand_cut hides both, colliders off, logs the
+  model's children. intr tag "lock" (chains, lockpicks): remembered when not loaded, kept in catch-up.
+  Jack missing in Ch3 (both, 2026-11-08): 9fb77189 never progressed after c03e00_02. Friend's EthanChair_Action
+  phys copied onto ours mid-escape -> '_action'/'ethanchair' props are weaponish (never sent/applied). Friend got our
+  c03e00_01/_02 71 s into his c03e00_00 -> own_sequence(): same cXXeYY started here naturally < 180 s ago isn't played.
+- v0.39 (2026-11-09): overhaul from all logs/notes. Story: seq_of(cXXeYY_NN); scene_to_start(): a friend's scene
+  whose sequence already played a scene here is never forced; idx 1-9 with no sibling played -> start grp_00 if
+  loaded, else nothing; idx 0 / >= 10 as before. hold_for_cutscene() also while sequence_open() (a later idx < 10
+  of ss.last_seq loaded and unplayed, max 600 s). em3xxx_ (Jack's moves) no longer forced unless
+  settings.share_jack_moves. Story clock = sum of getProgressiveNo over hashes set this chapter (ss.prog_seen,
+  saved in coop_story_played.json); played[name] = clock. Load: hook SaveDataManager.loadLevelUsingLoadData
+  (else the load requests) -> new/absent PlayerObj + 8 s -> unplay scenes with clock >= now (only if hashes are
+  known this chapter), clear pending/missed/in-step, coop_talk_rewind(ch, clock) drops own catch-up entries
+  (clock >= now or none), send 'rewind <ch> <clock>' (friend clears missed/pending/friend_prog). play():
+  isSameEventRequested guard. GameEventController.doOnDestroy hooked: scene end + duration logged; 'still
+  running' after 300 s. Enemies: no movement sync while local_cutscene() (puppets released, no snapshot or
+  hand-off, snapshots still read) or while the friend's samples carry STANCE_CUTSCENE (coop_dummy
+  friend_cutscene; their snapshots ignored), nor (except BOSS_FOLLOW) while coop_story_in_sequence() (seq_hold:
+  not sent, not followed, copies released, no hand-offs). Transport: CoopNet sends only newline-terminated
+  ev_out lines (evPartial), only snapshots ending with an 'end' line (snapPartial), cap 1100 -> 6000 bytes
+  (snapTooBig; 1100 = ~11 enemies, dropped whole), the player sample needs its newline; ev_in lines are
+  'n<TAB><unix recv><TAB>text'. Lua: ev_out flushed once per frame, keeps 150 (was 30, rewritten per send);
+  STALE_AFTER drops story>20 s, own>10, phys/dang>3, dmg>5, talk>60, heal>10; snapshots: nearest 24 + 'end'.
+  Checks: local/build/harness/story_test.py (8 scenarios, 16 checks: dinner, late arrival, new sequence, far
+  away, three save loads, busy); the build also fails on ERR lines the scripts log in the stand-in game.
+- v0.40 (2026-11-09): coop_menu.lua, an in-game menu drawn with draw.* (filled_rect, outline_rect, line, text)
+  and imgui.load_font(nil, 34/22/18) + push_font/pop_font (used 1.5 s after loading). Input: reframework:
+  is_key_down (arrows/WASD, Enter/Space, Backspace; menu key settings.menu_key, default F9 0x78, or F10/F11/
+  Home/End) and app.PadManager.get_mergedPad() -> app.Pad isDown(app.Pad.Button) with LeftUp/Down/Left/Right,
+  Decide, Cancel, LeftStickPush+RightStickPush (open), getStickLeftVertical/Horizontal (> 0.6; sign
+  unverified). Ignored while reframework:is_drawing_ui(). Holding the game (all from the type dump, untested):
+  MenuManager.setPlayerOperatableFlag(false, key) / setCameraOperatableFlag(false, key) (MultiBoolFlag,
+  _FalseIds by key), MenuManager.setInputLevel(UICommand.InputLevel.NormalHigh) -> resetInputLevel on close;
+  get_ActiveInputLevel logged after the set. Lobby over the reliable channel: 'lobby open <host> <round>
+  <start> <host ch>' every 2 s, 'lobby me <ready> <game|title|busy> <start>' every 2 s, 'lobby go <host>
+  <round> <start> <host ch>', 'lobby closed <host>'; starts here | host | <jump key> (Chapter1/3/4_Start);
+  two hosts -> lower SteamID keeps it; host auto-steamadds friends whose presence invites it; chapter starts
+  need everyone 'game' (not title) and wait out cutscenes; jump via jump_to_chapter, retried 2 s for 60 s.
+  CoopNet: 'steamleave', 'presence lobby <n|->' (rich presence coop_re7_lobby), friends flag L. On a jump
+  (jump_to_chapter success): coop_story_reset_chapter (played/pending/missed/prog_seen, sends rewind),
+  coop_world_reset_chapter, coop_enemies_reset_chapter, coop_talk_rewind(ch, -inf). chapter_name() friendly
+  labels (CHAPTER_LABELS). Check: local/build/harness/menu_test.py (two stand-in games, 34 checks).
+  Status lines (coop_dummy HUD) drawn through coop_ui_text (coop_menu's fonts, small 18 px, 1 px shadow) when
+  loaded. Layout check without the game: local/build/harness/menu_preview.py records the menu's draw calls (SVG +
+  JSON) and render_preview.ps1 draws them to PNG with System.Drawing (no downloads); renamed the lobby's start
+  picker "Where to start" after the preview showed two "Start" rows.
+- v0.41 (2026-11-09): sound trigger id = MurmurHash3_x86_32(UTF-16LE name, seed 0xFFFFFFFF); names from
+  app.wwise.TRIGGER_SND_EVENTLIST_* static fields (1461 classes, 14336 names). SND_DF_WP_SE_SHOT 3908091806 (the
+  handgun bang by ear), SND_DF_WP_SE_CUTTING 1824153269 (knife whoosh by ear), _CUTTING_END 1200121026,
+  SND_DF_WP_MTR_WALL_HIT 3927833586, _RICOCHET 475893168, SND_DF_WP_SE_RELOAD 3551833905. Every gun list
+  (WP1000-1380) has SHOT, every blade (WP0020/40/60/70, 1190, 1320, 2100, 2130) CUTTING: coop_gunsound plays
+  them from the friend's own container (exists() per kind), handgun files stand in; G17 wp1210 uses the M19's
+  snd_container_wp1010. Sender also hooks WeaponGun.shoot and reload; 'greload'. coop_sound_id() in Lua;
+  self-check at 10 s against the game's constants.
+  Title menu (live, 2026-11-09): two app.TitleSubMenu (VrTitleSubMenu mode 0, GUI_menu mode 1). GUI_menu
+  _StepParam: newgame 3, continue 12, loadgame 13, extragame 5, specialfeature 6 ('MORE'), option 4, quit 8;
+  _MainList._Element = via.gui.ScrollList (ItemCount 3 rows, ItemMax 7, Loop); slots selectitem/item1..3 are
+  via.gui.SelectItem with ListIndex = row and child m_name (via.gui.Text, MessageId set, Message nil).
+  StepParam via sdk.create_instance(..., true) + set_field(Step, GUIElemName) + List.Add + set_ItemMax(+1)
+  adds a row; set_Message('CO-OP') on the slot showing it works (literal text wins over MessageId; a slot
+  scrolling on needs set_Message(nil) + set_MessageId(row's ElemMsgID) or it stays blank). Step = Main (0):
+  Enter on it changes nothing in the game (no step method runs), so the mod opens its menu on that Enter.
+  Menu: two paper sheets (A sections, B page), Right/Enter in, Back out. Party: no data 30 s and Steam says
+  co-op not running -> steamremove + steamblock 60 (180 s if running); settings.recent_friends (7 days)
+  auto-accept invites; 'lobby kick|bye|unlink'; CoopNet 'steamblock <id> <s>' (OnParty skips blocked,
+  manual steam/steamadd lifts it). Lobby 'here' = Continue: on the title, highlight the continue row and
+  TitleSubMenu._Step:changeStepNextUpdate(its step) (untested). Used key items: ItemSelectReaction.tryUseItem
+  (pre: id + count; post: Result 0) for categories 4/9/10, count dropped in the same chapter -> 'kused id n ch';
+  receiver Inventory.reduceItem when it has it (30 min). 'spos <ch> <story clock>' every 10 s;
+  coop_story_compare(slot). 'inv_req <host>' -> 'inv id:n,...' (weapons and key items from
+  Inventory._ItemList) -> ItemManager.createItemInstance(player, id) + Inventory.addItem(item, go) (untested).
+  Checks: menu_test.py 46 (two-sheet navigation, title row stand-in, kick, closed-game drop, title Continue).
+- v0.42 (2026-11-09), from the type dump: app.PlayerDamageController has field WwiseContainer
+  (app.WwiseContainerApp, the player's sound part; app.PlayerBase has one too, shared by PlayerGun, PlayerItem,
+  PlayerMovement, PlayerHandLight, PlayerLighter...), callSE(UInt32), get_damageSETriggerHash(OnGuard), and
+  one method per damage motion: playDamageSMotion/M/L, playStagger/Fire/Acid/Blow/Supine/Prone...Motion,
+  playGuardDamageMotion, playDeadMotion, playBlowDeadMotion. Motion tags: processGuardStart (PlayerGun,
+  PlayerItem, PlayerMelee, PlayerHands), PlayerMovement.processLand / processFall / processClimbOn,
+  PlayerItem.processUse, PlayerEventActionManager.processLadder / get_isOnLadder. Voice names are the same in
+  TRIGGER_SND_EVENTLIST_PL0000_V and PL2000_V (Mia): SND_MOT_PL_V_DMG_S 1480908325, _DMG_M 55217739, _GUARD
+  3338721245, _ACT_LANDING 973764339, _ACT_CLIMB 402218999, _DEATH_ROAR 1544160693, _WAKE_UP_01 3618666622;
+  SND_MOT_PL_MTF_FS_LANDING 4079835587; SND_MOT_PL0000_SE_SOLUTION_POUR 1195854192 (PL_ITEM). Not replayed on
+  purpose: SND_DF_SYSTEM_ID_DYING / SND_DF_PL_DMG_DYING_FX (system states: would put our audio in the dying
+  state). 'pv <kind>' -> coop_voice_play: our PlayerDamageController.WwiseContainer, exists(id),
+  trigger(id, friend's GameObject). Untested live: whether the player voice events are 3D.
+  Inventory: _ItemList is List<app.Inventory.ItemInfo> with fields Owner, Item, Gun only: the id and data are
+  on Item (ItemDataID, ItemStackNum, get_ItemData(), setStackNum). v0.41's coop_inventory_list read them off
+  ItemInfo and was always empty. Inventory.isCanAddItem(String, Int32), isAddItem, getEmptySlotNum;
+  addItem returns AddItemResult (Put 0, Integration 1, IntegrationAndNoPut 2, NoPut 3, LimitOver 4);
+  ItemManager.createItemInstance(GameObject owner, String) static, createDropItemInstance(owner, id, n).
+  ItemData.NameMsg (Guid) -> via.gui.message get(System.Guid) for the item's name (untested; falls back to
+  the id spelled out). 'give <token> <to> <item> <n>' / 'give_ok <token> <n>' / 'give_no <token> <why>'.
+  Difficulty: app.GameManager.get_gameDifficulty() (Easy 0 = Casual, Normal 1, Hard 2 = Madhouse); also
+  RankPoint / getGameRank() (RE7's adaptive difficulty). Sent as spos' 3rd field.
+  Flashlight: app.PlayerHandLight (isHandLightOn, field HandLight GameObject) -> app.HandLightController.Light
+  (via.render.IESLight, Intensity, ReferenceEffectiveRange). 'light 1|0'. The friend's copy: a new object with
+  the same light type, value/resource properties copied, placed at their head joint, rotated by their view
+  (body yaw + look yaw, pitch) times our light's rotation relative to our camera (measured while ours is on,
+  kept as settings.light_rel). Untested live.
+  Map, for later: app.MapManager.getMapPos(vec3) (world -> map), updatePlayerPosition, PlayerScrollPosition;
+  app.MapWindow is via.gui: a friend marker needs the player icon's panel found live.
+  Menu: highlighting Close (page nil) failed every frame in draw_paper (M.sel[nil] = ...): the 16:19 ERR in
+  today's log. Tests: give_test.py 20, voice_test.py 14, light_test.py 11, menu_test.py 58.
+- v0.43 (2026-11-09): title row. The game's log said 'CO-OP added as row 7 of 7' (16:18 and 21:34): the
+  list had 6 of its 7 rows when ours went in, so CO-OP took EXIT's place and the last line was blank (the
+  user saw exactly that). Now: add only when _StepParam count == ScrollList ItemMax and neither changed
+  for 1 s; if 'coop' isn't the last row, List.RemoveAt + Add moves it to the end (only if the count
+  really dropped, at most 3 times per menu); ItemMax == count - 1 (the game set its own) -> count.
+  Logs 'title row: waiting for the list (n rows, ItemMax m)' after 10 s of waiting.
+  Mouse: imgui.get_mouse() (window space, the same as draw.*), imgui.is_mouse_down(0/1), falling back
+  to reframework:is_key_down(VK_LBUTTON / VK_RBUTTON). The rows' rectangles are kept while drawing
+  (M.hit); pointing moves the highlight only when the mouse moved > 3 px; click = Enter, right click =
+  Back. Untested live: whether ImGui sees the mouse while the game holds it in play (the camera is
+  held while the screen is open). Quick messages 'talk ammo' / 'talk meds' set coop_give_ask, which
+  Give items uses once to pick that friend. Tests: menu_test.py 78 (title list filled over frames,
+  the repair, the mouse; the title checks fail on v0.42's coop_menu.lua).

@@ -89,8 +89,23 @@ function jack_boss_fight()
     return on
 end
 
+-- Bosses copied from the host's game (v0.32): Mia's fights (Em2000, molded Em2100).
+local BOSS_FOLLOW = { Em2000 = true, Em2100 = true }
+function boss_follow(name)
+    if not BOSS_FOLLOW[name] then return false end
+    if settings and settings.share_bosses == false then return false end
+    if local_cutscene and local_cutscene() then return false end
+    return true
+end
+
 function moves_shared(name)
+    -- 3-4 players (v0.29): each enemy has one owner among all the players (see "Ownership"
+    -- below). The fallback switch "Share enemies with 3-4 players" (Options, the same for
+    -- everyone) makes each game run its own enemies instead, as bosses always do; damage and
+    -- kills are still shared either way.
+    if coop_party_size and coop_party_size() > 1 and settings and settings.share_enemies_group == false then return false end
     if name == "Em3000" then return not jack_boss_fight() end
+    if boss_follow(name) then return true end
     return is_regular(name)
 end
 
@@ -147,14 +162,27 @@ local function enemy_list()
     return es.list_index and lists:call("get_Item", es.list_index)
 end
 
+-- The file is written once per frame (v0.39), not once per event, and keeps the last 150
+-- lines (was 30, rewritten on every send). CoopNet reads it 30 times a second, so a burst of
+-- more than 30 events between two reads (an area loading, a catch-up arriving) lost the
+-- oldest ones before they were sent.
+EV_OUT_KEEP = 150
+local function flush_events()
+    if not es.ev_dirty then return end
+    es.ev_dirty = false
+    fs.write("coopnet_ev_out.txt", table.concat(es.ev_out, "\n") .. "\n")
+end
+re.on_frame(function() pcall(flush_events) end)
+
 local function send_event(text)
     es.ev_seq = es.ev_seq + 1
     es.ev_out[#es.ev_out + 1] = es.ev_seq .. "\t" .. text
-    while #es.ev_out > 30 do table.remove(es.ev_out, 1) end
-    fs.write("coopnet_ev_out.txt", table.concat(es.ev_out, "\n") .. "\n")
+    while #es.ev_out > EV_OUT_KEEP do table.remove(es.ev_out, 1) end
+    es.ev_dirty = true
     es.sent = es.sent + 1
     -- Regular check-ins (health, options, version) would fill the log: not logged.
-    if not (text:match("^ehp ") or text:match("^opt ") or text:match("^ver ") or text:match("^dang ")) then log("sent: " .. text) end
+    if not (text:match("^ehp ") or text:match("^opt ") or text:match("^ver ") or text:match("^dang ") or text:match("^spos ")
+        or text:match("^lobby me ") or text:match("^lobby open ") or text:match("^stats ") or text:match("^light ")) then log("sent: " .. text) end
     if coop_talk_record then pcall(coop_talk_record, text) end   -- the catch-up list (coop_talk.lua)
 end
 
@@ -169,6 +197,14 @@ end
 -- One hit far bigger than its health, credited to our player: plays the real death or
 -- knock-down. (Setting health to 0 marks it dead but it keeps walking.) The game scales
 -- damage (health + 1000 left Jack on 2300 of 10000), so overkill, and hit again if needed.
+-- A scripted scene is playing or just set up (v0.36). coop_scene_t: coop_story.lua.
+SETTLE = 1.5
+function coop_scene_settling() return coop_scene_t ~= nil and os.clock() - coop_scene_t < SETTLE end
+local function scripted_now()
+    if local_cutscene and local_cutscene() then return true end
+    return coop_scene_t ~= nil and os.clock() - coop_scene_t < 4
+end
+
 local function kill_enemy(e)
     local player = sdk.get_managed_singleton("app.ObjectManager"):get_field("PlayerObj")
     local m = sdk.find_type_definition("app.DamageController"):get_method("newFakeDamageInfo")
@@ -205,8 +241,11 @@ local function scan()
                     -- Died here. Tell the friend, unless we did it on their word.
                     if es.applying[e.id] and os.clock() - es.applying[e.id] < 5 then
                         es.applying[e.id] = nil
+                    elseif scripted_now() and not is_regular(e.name) then
+                        log("not sent: " .. e.name .. " went down in a scripted scene (it does in theirs too)")
                     else
                         send_event(string.format("kill %s %d %s", e.id, chapter(), e.name))
+                        if coop_stat then pcall(coop_stat, "kills") end   -- the session page (v0.42)
                     end
                 elseif not dead and e.dead then
                     log("back up: " .. e.name .. " " .. e.id)
@@ -215,7 +254,14 @@ local function scan()
                 -- Damage we applied on the friend's word already moved e.hp, so it isn't sent back.
                 local hp = e.dc:call("get_health") or 0
                 if e.hp and not dead and active and hp < e.hp - 0.5 then
-                    send_event(string.format("dmg %s %d %.1f %s", e.id, chapter(), e.hp - hp, e.name))
+                    if scripted_now() then
+                        -- Scripted damage (Mia's wall throw took 1300): their scene does its own.
+                        if not is_regular(e.name) then
+                            log(string.format("not sent: %s lost %.0f in a scripted scene", e.name, e.hp - hp))
+                        end
+                    else
+                        send_event(string.format("dmg %s %d %.1f %s", e.id, chapter(), e.hp - hp, e.name))
+                    end
                 end
                 e.hp = hp
                 e.dead = dead
@@ -288,6 +334,10 @@ end
 
 local function on_damage(id, ch, amount, name)
     if ch ~= chapter() then return end
+    if scripted_now() then
+        log(string.format("friend's hit on %s (%.0f) not applied: a scripted scene is playing", name, amount))
+        return
+    end
     local e = find_tracked(id)
     if e == nil or e.dead or safe(e.go.call, e.go, "get_Update") ~= true then return end
     local hp = e.dc:call("get_health") or 0
@@ -295,7 +345,8 @@ local function on_damage(id, ch, amount, name)
     e.dc:call("setHealth(System.Single, System.Single)", new, e.dc:call("get_maxHealth"))
     e.hp = e.dc:call("get_health")
     -- The reaction plays only where the enemy's AI runs; a copy follows its owner's clip.
-    if em_move == nil or em_move.own[id] ~= "peer" then
+    if (em_move == nil or type(em_move.own[id]) ~= "number") and is_regular(name) then
+        -- Not bosses (v0.36): their reactions are scripted; a forced one went with a crash.
         local ok, res = pcall(flinch, e, amount)
         if not es.flinch_logged or not ok then
             es.flinch_logged = true
@@ -322,8 +373,13 @@ local function on_event(text)
     -- Catch-up batches and quick messages belong to coop_talk.lua (a catch-up batch is
     -- unpacked there and each change comes back through coop_apply_event).
     if coop_talk_on_event and coop_talk_on_event(text) then return end
+    -- The lobby belongs to the in-game co-op menu (coop_menu.lua, v0.40).
+    if coop_menu_on_event and coop_menu_on_event(text) then return end
     -- Character looks belong to coop_dummy.lua's lobby; doors and items to coop_world.lua.
-    if coop_lobby_on_event and coop_lobby_on_event(text) then return end
+    -- Each friend's look, weapon and animation set go to that friend's character.
+    local env = coop_slot_envs and coop_slot_envs[coop_event_slot or 1]
+    local lobby_fn = env and rawget(env, "coop_lobby_on_event") or coop_lobby_on_event
+    if lobby_fn and lobby_fn(text) then return end
     if coop_world_on_event and coop_world_on_event(text) then return end
     if coop_story_on_event and coop_story_on_event(text) then return end
     if coop_revive_on_event and coop_revive_on_event(text) then return end
@@ -333,14 +389,22 @@ local function on_event(text)
         -- em_move, not mv: the local alias is declared further down, so "mv" here was a nil
         -- global and every pause message failed (both logs, 2026-11-03).
         if em_move then
-            em_move.friend_paused = pz == "1"
-            em_move.friend_paused_t = os.clock()
+            local slot = coop_event_slot or 1
+            em_move.paused_slots = em_move.paused_slots or {}
+            em_move.paused_slots[slot] = pz == "1" and os.clock() or nil
+            if slot == 1 then
+                em_move.friend_paused = pz == "1"
+                em_move.friend_paused_t = os.clock()
+            end
         end
         note(pz == "1" and "your friend paused the game" or "your friend is back")
         return
     end
-    local oid, och, oname = text:match("^own (%S+) (%-?%d+) (%S+)")
-    if oid then if enemy_move_on_own then enemy_move_on_own(oid, tonumber(och), oname) end return end
+    local oid, och, oname, otarget = text:match("^own (%S+) (%-?%d+) (%S+) ?(%d*)")
+    if oid then
+        if enemy_move_on_own then enemy_move_on_own(oid, tonumber(och), oname, otarget ~= "" and otarget or nil) end
+        return
+    end
     local hid, hch, hv, hname = text:match("^ehp (%S+) (%-?%d+) ([%d%.]+) (%S+)")
     if hid then pcall(on_ehp, hid, tonumber(hch), tonumber(hv), hname) return end
     local did, dch, damt, dname = text:match("^dmg (%S+) (%-?%d+) ([%d%.]+) (%S+)")
@@ -349,6 +413,10 @@ local function on_event(text)
     if id == nil then log("ignored event: " .. text) return end
     ch = tonumber(ch)
     if ch ~= chapter() then log("kill in another chapter, ignored: " .. text) return end
+    if scripted_now() and not is_regular(name) then
+        log("kill of " .. name .. " not applied: a scripted scene is playing (it plays here too)")
+        return
+    end
     local e = find_tracked(id)
     local active = e and safe(e.go.call, e.go, "get_Update") == true
     if e and active and not e.dead then
@@ -368,7 +436,55 @@ end
 
 function coop_apply_event(text) on_event(text) end
 
+-- A chapter jump starts that chapter over (v0.40): the friend's remembered kills there are old.
+function coop_enemies_reset_chapter(v)
+    local n = 0
+    for id, ch in pairs(es.pending) do if ch == v then es.pending[id] = nil n = n + 1 end end
+    if n > 0 then log(string.format("chapter %d starts over: %d remembered kills dropped", v, n)) end
+end
+
+local ready = { since = nil }
+local function game_ready()
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local p = om and safe(om.get_field, om, "PlayerObj")
+    local gm = sdk.get_managed_singleton("app.GameManager")
+    if p == nil or (gm and safe(gm.get_field, gm, "IsTitleDisp") == true) then ready.since = nil return false end
+    ready.since = ready.since or os.clock()
+    return os.clock() - ready.since >= 5
+end
+
+HELD_IN_CUTSCENE = { open = true, close = true, unlock = true, drawer = true, switch = true, intr = true,
+    ["break"] = true, dbreak = true, took = true, got = true, kill = true, catchup = true, own = true }
+DROPPED_IN_CUTSCENE = { phys = true, dang = true, dmg = true, ehp = true }
+-- Seconds after which a message that waited (while we loaded) is dropped (v0.39). A friend's
+-- scene from a minute ago, or a hand-off of an enemy that has moved on since, would only do
+-- harm now. Lasting changes (doors, drawers, pickups...) have no limit.
+STALE_AFTER = { story = 20, own = 10, phys = 3, dang = 3, dmg = 5, talk = 60, heal = 10 }
+
+-- Changes kept during our cutscene: applied 1 s after it ends (and after a scene settles).
+local function release_held(now)
+    if es.held == nil or #es.held == 0 then
+        if (es.dropped_n or 0) > 0 then log(string.format("cutscene: dropped %d pushes/hits from the friend", es.dropped_n)) es.dropped_n = 0 end
+        return
+    end
+    if local_cutscene and local_cutscene() then es.cut_end_t = nil return end
+    es.cut_end_t = es.cut_end_t or now
+    if now - es.cut_end_t < 1 then return end
+    local list = es.held
+    es.held, es.cut_end_t = {}, nil
+    log(string.format("cutscene over: applying %d changes from the friend that waited", #list))
+    for _, h in ipairs(list) do
+        coop_event_slot = h.slot
+        local ok, err = pcall(on_event, h.body)
+        coop_event_slot = 1
+        if not ok then log("event ERR " .. tostring(err)) end
+    end
+end
+
 local function read_events()
+    pcall(release_held, os.clock())
+    -- Not while loading or on the title screen (v0.32): the events wait in the file.
+    if es.ev_in_last >= 0 and not game_ready() then return end
     local text = fs.read("coopnet_ev_in.txt")
     if text == nil or text == "" then   -- fs.read gives "" for a missing file
         if es.ev_in_last < 0 then es.ev_in_last = 0 end   -- nothing received yet: handle all that comes
@@ -376,10 +492,12 @@ local function read_events()
     end
     local lines, max_n = {}, -1
     for line in text:gmatch("[^\n]+") do
-        local n, body = line:match("^(%d+)\t(.*)$")
+        -- "<n>\t<arrival, Unix seconds>\t<text>" since v0.39 ("<n>\t<text>" before).
+        local n, at, body = line:match("^(%d+)\t(%d+)\t(.*)$")
+        if n == nil then n, body = line:match("^(%d+)\t(.*)$") end
         n = tonumber(n)
         if n then
-            lines[#lines + 1] = { n, body }
+            lines[#lines + 1] = { n, body, tonumber(at) }
             if n > max_n then max_n = n end
         end
     end
@@ -389,8 +507,29 @@ local function read_events()
     if max_n < es.ev_in_last then es.ev_in_last = 0 end
     for _, l in ipairs(lines) do
         if l[1] > es.ev_in_last then
-            local ok, err = pcall(on_event, l[2])
-            if not ok then log("event ERR " .. tostring(err)) end
+            -- Friends 2 and 3 (v0.29): "@2 <text>" / "@3 <text>". coop_event_slot says whose
+            -- event is being handled (1 for friend 1), for the handlers that care.
+            local body, slot = l[2], 1
+            local sk, rest = body:match("^@([23]) (.*)$")
+            if sk then slot, body = tonumber(sk), rest end
+            local kind = body:match("^(%S+)")
+            local age = l[3] and (os.time() - l[3]) or 0
+            if STALE_AFTER[kind] and age > STALE_AFTER[kind] then
+                -- Arrived while we were loading, too long ago to act on (v0.39).
+                es.stale_n = (es.stale_n or 0) + 1
+                if kind == "story" or kind == "own" then log(string.format("too old to act on (%d s): %s", age, body)) end
+            elseif local_cutscene and local_cutscene() and HELD_IN_CUTSCENE[kind] then
+                es.held = es.held or {}
+                if #es.held < 300 then es.held[#es.held + 1] = { slot = slot, body = body } end
+                es.held_n = (es.held_n or 0) + 1
+            elseif local_cutscene and local_cutscene() and DROPPED_IN_CUTSCENE[kind] then
+                es.dropped_n = (es.dropped_n or 0) + 1
+            else
+                coop_event_slot = slot
+                local ok, err = pcall(on_event, body)
+                coop_event_slot = 1
+                if not ok then log("event ERR " .. tostring(err)) end
+            end
         end
     end
     if max_n > es.ev_in_last then es.ev_in_last = max_n end
@@ -413,9 +552,14 @@ end
 -- "own <id> <chapter> <name>") when the other player is 3 m+ closer to it. A game that
 -- gets no data for an enemy it gave away takes it back after 3 s (friend gone, or the
 -- bot, which can't run enemies).
+-- 3-4 players (v0.29): "own" names the new owner by SteamID ("own <id> <chapter> <name>
+-- <steamid>"; without it, the receiver is meant, as before). An enemy owned by friend k is
+-- followed from friend k's snapshots (coopnet_es_in[_k].txt). The owner hands it to whoever
+-- is 3 m+ closer than itself; the host is the lowest SteamID of all; when two games both
+-- send an enemy, the lower SteamID keeps it.
 em_move = {
     role_pref = "auto", role = "host",
-    own = {},        -- id -> "me" | "peer"
+    own = {},        -- id -> "me" | friend slot 1-3 (who runs it)
     own_t = {},      -- id -> when ownership last changed
     handed = {},     -- id -> true: we gave it away and wait for the friend's data
     handoff_t = 0, handoffs = 0, takebacks = 0,
@@ -447,15 +591,38 @@ local function net_kv()
     return kv_cache
 end
 
+-- Our SteamID and each friend slot's (v0.29).
+local function party_ids()
+    local kv = net_kv()
+    local ids = {}
+    for k, key in ipairs({ "peer", "peer2", "peer3" }) do
+        local id = kv[key] and kv[key]:match("^steam:(%d+)$")
+        if id and id ~= "0" then ids[k] = id end
+    end
+    return kv.steamSelf, ids
+end
+local function id_less(a, b) return a ~= nil and b ~= nil and ((#a < #b) or (#a == #b and a < b)) end
+local function slot_of_id(sid)
+    local _, ids = party_ids()
+    for k, v in pairs(ids) do if v == sid then return k end end
+    return nil
+end
+local function friend_owned(id) return type(mv.own[id]) == "number" end
+-- Friend slot k's SteamID is lower than ours (they win a tie).
+local function lower_than_me(k)
+    local me, ids = party_ids()
+    return id_less(ids[k], me)
+end
+
 local function decide_role()
     if mv.replay then return "guest" end
     if mv.role_pref ~= "auto" then return mv.role_pref end
     local kv = net_kv()
     if kv.mode == "steam" then
-        local me, peer = kv.steamSelf, (kv.peer or ""):match("^steam:(%d+)$")
-        if me and peer and peer ~= "0" then
-            local lower = (#me < #peer) or (#me == #peer and me < peer)
-            return lower and "host" or "guest"
+        local me, ids = party_ids()
+        if me and next(ids) then
+            for _, id in pairs(ids) do if id_less(id, me) then return "guest" end end
+            return "host"
         end
     end
     return "host"
@@ -586,53 +753,109 @@ local function push_hist(id, s, t)
 end
 
 -- Host: write the snapshot of our awake enemies (puppets excluded).
+-- Our story sequence is still playing out (coop_story, v0.39): between the dinner and the
+-- escape Jack sits at our table while the friend's Jack may already roam the house. Then
+-- enemies other than bosses are neither followed nor sent. Checked twice a second.
+local seq_cache = { t = -100, on = false }
+local function in_story_sequence()
+    local now = os.clock()
+    if now - seq_cache.t >= 0.5 then
+        seq_cache.t = now
+        local on = coop_story_in_sequence ~= nil and coop_story_in_sequence() == true
+        if on ~= seq_cache.on then
+            log(on and "story sequence playing out: enemies (not bosses) run in each game on their own"
+                or "story sequence over: enemies follow again")
+        end
+        seq_cache.on = on
+    end
+    return seq_cache.on
+end
+local function seq_hold(name) return not BOSS_FOLLOW[name] and in_story_sequence() end
+
+-- At most this many enemies per snapshot, the nearest to our player first (v0.39).
+SNAP_MAX = 24
 local function write_snapshot(now)
     local lines = { "seq " .. mv.seq, string.format("t %.3f ch %d", now, chapter()) }
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local player = om and safe(om.get_field, om, "PlayerObj")
+    local pp = player and safe(function() return player:call("get_Transform"):call("get_Position") end)
+    local list = {}
     for _, e in pairs(es.tracked) do
         -- The host sends every enemy it runs; the guest only the ones handed to it.
-        local mine = moves_shared(e.name) and (mv.own[e.id] == "me" or (mv.role == "host" and mv.own[e.id] ~= "peer"))
-        if mine and safe(e.go.call, e.go, "get_Update") == true and not mv.puppets[e.id] then
+        local mine = moves_shared(e.name) and (mv.own[e.id] == "me" or (mv.role == "host" and not friend_owned(e.id)))
+        if mine and not seq_hold(e.name) and safe(e.go.call, e.go, "get_Update") == true and not mv.puppets[e.id] then
             local l = safe(enemy_line, e)
-            if l then lines[#lines + 1] = l end
+            if l then
+                local ep = pp and safe(function() return e.go:call("get_Transform"):call("get_Position") end)
+                local d = (ep and pp) and ((ep.x - pp.x) ^ 2 + (ep.y - pp.y) ^ 2 + (ep.z - pp.z) ^ 2) or 0
+                list[#list + 1] = { d = d, l = l }
+            end
         end
     end
+    table.sort(list, function(a, b) return a.d < b.d end)
+    for i = 1, math.min(#list, SNAP_MAX) do lines[#lines + 1] = list[i].l end
+    -- "end" closes a whole snapshot: CoopNet sends only whole ones (v0.39).
+    lines[#lines + 1] = "end"
     mv.seq = mv.seq + 1
     lines[1] = "seq " .. mv.seq
     fs.write("coopnet_es_out.txt", table.concat(lines, "\n") .. "\n")
     mv.sent = mv.sent + 1
 end
 
+-- Friend k is in a cutscene: their samples carry the cutscene flag (coop_dummy keeps it as
+-- friend_cutscene, per friend).
+local function friend_in_cutscene(k)
+    local env = coop_slot_envs and coop_slot_envs[k or 1] or _G
+    local v = rawget(env, "friend_cutscene")
+    if v == nil and (k or 1) == 1 then v = rawget(_G, "friend_cutscene") end
+    return v == true
+end
+
 -- Guest: take a received snapshot into the per-enemy timelines.
-local function read_snapshot(now)
-    local text = fs.read("coopnet_es_in.txt")
+local function read_snapshot(now, k)
+    local text = fs.read(k == 1 and "coopnet_es_in.txt" or ("coopnet_es_in_" .. k .. ".txt"))
     if text == nil or text == "" then return end
+    mv.last_in_seq_s = mv.last_in_seq_s or {}
+    mv.offset_s = mv.offset_s or {}
     local seq = text:match("^seq (%d+)")
-    if seq == nil or seq == mv.last_in_seq then return end
-    mv.last_in_seq = seq
+    if seq == nil or seq == mv.last_in_seq_s[k] then return end
+    mv.last_in_seq_s[k] = seq
     local t, ch = text:match("\nt (%S+) ch (%-?%d+)")
     t, ch = tonumber(t), tonumber(ch)
     if t == nil or ch ~= chapter() then return end
+    -- Their cutscene moves their enemies (v0.39): Jack sat at their dinner table while ours had
+    -- moved on (2026-11-08). Nothing of theirs is followed until it ends.
+    if friend_in_cutscene(k) then return end
     local off = now - t
-    -- A jump of 5 s+ means the host's clock restarted: start over (see coop_dummy).
-    if mv.offset == nil or off < mv.offset or off > mv.offset + 5 then mv.offset = off end
+    -- A jump of 5 s+ means that friend's clock restarted: start over (see coop_dummy).
+    local o = mv.offset_s[k]
+    if o == nil or off < o or off > o + 5 then o = off mv.offset_s[k] = o end
+    if k == 1 then mv.offset = o end
     for line in text:gmatch("[^\n]+") do
         local id, s = parse_line(line)
         local te = id and find_tracked(id)
         if te and not moves_shared(te.name) then id = nil end   -- a boss: ours runs on its own
+        if te and seq_hold(te.name) then id = nil end           -- our story sequence plays out (v0.39)
         if id then
-            -- Both games running it: the host keeps it, the other side gives way.
-            local take = true
-            if mv.role == "host" then
-                -- The host only follows enemies it handed to the guest.
-                take = mv.own[id] == "peer"
-            elseif mv.own[id] == "me" then
-                -- Just handed to us: a snapshot the host sent a moment before still has it.
-                if now - (mv.own_t[id] or 0) < 1 then take = false
-                else mv.own[id], mv.own_t[id] = "peer", now end
-            elseif mv.own[id] == nil then
-                mv.own[id], mv.own_t[id] = "peer", now
+            -- Friend k runs it. Two games running the same enemy: the lower SteamID keeps it.
+            local own, take = mv.own[id], false
+            if own == k then
+                take = true
+            elseif own == nil then
+                -- Nobody's yet: theirs, unless we're the lower SteamID and run it awake here.
+                local here = te and safe(te.go.call, te.go, "get_Update") == true
+                if lower_than_me(k) or not here then mv.own[id], mv.own_t[id], take = k, now, true end
+            elseif own == "me" then
+                -- Just handed to us: a snapshot they sent a moment before still has it.
+                if now - (mv.own_t[id] or 0) >= 1 and lower_than_me(k) then
+                    mv.own[id], mv.own_t[id], take = k, now, true
+                end
+            elseif type(own) == "number" and now - (mv.own_t[id] or 0) >= 1 then
+                -- Owned by another friend, but friend k sends it too: the lower SteamID keeps it.
+                local _, ids = party_ids()
+                if id_less(ids[k], ids[own]) then mv.own[id], mv.own_t[id], take = k, now, true end
             end
-            if take then push_hist(id, s, t + mv.offset) end
+            if take then push_hist(id, s, t + o) end
         end
     end
     mv.recv = mv.recv + 1
@@ -778,19 +1001,25 @@ if prep then
 end
 
 -- The friend's position, from their Ethan (only while shown, i.e. data is fresh).
-local function friend_pos()
-    local g = coop_ghost and coop_ghost()
-    if g == nil or ghost_hidden then return nil end
+local function friend_pos(k)
+    local env = coop_slot_envs and coop_slot_envs[k or 1] or _G
+    local ghost_fn = rawget(env, "coop_ghost") or (k == 1 and coop_ghost) or nil
+    local g = ghost_fn and ghost_fn()
+    local hidden = rawget(env, "ghost_hidden")
+    if hidden == nil and (k or 1) == 1 then hidden = ghost_hidden end
+    if g == nil or hidden then return nil end
     return safe(function() return g:call("get_Transform"):call("get_Position") end)
 end
 
-local function hand_off(e, now)
-    send_event(string.format("own %s %d %s", e.id, chapter(), e.name))
-    mv.own[e.id], mv.own_t[e.id], mv.handed[e.id] = "peer", now, true
+local function hand_off(e, now, k)
+    k = k or 1
+    local _, ids = party_ids()
+    send_event(string.format("own %s %d %s%s", e.id, chapter(), e.name, ids[k] and (" " .. ids[k]) or ""))
+    mv.own[e.id], mv.own_t[e.id], mv.handed[e.id] = k, now, true
     mv.hist[e.id] = nil
     puppetize(e)
     mv.handoffs = mv.handoffs + 1
-    mv.msg = "handed " .. e.name .. " to your friend"
+    mv.msg = "handed " .. e.name .. " to " .. (k == 1 and "your friend" or ("friend " .. k))
     log(mv.msg)
 end
 
@@ -803,28 +1032,50 @@ function check_handoffs(now)
     if net_kv().mode ~= "steam" then return end
     -- See watch_pause. A "paused" that never got its "back" (they quit) expires after 10 min.
     if mv.friend_paused and now - (mv.friend_paused_t or 0) > 600 then mv.friend_paused = false end
-    if mv.friend_paused or mv.paused then return end
-    local g = friend_pos()
+    if mv.paused then return end
+    -- Friends here and not paused (a "paused" that never got its "back" expires after 10 min).
+    local friends = {}
+    for k = 1, 3 do
+        local pt = mv.paused_slots and mv.paused_slots[k]
+        if pt and now - pt > 600 then mv.paused_slots[k] = nil pt = nil end
+        local g = not pt and friend_pos(k)
+        if g then friends[#friends + 1] = { k = k, pos = g } end
+    end
     local player = sdk.get_managed_singleton("app.ObjectManager"):get_field("PlayerObj")
-    if g == nil or player == nil then return end
+    if #friends == 0 or player == nil then return end
     local p = player:call("get_Transform"):call("get_Position")
     for _, e in pairs(es.tracked) do
         local cooling = mv.no_handoff and (mv.no_handoff[e.id] or 0) > now
-        if moves_shared(e.name) and mv.own[e.id] ~= "peer" and not cooling and not e.dead and not mv.puppets[e.id] and safe(e.go.call, e.go, "get_Update") == true then
+        if moves_shared(e.name) and not BOSS_FOLLOW[e.name] and not seq_hold(e.name) and not friend_owned(e.id) and not cooling and not e.dead and not mv.puppets[e.id] and safe(e.go.call, e.go, "get_Update") == true then
             local ep = e.go:call("get_Transform"):call("get_Position")
+            local best, bd = nil, nil
+            for _, f in ipairs(friends) do
+                local d = math.sqrt(dist2(ep, f.pos))
+                if bd == nil or d < bd then best, bd = f.k, d end
+            end
             -- 3 m of hysteresis so it doesn't bounce between games.
-            if math.sqrt(dist2(ep, g)) + 3 < math.sqrt(dist2(ep, p)) then hand_off(e, now) end
+            if best and bd + 3 < math.sqrt(dist2(ep, p)) then hand_off(e, now, best) end
         end
     end
 end
 
 -- The friend handed us an enemy: run it ourselves from now on.
-function enemy_move_on_own(id, ch, name)
+function enemy_move_on_own(id, ch, name, target)
     if ch ~= chapter() then return end
-    mv.own[id], mv.own_t[id], mv.handed[id] = "me", os.clock(), nil
-    if mv.puppets[id] then release(id) end
+    local me = party_ids()
+    if target == nil or target == me then
+        mv.own[id], mv.own_t[id], mv.handed[id] = "me", os.clock(), nil
+        if mv.puppets[id] then release(id) end
+        mv.hist[id] = nil
+        note("your friend handed " .. name .. " to you")
+        return
+    end
+    -- Handed to another friend (3-4 players): follow theirs from now on.
+    local k = slot_of_id(target)
+    if k == nil then return end
+    mv.own[id], mv.own_t[id], mv.handed[id] = k, os.clock(), nil
     mv.hist[id] = nil
-    note("your friend handed " .. name .. " to you")
+    log(string.format("%s now runs in friend %d's game", name, k))
 end
 
 -- Pausing (pause menu, inventory, map) freezes this game, enemies it runs included, while
@@ -846,24 +1097,63 @@ local function watch_pause(now)
     send_event(paused and "pause 1" or "pause 0")
     if not paused then return end
     for _, e in pairs(es.tracked) do
-        if moves_shared(e.name) and mv.own[e.id] ~= "peer" and not e.dead and not mv.puppets[e.id] and safe(e.go.call, e.go, "get_Update") == true then
-            hand_off(e, now)
+        if moves_shared(e.name) and not BOSS_FOLLOW[e.name] and not friend_owned(e.id) and not e.dead and not mv.puppets[e.id] and safe(e.go.call, e.go, "get_Update") == true then
+            -- To the nearest friend who isn't paused.
+            local ep = e.go:call("get_Transform"):call("get_Position")
+            local best, bd = nil, nil
+            for k = 1, 3 do
+                local g = not (mv.paused_slots and mv.paused_slots[k]) and friend_pos(k)
+                if g then
+                    local d = dist2(ep, g)
+                    if bd == nil or d < bd then best, bd = k, d end
+                end
+            end
+            if best then hand_off(e, now, best) end
         end
     end
 end
 
 local function update_movement(now)
-    pcall(watch_pause, now)
+    local pok, perr = pcall(watch_pause, now)
+    if not pok and not mv.pause_err then mv.pause_err = true log("pause watch ERR " .. tostring(perr)) end
     mv.role = decide_role()
+    -- Cutscenes (v0.39): a scene moves its characters in each game on its own clock, and the
+    -- two games are rarely at the same moment of it. While ours plays: no snapshots out, no
+    -- copies (each copy gets its own AI and animation back: a copy with its animation brain
+    -- off can't play the scene), no hand-offs. Their snapshots are still read, so following
+    -- picks up again right after.
+    local cut = local_cutscene and local_cutscene()
+    if cut then
+        if not mv.cut then
+            mv.cut = true
+            local n = 0
+            for id in pairs(mv.puppets) do release(id) n = n + 1 end
+            log("cutscene: enemy following paused" .. (n > 0 and string.format(" (%d copies run on their own)", n) or ""))
+        end
+        if not mv.replay and now - mv.in_t >= 1 / 30 then
+            mv.in_t = now
+            for k = 1, 3 do pcall(read_snapshot, now, k) end
+        end
+        return
+    elseif mv.cut then
+        mv.cut = false
+        log("cutscene over: enemy following resumes")
+        -- Nothing is "taken back" for the quiet during the scene: ownership timers restart.
+        for id in pairs(mv.own_t) do mv.own_t[id] = now end
+    end
     -- Both games send and read: an enemy handed to the guest is sent back by the guest
     -- (host-only sending made every hand-off fail after 3 s, Jack 2026-11-02).
     if now - mv.snap_t >= SNAP_EVERY then
         mv.snap_t = now
-        pcall(write_snapshot, now)
+        local ok, err = pcall(write_snapshot, now)
+        if not ok and not mv.snap_err then mv.snap_err = true log("snapshot ERR " .. tostring(err)) end
     end
     if not mv.replay and now - mv.in_t >= 1 / 30 then
         mv.in_t = now
-        pcall(read_snapshot, now)
+        for k = 1, 3 do
+            local ok, err = pcall(read_snapshot, now, k)
+            if not ok and not mv.read_snap_err then mv.read_snap_err = true log("snapshot read ERR " .. tostring(err)) end
+        end
     end
     -- Replay test: feed the recording as if the host had sent it.
     local r = mv.replay
@@ -884,7 +1174,7 @@ local function update_movement(now)
     local saving = mv.save_pause_until and now < mv.save_pause_until
     for _, e in pairs(es.tracked) do
         local id = e.id
-        if mv.own[id] == "peer" and not saving then
+        if friend_owned(id) and not saving and moves_shared(e.name) and not seq_hold(e.name) then
             local h = mv.hist[id]
             local fresh = h ~= nil and #h > 0 and now - h[#h].t <= 3
             if fresh then
@@ -907,7 +1197,13 @@ local function update_movement(now)
             end
         end
     end
-    for id in pairs(mv.puppets) do if mv.own[id] ~= "peer" then release(id) end end
+    for id, pe in pairs(mv.puppets) do
+        if not friend_owned(id) or seq_hold(pe.name) then release(id)
+        elseif BOSS_FOLLOW[pe.name] and not moves_shared(pe.name) then
+            release(id)
+            mv.own[id], mv.hist[id] = nil, nil
+        end
+    end
     -- Hand enemies to the friend when they're clearly closer to them (every 0.5 s).
     if now - mv.handoff_t >= 0.5 then
         mv.handoff_t = now
@@ -933,6 +1229,17 @@ end
 re.on_frame(function()
     if not es.enabled then return end
     local now = os.clock()
+    -- A scene is swapping characters in and out: hands off, then rescan first (v0.36).
+    if coop_scene_settling() then
+        if not es.settling then es.settling = true log("scene setting up: enemies left alone for a moment") end
+        return
+    end
+    if es.settling then
+        es.settling = false
+        es.scan_t = now
+        local ok, err = pcall(scan)
+        if not ok and not es.scan_err then es.scan_err = true log("scan ERR " .. tostring(err)) end
+    end
     local mok, merr = pcall(update_movement, now)
     if not mok and not mv.err then mv.err = true log("movement ERR " .. tostring(merr)) end
     if now - es.in_t >= 0.2 then
@@ -1014,7 +1321,7 @@ function enemy_move_replay()
     if mc then safe(mc.call, mc, "warp(via.vec3, via.Quaternion)", Vector3f.new(f.x, f.y, f.z),
         Quaternion.new(math.cos(f.yaw / 2), 0, math.sin(f.yaw / 2), 0)) end
     mv.hist[r.id] = nil
-    mv.own[r.id], mv.own_t[r.id] = "peer", os.clock()   -- "the friend" (the recording) runs it
+    mv.own[r.id], mv.own_t[r.id] = 1, os.clock()   -- "the friend" (the recording) runs it
     mv.replay = { id = r.id, frames = r.frames, i = 1, t0 = os.clock() }
     mv.msg = "replaying " .. r.e.name .. " with its AI off"
     log(mv.msg)
@@ -1032,7 +1339,7 @@ end
 
 function enemy_move_bot_hands_back()
     for id, o in pairs(mv.own) do
-        if o == "peer" then
+        if type(o) == "number" then
             local e = find_tracked(id)
             fs.write("coopnet_command.txt", string.format("botevent own %s %d %s", id, chapter(), e and e.name or "?"))
             return "the bot hands " .. (e and e.name or id) .. " back"
@@ -1045,7 +1352,7 @@ function enemy_move_status()
     local mine, theirs = 0, 0
     for _, e in pairs(es.tracked) do
         if safe(e.go.call, e.go, "get_Update") == true then
-            if mv.own[e.id] == "peer" then theirs = theirs + 1 else mine = mine + 1 end
+            if friend_owned(e.id) then theirs = theirs + 1 else mine = mine + 1 end
         end
     end
     return string.format("Enemy movement: %d run here, %d run by your friend; handed over %d, taken back %d; snapshots sent %d, received %d; %s",

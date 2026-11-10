@@ -3,6 +3,8 @@
 -- can't die) until your friend stands next to you for a few seconds, which gets you back
 -- up with some health. If you're both down, or nobody comes within DOWN_LIMIT seconds, it's
 -- a normal game over. Without a friend connected (or in a cutscene) deaths are untouched.
+-- 3-4 players (v0.33): any friend who is up can get you up; it's a real death only when
+-- everyone is down. Each friend's events come with their slot (coop_event_slot).
 -- Events (reliable, through coop_enemies.lua's channel):
 --   down <chapter>      I went down          up        I'm back up
 --   gameover            I died for real (if you're down too, you die with me)
@@ -10,7 +12,8 @@
 revive = {
     downed = false, down_t = 0, pos = nil,
     near_t = nil,          -- since when the friend has been close
-    friend_down = false, friend_down_t = 0,
+    friend_down = false, friend_down_t = 0,   -- any friend down (kept for the HUD/other scripts)
+    down_slots = {},       -- friend slot -> true while that friend is down
     allow_death = false,   -- let the next death through (both down, timeout)
     msg = "-", msg_t = -100,
 }
@@ -55,18 +58,39 @@ local function player_dc()
     return p and safe(p.call, p, "getComponent(System.Type)", sdk.typeof("app.PlayerDamageController"))
 end
 
--- A friend is with us: their data is fresh (ghost shown) and we're not in a cutscene.
+-- Friend k's character here, while it's shown (data fresh, not in their cutscene).
+local function friend_ghost(k)
+    local env = coop_slot_envs and coop_slot_envs[k]
+    if env == nil and k == 1 then env = _G end
+    if env == nil then return nil end
+    local gf = rawget(env, "coop_ghost") or (k == 1 and coop_ghost) or nil
+    local hidden = rawget(env, "ghost_hidden")
+    if hidden == nil and k == 1 then hidden = ghost_hidden end
+    if gf == nil or hidden ~= false then return nil end
+    return gf()
+end
+local function friend_pos(k)
+    local g = friend_ghost(k)
+    return g and safe(function() return g:call("get_Transform"):call("get_Position") end)
+end
+local function any_friend_down()
+    for _, v in pairs(rv.down_slots) do if v then return true end end
+    return false
+end
+
+-- A friend who is up is with us, and we're not in a cutscene.
 local function friend_here()
-    if ghost_hidden ~= false then return false end
     if local_cutscene and local_cutscene() then return false end
-    return coop_ghost and coop_ghost() ~= nil
+    for k = 1, 3 do
+        if not rv.down_slots[k] and friend_ghost(k) ~= nil then return true end
+    end
+    return false
 end
 
 local function should_go_down()
     if rv.allow_death then return false end
     if rv.downed then return true end           -- already down: no dying while we wait
-    if rv.friend_down then return false end     -- both down: a real death
-    return friend_here()
+    return friend_here()                        -- nobody up and here: a real death
 end
 
 -- How being down looks: forced crouch (the view drops; the friend sees our Ethan
@@ -86,6 +110,8 @@ end
 
 local function go_down()
     if rv.downed then return end
+    -- A friend's "up" that got lost would keep them "down" forever: forget old downs.
+    if os.clock() - (rv.friend_down_t or 0) > DOWN_LIMIT + 10 then rv.down_slots = {} rv.friend_down = false end
     rv.downed, rv.down_t, rv.near_t = true, os.clock(), nil
     local p = player()
     local pos = p and p:call("get_Transform"):call("get_Position")
@@ -93,7 +119,8 @@ local function go_down()
     rv.rot = p and p:call("get_Transform"):call("get_Rotation")
     pcall(down_look, true)
     send(string.format("down %d", chapter()))
-    note("you're down - your friend has to reach you")
+    if coop_stat then pcall(coop_stat, "downs") end
+    note("you're down - a friend has to reach you")
 end
 
 local function get_up(why)
@@ -115,6 +142,7 @@ local function die_for_real(why)
     local p, dc = player(), player_dc()
     if p and dc then
         local m = sdk.find_type_definition("app.DamageController"):get_method("newFakeDamageInfo")
+        if m == nil then return end
         pcall(dc.call, dc, "setHealth(System.Single, System.Single)", 1.0, dc:call("get_maxHealth") or 1000)
         pcall(dc.call, dc, "addManualDamage", m:call(nil, 100000.0, p, p))
     end
@@ -173,17 +201,26 @@ re.on_frame(function()
                 pcall(mc.call, mc, "warp(via.vec3, via.Quaternion)", rv.pos, p:call("get_Transform"):call("get_Rotation"))
             end
         end
-        -- Friend close for REVIVE_TIME → up.
-        local g = coop_ghost and coop_ghost()
-        local gp = g and not ghost_hidden and safe(function() return g:call("get_Transform"):call("get_Position") end)
-        local close = gp and rv.pos and math.sqrt((gp.x - rv.pos.x) ^ 2 + (gp.z - rv.pos.z) ^ 2) < REVIVE_DIST
+        -- A friend who is up, close for REVIVE_TIME → up.
+        local close = false
+        for k = 1, 3 do
+            local gp = not rv.down_slots[k] and friend_pos(k)
+            if gp and rv.pos and math.sqrt((gp.x - rv.pos.x) ^ 2 + (gp.z - rv.pos.z) ^ 2) < REVIVE_DIST then close = true end
+        end
         if close then
             rv.near_t = rv.near_t or now
-            if now - rv.near_t >= REVIVE_TIME then get_up("your friend got you back up") end
+            if now - rv.near_t >= REVIVE_TIME then
+                get_up("your friend got you back up")
+                if coop_stat then pcall(coop_stat, "got_up") end   -- the session page (v0.42)
+            end
         else
             rv.near_t = nil
         end
-        if rv.downed and now - rv.down_t > DOWN_LIMIT then die_for_real("nobody came for 90 s") end
+        if rv.downed and now - rv.down_t > DOWN_LIMIT then die_for_real("nobody came for 90 s")
+        elseif rv.downed and now - rv.down_t > 2 and any_friend_down() and not friend_here() then
+            -- Everyone else here is down too: a real death (as with two players).
+            die_for_real("everyone is down")
+        end
     end)
     if not ok and not rv.err then rv.err = true log("downed ERR " .. tostring(err)) end
 end)
@@ -192,27 +229,37 @@ end)
 -- The downed friend lies on the floor on our screen (Ethan's Hands_Supine_Loop, motion 200,
 -- played as a full-body move by coop_dummy's action layer) instead of only crouching.
 local SUPINE = 200
-local function friend_pose(down)
-    local net = coop_net_state and coop_net_state()
+local function friend_pose(down, k)
+    local env = coop_slot_envs and coop_slot_envs[k or 1]
+    local nf = env and rawget(env, "coop_net_state") or coop_net_state
+    local net = nf and nf()
     if net then net.forced_action, net.forced_action_layer = down and SUPINE or nil, 0 end
 end
 
+local function who(k) return (k or 1) == 1 and "your friend" or ("friend " .. k) end
+
 function coop_revive_on_event(text)
+    local k = coop_event_slot or 1
     if text:match("^down ") then
+        rv.down_slots[k] = true
         rv.friend_down, rv.friend_down_t = true, os.clock()
-        pcall(friend_pose, true)
-        note("your friend is down - go to them!")
+        pcall(friend_pose, true, k)
+        note(who(k) .. " is down - go to them!")
         return true
     elseif text == "up" then
-        rv.friend_down = false
-        pcall(friend_pose, false)
-        note("your friend is back up")
+        rv.down_slots[k] = nil
+        rv.friend_down = any_friend_down()
+        pcall(friend_pose, false, k)
+        if coop_voice_play then pcall(coop_voice_play, "up", k) end   -- v0.42: heard getting up
+        note(who(k) .. " is back up")
         return true
     elseif text == "gameover" then
-        rv.friend_down = false
-        pcall(friend_pose, false)
-        if rv.downed then pcall(die_for_real, "your friend died while you were down") end
-        note("your friend died")
+        rv.down_slots[k] = nil
+        rv.friend_down = any_friend_down()
+        pcall(friend_pose, false, k)
+        -- Nobody left up to get us: we go too.
+        if rv.downed and not friend_here() then pcall(die_for_real, who(k) .. " died while you were down") end
+        note(who(k) .. " died")
         return true
     end
     return false
@@ -223,19 +270,26 @@ function revive_hud()
     local now = os.clock()
     if rv.downed then
         local left = math.max(0, DOWN_LIMIT - (now - rv.down_t))
-        local s = string.format("You're down! Your friend has to reach you (%d s)", math.floor(left))
+        local s = string.format("You're down! A friend has to reach you (%d s)", math.floor(left))
         if rv.near_t then s = s .. string.format(" - getting up %.0f%%", math.min(100, (now - rv.near_t) / REVIVE_TIME * 100)) end
         return s, 0xFF6B6BFF
     end
-    if rv.friend_down then
-        local g = coop_ghost and coop_ghost()
+    if any_friend_down() then
+        -- The nearest friend who is down.
         local p = player()
-        local d = "?"
-        if g and p then
-            local a, b = g:call("get_Transform"):call("get_Position"), p:call("get_Transform"):call("get_Position")
-            d = string.format("%d m", math.floor(math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2)))
+        local b = p and safe(function() return p:call("get_Transform"):call("get_Position") end)
+        local best, bd
+        for k in pairs(rv.down_slots) do
+            local env = coop_slot_envs and coop_slot_envs[k]
+            local gf = env and rawget(env, "coop_ghost") or (k == 1 and coop_ghost) or nil
+            local g = gf and gf()
+            local a = g and safe(function() return g:call("get_Transform"):call("get_Position") end)
+            local d = (a and b) and math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2) or nil
+            if best == nil or (d and (bd == nil or d < bd)) then best, bd = k, d end
         end
-        return "Your friend is down! Stand next to them to get them up (" .. d .. " away)", 0xFF6B6BFF
+        local name = who(best)
+        return name:sub(1, 1):upper() .. name:sub(2) .. " is down! Stand next to them to get them up ("
+            .. (bd and string.format("%d m", math.floor(bd)) or "?") .. " away)", 0xFF6B6BFF
     end
     if now - rv.msg_t < 5 then return rv.msg, 0xFF7FE6FF end
     return nil

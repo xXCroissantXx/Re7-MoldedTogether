@@ -103,6 +103,109 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
       B starts again and reconnects. Within a few seconds B sees "Caught up with *n* changes from your friend",
       and A's changes are there in B's world.
 
+## 9. Three or four players (v0.29)
+
+- [ ] **Joining**: A connects to B, then clicks **Add** next to C. Within a few seconds B and C see each other
+      too (each sees two characters with nameplates, and two names on the status line).
+- [ ] **Moves**: everyone walks, aims, shoots and swings. Each character copies its own player; each shot's bang,
+      flash and smoke come from the right person.
+- [ ] **Enemies**: a Molded near C: does it chase C, and move the same on everyone's screen? Walk it over to A:
+      does it move smoothly when A's game takes it over? If enemies act oddly, untick **Share enemies with 3-4
+      players** (Options) and note what happened.
+- [ ] **Story** (Share story on): the player who walks into a story moment first starts it for the others who
+      are close (about 12 m).
+- [ ] **Leaving**: one player quits; the others keep playing; they come back and reconnect by themselves.
+
+## 10. New in v0.32-v0.35
+
+- [ ] **Joining**: load your save first. On the title screen, **Go to my friend's chapter** says "load your save
+      first" instead of jumping.
+- [ ] **Bumping**: walk into each other: you bump. Stand together where a scripted scene starts: no pushing, and
+      the scene starts for both. Get caught in a doorway: you pass through after about half a second.
+- [ ] **Crates**: smash a crate with no item in it: it's gone for the friend too.
+- [ ] **Doors after a reload**: one of you dies and reloads; the other opens a door that was locked: it opens for
+      both (nobody walks through a shut door).
+- [ ] **Mia's fight** (Share boss fights on): one Mia, moving the same on both screens; her chainsaw in her hand.
+      Note whether she can hurt the player whose game copies her.
+- [ ] **End of the Mia fight**: both of you go on to the next chapter without a black screen.
+- [ ] **Reviving with 3 players**: one goes down; either of the others gets them up.
+- [ ] **Pushed objects**: push a chair: it moves for the friend; the knife Mia carries doesn't jump around.
+- [ ] **Bug report**: no busy mouse pointer appears over the game while it's made.
+- [ ] **Chains (v0.38)**: one of you cuts the cabinet chain with the bolt cutters: within 10 seconds it's cut
+      for the other too, and the cabinet opens for them. Also try it with the friend joining after the cut.
+- [ ] **Chapter 3 (v0.38)**: after the dinner, Jack turns up for both of you.
+
+## 11. New in v0.39
+
+- [ ] **The dinner (Chapter 3)**: sit down together. Each of you rocks your own chair; the escape plays in each
+      game when that player gets free. Afterwards Jack turns up for both of you.
+- [ ] **A scene your friend starts first**: walk into a story scene a few steps apart. It plays for both; if one of
+      you is further on in it, the other sees the rest on getting there (the status line says so).
+- [ ] **Jack's wall**: each of you picks up the hatch key; Jack breaks through in each game.
+- [ ] **Loading a save**: both load the same save from before a scene; the scene plays again for both.
+- [ ] **Enemies in a cutscene**: one of you watches a cutscene while the other fights; nothing jumps around, and
+      the enemies follow again once it ends.
+- [ ] **A long load**: one of you reloads while the other walks into a scene; the scene doesn't start late
+      for the one who loaded.
+
+## 12. New in v0.40: the co-op menu and lobbies
+
+- [ ] **The menu**: on the title screen press F9. It opens; arrows, Enter and Backspace move around it. The game's
+      own title menu behind it does NOT move or react (note it if it does). F9 closes it.
+- [ ] **Controller**: press both sticks (L3+R3): it opens. D-pad and left stick move (note it if the stick is upside
+      down), A chooses, B goes back.
+- [ ] **In play**: open it; your character and the camera stay still; close it and you can move again.
+- [ ] **Inviting**: Friends > your friend > Invite; they see the invite at the bottom left, press F9, Accept.
+- [ ] **A lobby, no jump**: one hosts (Lobby > Host a lobby); the other sees "lobby is waiting", opens the menu,
+      Ready; the host presses Start ("Where each of you is now").
+- [ ] **A lobby, Chapter 3**: both load a save (Continue); the host picks Chapter 3; both Ready; Start: both games
+      go to Chapter 3 and the dinner starts for both. Try pressing Start while one of you is on the title screen:
+      it waits and says so.
+- [ ] **Joining a host**: the host closes the lobby and hosts again; the other picks them in Friends (Join): they're
+      let in by themselves.
+- [ ] **Quick messages** from the menu with a controller.
+- [ ] **Key for this menu** (Options): pick F10; F10 opens it.
+
+## 13. New in v0.41
+
+- [ ] **CO-OP on the tape recorder**: on the title screen, scroll the list: CO-OP is under EXIT, every row keeps its
+      own name while you scroll, and Enter (A) on CO-OP opens the co-op screen (paper sheets).
+- [ ] **Your friend's guns**: they fire the shotgun, the magnum, the M19: you hear each one's own shot. Reloads too.
+      Their axe swings are heard.
+- [ ] **Disconnecting**: one of you closes the game: within about 30 seconds the other's status says not
+      connected. Start again: you reconnect (one invite). Try **Disconnect from everyone** and a host's remove.
+- [ ] **Lobby Continue**: both on the title screen; the host hosts, picks "Continue", both Ready, Start: both games
+      load their latest save. Note it if the title screen doesn't load (then choose CONTINUE yourself).
+- [ ] **The VHS tape**: one of you puts a tape in the VCR: the other follows into it, and afterwards the tape is
+      gone from both inventories.
+- [ ] **Behind the host**: the one behind uses Lobby > "Get the host's key items and weapons" (experimental).
+
+## 14. New in v0.42
+
+- [ ] **Your friend's voice**: let an enemy hit your friend, or have them block: you hear their grunt from where
+      they are (not as if it's you). Their scream if they die, a grunt when they drop down or climb up, a sound
+      when they're revived. If it sounds like it's inside your head, note it and turn off **Friend's voice**.
+- [ ] **Give items**: co-op screen > **Give items**: give your friend one handgun ammo. It arrives in their
+      inventory and leaves yours. Try **All** with healing; try giving when their inventory is full (nothing moves).
+- [ ] **This session**: after a fight, both of you open **This session**: each sees their own counts and the
+      other's (theirs show after about 20 seconds).
+- [ ] **Difficulty**: if you play on different difficulties, the Lobby says so (in red) and a message tells you.
+- [ ] **Your friend's flashlight** (experimental): both tick Options > **Your friend's flashlight**, go somewhere
+      dark where the flashlight comes on: you see your friend's beam where they look. Note it if the game stutters
+      or the light points the wrong way.
+- [ ] **Get the host's key items and weapons** (it found nothing before v0.42): the one behind tries it again.
+- [ ] **Close**: on sheet A, highlight Close: sheet B says "Back to the game".
+
+## 15. New in v0.43
+
+- [ ] **CO-OP on the tape recorder**: on the title screen, scroll through the whole list: EXIT is there and
+      says EXIT, CO-OP comes after it, and no line is blank. Scroll up and down past both a few times.
+- [ ] **The mouse**: open the co-op screen (CO-OP or F9) and move the mouse: the row under it lights up and a
+      small dot shows where it is. Click a section, click a setting (it changes), right click to go back.
+      Note it if nothing moves (the game may keep the mouse to itself in play; the keys still work).
+- [ ] **I need ammo / I need healing**: one of you picks it under Quick messages; the other sees the message,
+      opens **Give items**, and the one who asked is already picked, with their health.
+
 ## Afterwards
 
 Each player clicks **Make a bug report** (RE7 Co-op window, *Help*) and sends the zip
