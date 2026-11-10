@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.45 (2026-11-10)
+Story and world, tested by bots in real games (two copies of RE7 playing together, nobody at the controls),
+in the Chapter 1 and Chapter 3 main house:
+- **Fixed: a lockpick box your friend opened stayed shut for you.** It stopped halfway through its opening
+  (the part where the game shows the picking player what's inside) even with you standing next to it, and
+  after a minute the mod gave up. It now opens for you within about 8 seconds.
+- **Seen working in real games:** drawers and switches both ways (the fridge, the attic stairs switch),
+  one-off interactions (the pot, the faucet, the newspaper), breakable boxes, lockpick locks on desks and
+  tables, key doors unlocked in one game unlocking in the other, your friend's cutscene playing for you when
+  you're close (and not when you're far away), and changes made where you aren't being remembered.
+- A friend's cutscene you're too far away to join is now written in the log as well as shown on screen, so a
+  bug report tells "too far" from "never arrived".
+
 ## v0.44 (2026-11-10)
 Found by bots: two copies of RE7 on one PC, joined over a local link and driven by scripts through the
 game's own calls, checked after every step that both games agree. Nobody played.

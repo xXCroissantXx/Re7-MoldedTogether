@@ -220,6 +220,13 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
       until you step out, then closes, so it ends up shut in both games.
 - [ ] **Loading**: load a save while connected: your friend hears no grunts from you as you appear.
 
+## 17. New in v0.45
+
+- [ ] **A lockpick box**: one of you opens a lockpick box with a lockpick; within about 8 seconds it's open
+      for the other too, and what's inside can be taken.
+- [ ] **A cutscene far away**: one of you starts a cutscene while the other is in another room: the other
+      isn't pulled in, and sees it when they get there.
+
 ## Afterwards
 
 Each player clicks **Make a bug report** (Molded Together window, *Help*) and sends the zip

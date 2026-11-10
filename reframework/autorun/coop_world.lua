@@ -789,9 +789,14 @@ local function poll_locks(now)
                 note("your friend picked a lock: it's open for you too")
             elseif l.step == 3 then
                 local st = tostring(safe(l.fsm.call, l.fsm, "getCurrentState", 0))
+                if st:find("PauseStart", 1, true) then
+                    l.pause_t = l.pause_t or now
+                    if now - l.pause_t >= 8 then l.until_t = math.min(l.until_t, now - 0.001) end
+                end
                 if now > l.until_t then
                     ws.locks[id] = nil
-                    log("lockpick " .. id .. ": still shut after a minute (lock state " .. st .. ")")
+                    log("lockpick " .. id .. ": still shut (lock state " .. st .. "): opening it by hand")
+                    pcall(lock_hand_open, l.c, id)
                 else
                     if st ~= l.last_st then l.last_st = st log("lockpick " .. id .. ": lock state " .. st) end
                     l.t = now + 2

@@ -419,6 +419,8 @@ local function apply_story(name, ch)
     if d == nil or d > NEAR then
         note(string.format("your friend is watching a cutscene (%s m away: you'll see it when you get there)",
             d and string.format("%.0f", d) or "?"))
+        log(string.format("friend's %s: not joined, %s m away (you'll see it when you get there)", name,
+            d and string.format("%.0f", d) or "?"))
         return
     end
     local busy = busy_here()

@@ -1424,3 +1424,17 @@ Not synced / broken, as reported by the owner:
   the menu, 'give ... 0 ...' for the udp friend. Passing live: link, ghost, move, doors both ways, health,
   talk ammo, give, voice, revive, difficulty/stats. Not yet: enemies (Chapter 3 slot 7 has Em3100 and
   Em8000 asleep until a trigger), pickups (need the game's own pickup call).
+- v0.45 (2026-11-10): story and world bot tests (re7bots.py: world drawer/switch/interaction/key door,
+  sweep, story near/far, remembered). Saves: slot 0 Chapter 1 main house, slot 8 Chapter 3 main house
+  (free; 22 interactions, 5 boxes, 7 drawers, 2 switches, 5 locked key doors), slot 11 the dinner.
+  Drawers/switches: app.InteractDrawer/InteractSwitch SetSwitch(bool) (NowDrawerOpen/NowSwitchOn take a
+  few s far from a minimized player); setInteract(player) is the player's press. DoorPush.unlockDoor()
+  unlocks (sent as 'unlock'). Story: GameEventManager.EventSettings (List<GameEventSetting>, the scenes of
+  the area, <isStarted>), requestEvent(name, nil, false) starts one; c03e20_00 pulled the friend in at
+  0 m, not at 35+ m (NEAR 12). The dinner (c03e00_00, Process 3) waits for the player's look: bots can't
+  move it on; a friend's scene there 'waits: you're in a cutscene', then gives up (by design).
+  Bug: lockpick box (sm1929_KeyPickBox03A, lock sm1795_KeyPickLock01A_KeyLockOpenSet): the remote side's
+  FSM stops in Gimmick_Open_PauseStart (the picker's 'what's inside' pause); setCurrentState Open_End didn't
+  take; lock_hand_open works. Now hand-opened after 8 s in PauseStart. Desk locks run SelectSuccess ->
+  PauseStart -> Open_End by themselves. Remembered changes for unloaded rooms are kept (pending_props);
+  applying them needs walking back (a warp doesn't stream rooms in).
