@@ -698,6 +698,18 @@ local function net_io()
     if now - net.last_status > 1 then
         net.last_status = now
         local st = fs.read("coopnet_status.txt")
+        -- The network plugin rewrites its status several times a second (v0.49): a file that stays the same for
+        -- 12 s, or none at all, means it isn't running (no link, no bot). On 2026-11-12 Windows' Smart App
+        -- Control blocked REFramework's C# loader (REFCoreDeps.dll), the plugin never started, and "Test with
+        -- bot" did nothing, with the status still the one written two days before.
+        net.loaded_t = net.loaded_t or now
+        if st and st ~= "" and st ~= net.last_st_text then net.last_st_text, net.status_changed_t = st, now end
+        local dead = now - net.loaded_t > 25 and now - (net.status_changed_t or net.loaded_t) > 12
+        if dead ~= (net.plugin_dead == true) then
+            net.plugin_dead = dead
+            log(dead and "network plugin not running: coopnet_status.txt hasn't changed (REFramework's C# plugins didn't load?)"
+                or "network plugin running")
+        end
         if st then
             net.stats = st:gsub("\n", "  ")
             net.kv = {}
@@ -4009,9 +4021,12 @@ end)
 -- and whether saving is on.
 local hud = { bad_prev = 0, bad_t = -100, err = false }
 
+function coop_plugin_dead() return net.plugin_dead == true end
+local PLUGIN_DEAD_MSG = "Molded Together's network plugin isn't running: no connection and no bot. If Windows' Smart App Control is on, it blocks REFramework's C# files (see the README's Troubleshooting)."
 local function hud_lines()
     local kv = net.kv or {}
     local out = {}
+    if net.plugin_dead then out[#out + 1] = { PLUGIN_DEAD_MSG, 0xFF6B6BFF } end
     local last = net.history[#net.history]
     local fresh = last ~= nil and (os.clock() - last.t) < (NET_TIMEOUT or 2)
     local ping = net.ping and string.format(" - %d ms", math.floor(net.ping * 1000 + 0.5)) or ""

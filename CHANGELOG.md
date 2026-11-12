@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.50 (2026-11-12)
+Fixes found by bots playing the story together, chapter by chapter, plus a warning for PCs where the co-op
+plugin can't start. Everyone needs v0.50.
+
+- **The second player no longer falls minutes behind in the story.** After a cutscene, the mod held the other
+  player's story steps while "that scene's sequence was still playing out", which it judged by any later scene
+  of the same group being loaded, for up to 10 minutes. Some groups have later scenes that are only branches
+  and never play (Chapter 1's first scene has two), so in the bot playthrough the second player took a story
+  step 6 minutes late, and the host's next cutscenes waited behind it (one started 1 minute 46 seconds late).
+  Now a sequence counts as over as soon as the other player has moved on to a later scene, and, when the host
+  leads the story (the default), 20 seconds after your own last scene. In the rerun, every Chapter 1 scene
+  started for the second player 1 to 2 seconds after the host.
+- **Scenes that come out of order play at the right time for both of you.** Chapter 4 starts with a short setup
+  scene numbered after the one that follows it. The second player's game first played that next scene six
+  minutes early ("your friend is partway through a sequence: start it from its beginning"), and in another run
+  refused the host's next scene for good ("you're already in this sequence and will reach it yourself"). Now a
+  sequence is only started from its beginning for a player who arrives late, not when their own game plays the
+  same scene, and a scene is only held back while your game is still before it. Bot-tested on Chapter 4's
+  opening: every scene started for the second player 1 to 2 seconds after the host.
+- **You're told when the co-op network plugin isn't running.** If Windows' Smart App Control (or a missing .NET
+  10 runtime) stops REFramework from loading its C# plugins, nothing connects and "Test with bot" does nothing,
+  without a word (this happened on a real PC: Smart App Control switched itself on and blocked one of
+  REFramework's files). Now a red line at the top left says so, the co-op screen says why a button can't work,
+  the installer warns when Smart App Control is on, and the README's Troubleshooting explains it.
+
 ## v0.49 (2026-11-12)
 Release candidate: everything that's shared is now on by default and the same for everyone, several Molded at
 once were tested, and a few rare failures that would have shown up in longer sessions are fixed. Everyone needs

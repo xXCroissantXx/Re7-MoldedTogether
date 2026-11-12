@@ -50,7 +50,7 @@ function Ok($text) { Write-Host "      OK  $text" -ForegroundColor Green }
 function Warn($text) { Write-Host "      !!  $text" -ForegroundColor Yellow }
 function Fail($text) { Write-Host ""; Write-Host "FAILED: $text" -ForegroundColor Red; exit 1 }
 
-Write-Host "coop-re7 installer" -ForegroundColor White
+Write-Host "Molded Together installer" -ForegroundColor White
 Write-Host "Co-op folder: $Destination"
 
 # ---------------------------------------------------------------- 1. checks
@@ -63,6 +63,17 @@ else {
     Warn "Install '.NET Runtime 10' (Windows x64) from https://dotnet.microsoft.com/download/dotnet/10.0"
     Warn "and run this installer again. (Continuing; everything else will be set up.)"
 }
+# Smart App Control (Windows 11) blocks unsigned DLLs it doesn't know, REFramework's C# loader among them
+# (REFCoreDeps.dll): then the co-op network plugin never starts (no connection, no test bot). Only read here.
+$sac = $null
+try { $sac = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy" -ErrorAction Stop).VerifiedAndReputablePolicyState } catch { }
+if ($sac -eq 1) {
+    Warn "Windows' Smart App Control is ON. It can block REFramework's C# files, and then Molded Together"
+    Warn "can't connect (the game shows 'network plugin isn't running'). See the README's Troubleshooting."
+} elseif ($sac -eq 2) {
+    Warn "Windows' Smart App Control is in evaluation mode. If Windows switches it on later, it can block"
+    Warn "REFramework's C# files and Molded Together stops connecting. See the README's Troubleshooting."
+} else { Ok "Smart App Control is off" }
 
 function Find-RE7 {
     $steam = $null

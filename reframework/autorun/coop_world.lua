@@ -595,6 +595,7 @@ local function intr_allowed(c)
     for _, w in ipairs(INTR_SKIP) do if names:find(w, 1, true) then return false end end
     return true
 end
+coop_world_intr_names, coop_world_intr_allowed = intr_names, intr_allowed   -- for the bot tests (v0.50)
 
 -- Finding what isn't shared yet (v0.23). The garage-door button and the shadow puzzle's
 -- unlock never reached the other game, and nothing in the logs said what they are. Every

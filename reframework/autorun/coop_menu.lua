@@ -82,6 +82,10 @@ function coop_menu_key_name() return menu_key().name end
 local function command(cmd)
     M.cmdq[#M.cmdq + 1] = cmd
     log("command queued: " .. cmd)
+    -- Nobody will carry it out (v0.49): the network plugin isn't running (see coop_plugin_dead, coop_dummy).
+    if coop_plugin_dead and coop_plugin_dead() then
+        say("The network plugin isn't running, so this can't work. Windows' Smart App Control may be blocking REFramework: see the README's Troubleshooting.", 0xFF6B6BFF)
+    end
 end
 local function pump_commands(now)
     if #M.cmdq == 0 or now - M.cmd_t < 0.15 then return end
@@ -889,6 +893,7 @@ local function party_line()
     local ms = linked_members()
     if #ms == 0 then
         local k = kv()
+        if coop_plugin_dead and coop_plugin_dead() then return "Network plugin not running: see Troubleshooting" end
         if k.mode == "bot" then return "Test bot is on (no friend connected)" end
         return "Not connected to anyone yet"
     end

@@ -370,6 +370,12 @@ end
 local function sequence_open()
     local s = ss.last_seq
     if s == nil or s.ch ~= chapter() or os.clock() - s.t > 600 then return false end
+    -- v0.49 (bot playthrough): a group's later scenes can be loaded and never come (c01e00_00's _01/_02 are
+    -- branches the host never played), and this held every story step of the friend's for up to 10 minutes
+    -- (the guest took step 1100 six minutes late, and the host's next scenes waited behind it). Over when the
+    -- friend has started a later scene group, and, when the host leads (follower), 20 s after our last scene.
+    if ss.friend_grp and ss.friend_grp > s.grp then return false end
+    if follower() and not ss.cut_on and os.clock() - (ss.cut_end_t or -100) > 20 then return false end
     local top = -1
     for n in pairs(played_here()) do
         local g, i = seq_of(n)
@@ -387,6 +393,7 @@ function coop_story_reset_chapter(v)
     if ss.played_chapter == v then ss.played = {} save_played() end
     ss.pending, ss.missed, ss.in_step_until, ss.last_seq, ss.running = {}, {}, nil, nil, {}
     ss.steps = {}
+    ss.friend_grp, ss.friend_played = nil, {}
     ss.obj_done = {}   -- v0.48: starts the friend's objective check-offs over
     if ss.prog_ch == v then ss.prog_seen = {} end
     log("chapter " .. tostring(v) .. " starts over (chapter jump): its scenes count as not played")
@@ -399,16 +406,34 @@ function coop_story_in_sequence()
     return ok and v == true
 end
 -- The scene to start here for the friend's scene `name` (same chapter), or nil and why not.
+-- The furthest scene (index under 10) of a group this game has played, or -1.
+local function seq_top(grp)
+    local top = -1
+    for n in pairs(played_here()) do
+        local g, i = seq_of(n)
+        if g == grp and i and i < 10 and i > top then top = i end
+    end
+    return top
+end
 local function scene_to_start(name)
     if played_here()[name] then return nil, "already played here" end
     local grp, idx = seq_of(name)
     if grp == nil then return name end
     local mine = seq_played(grp)
     if mine then
-        return nil, "your game is in this scene's sequence (" .. mine .. ") and plays it when you get there"
+        -- v0.50 (bot playthrough): only while our game is still before this scene in the sequence. Chapter 4's
+        -- start plays c04e12_01 (a 0 s setup scene) by itself, and the host's c04e12_00 afterwards was refused as
+        -- "a step you'll reach yourself" though the sequence had already gone past it here: it never played.
+        local top = seq_top(grp)
+        if not (idx and top > idx) then
+            return nil, "your game is in this scene's sequence (" .. mine .. ") and plays it when you get there"
+        end
+        log(string.format("friend's %s: your game has played %s_%02d of its sequence, past this one: playing it", name, grp, top))
     end
-    if idx and idx >= 1 and idx <= 9 then
-        -- Partway through a sequence we haven't started: start it from its first scene.
+    if idx and idx >= 1 and idx <= 9 and not (mine and idx and seq_top(grp) > idx) then
+        -- Partway through a sequence we haven't started: start it from its first scene (a late arrival: the friend
+        -- played _00 before we were there). v0.50: dropped again if our own game then plays the friend's scene
+        -- itself (see the pending queue): Chapter 4's start plays c04e12_01 before c04e12_00 in both games.
         local first = grp .. "_00"
         if setting_loaded(first) then return first, "starting its sequence here from " .. first end
         return nil, "it's partway through a sequence your game hasn't started"
@@ -517,6 +542,11 @@ end
 
 local function apply_story(name, ch, phone)
     coop_scene_t = os.clock()   -- the friend's scene is starting: no bumping for a while (v0.34)
+    -- The latest scene group the friend has reached (v0.49, see sequence_open).
+    local fg = ch == chapter() and seq_of(name) or nil
+    if fg and (ss.friend_grp == nil or fg > ss.friend_grp) then ss.friend_grp = fg end
+    -- Which scenes the friend has played (v0.50, see scene_to_start).
+    if ch == chapter() then ss.friend_played = ss.friend_played or {} ss.friend_played[name] = true end
     if phone and ch == chapter() then ss.phone_scene[name] = os.clock() end
     if ch ~= chapter() then
         log("story event in another chapter, ignored: " .. name)
@@ -574,16 +604,19 @@ local function apply_story(name, ch, phone)
         log(string.format("friend's %s: joining from %.0f m away, brought next to them first (%s)", name, d, tostring(tok)))
     end
     local busy = busy_here()
+    -- for: the friend's scene this one stands in for (v0.50): a sequence started here from its _00 because the
+    -- friend played a later scene of it. Dropped if our own game plays that scene itself meanwhile.
+    local instead = start ~= name and name or nil
     if busy then
-        ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1 }
+        ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1, instead = instead }
         log("friend's " .. start .. " waits: you're " .. busy)
     elseif setting_loaded(start) then
         -- Not at once (v0.48): a scene the friend's story step started comes with that step ("prog"), and the
         -- step played it here a second time (the morgue scene twice in a bot test). It waits 1.5 s, and while
         -- a step is queued; the step plays it, and if the step doesn't, it plays after (the loop below).
-        ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1, hold_until = os.clock() + 1.5 }
+        ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1, hold_until = os.clock() + 1.5, instead = instead }
     else
-        ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1 }
+        ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1, instead = instead }
         log("waiting for " .. start .. " to load here")
     end
 end
@@ -823,6 +856,7 @@ local function after_load()
     end
     ss.pending, ss.missed, ss.in_step_until, ss.last_seq, ss.running = {}, {}, nil, nil, {}
     ss.steps = {}
+    ss.friend_grp, ss.friend_played = nil, {}
     ss.obj_done = {}   -- v0.48: starts the friend's objective check-offs over
     log(string.format("save loaded: chapter %d, story clock %d; %d scenes from after it count as not played", ch, clock, n))
     if known and coop_talk_rewind then pcall(coop_talk_rewind, ch, clock) end
@@ -1134,7 +1168,11 @@ re.on_frame(function()
         for _, q in pairs(ss.steps or {}) do if q.ch == chapter() and #q.list > 0 then steps_queued = true end end
         local held = (p.hold_until and now < p.hold_until) or (steps_queued and now - p.first < 60)
         if held then p.t = now end
-        if held then
+        if p.instead and played_here()[p.instead] then
+            -- Our own game played the friend's scene itself (v0.50): the sequence was never "partway" here.
+            ss.pending[name] = nil
+            log(string.format("friend's %s: your game played it itself, so %s isn't started for it", p.instead, name))
+        elseif held then
             -- see apply_story: the friend's step may play it
         elseif now - p.t > PENDING_FOR or p.ch ~= chapter() or d == nil or (d > NEAR and not follower()) then
             ss.pending[name] = nil

@@ -293,6 +293,13 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
       over), and they can get you up when it's over.
 - [ ] **Versions**: (if you can) connect with a friend on v0.48: you're told on screen who needs to update.
 
+## 22. New in v0.50
+
+- [ ] **Scenes in a row**: play Chapter 1's opening scenes together: each one starts for both of you within a
+      few seconds, and the second player's objectives keep up with the host's.
+- [ ] **No plugin**: (only if it happens) a red "network plugin isn't running" line at the top left, and the
+      README's Troubleshooting explains Smart App Control.
+
 ## Afterwards
 
 Each player clicks **Make a bug report** (Molded Together window, *Help*) and sends the zip

@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.49; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.50; formerly coop-re7)
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
 bosses, which can go for any of you; the same story, doors, puzzles and key items. Each of you sees the others
@@ -247,6 +247,7 @@ changes them.
 
 | What you see | Try |
 |---|---|
+| "Molded Together's network plugin isn't running" (red, top left), or **Test with bot** / **Invite** do nothing | REFramework's C# plugins didn't load. The usual cause is Windows 11's **Smart App Control**, which blocks REFramework's unsigned files (REFramework's log, `re2_framework_log.txt` in your co-op folder, then says *"An Application Control policy has blocked this file"*; the installer warns when Smart App Control is on). It's a Windows security setting, so it's your call: Windows Security > App & browser control > Smart App Control settings. On many Windows versions it can't be switched back on afterwards without reinstalling Windows. Also check that the **.NET 10 runtime** is installed (see Install). |
 | Your friend isn't in the list | They need Molded Together running and to be your Steam friend; or tick **Show all online friends** |
 | "Waiting for your friend" | They need to **Accept** in their co-op screen; if their game is closed, it clears by itself after 30 seconds |
 | "different version" or "Friend's packets don't match" | You're on different versions; everyone installs the same release |

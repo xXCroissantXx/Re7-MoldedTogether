@@ -1692,7 +1692,13 @@ end
   that stretch; coop_story's doOnDestroy hook only reads the setting's name. It came back in run final49f
   (2 of 3 full runs, 0 of 4 short ones): both times the suite runner warped copy 0 home (53 m, out of the
   scene's area) right as the scene ended, so the setting's area likely unloaded before the controller's
-  teardown. Runner now waits 3 s after a scene; teleport_to_friend refuses for 3 s after any
+  teardown. Plugin not running (2026-11-12, the owner's PC): Smart App Control (CI\Policy
+  VerifiedAndReputablePolicyState = 1, CodeIntegrity events 3033/3077) blocked
+  plugins\managed\dependencies\REFCoreDeps.dll in local/re7-test ('An Application Control policy has blocked
+  this file', 0x800711C7), so REFramework.NET loaded no source plugins and CoopNet never ran; the same bytes
+  loaded in the bot copies (SAC's verdict is cached per file). coop_dummy now flags net.plugin_dead when
+  coopnet_status.txt hasn't changed for 12 s (after 25 s): red HUD line, coop_menu command() and party line
+  say so (harness plugin_test.py, 5 checks); the installer reads the SAC state. Runner now waits 3 s after a scene; teleport_to_friend refuses for 3 s after any
   GameEventController.doOnDestroy (coop_scene_end_t); the phone-scene regroup waits 3.5 s. Revive: friend_here() only counted a SHOWN ghost unless we were in
   a scene, so a friend in their own scene (ghost hidden) counted as gone: suite run final49a, copy 0 in
   c03e20_00 (puts its player ~53 m off), copy 1 killed by Jack -> real game over (GameManager
@@ -1705,3 +1711,28 @@ end
   (release candidate: what's shared, every option with its default, known limits incl. nothing past
   Chapter 3 played in co-op). Bot-copy REFramework logs reach 200+ MB from minimized-window device resets
   (test copies only).
+- v0.50 (2026-11-12, bot story playthrough). New tool: local/bottest/story_run.py + story_lib.lua: copy 0 (host)
+  takes the game's own story steps (GameFlowFsmManager.Flows entries -> GameFlowActiveControl.sendNo; the real step
+  is getProgressiveNo(hash), the part's Fsm current state lags; steps = Fsm state names (hasState every 5 to
+  6000) + FlowEndNo), plays each loaded unplayed cNNeNN_00 scene (requestEvent; scenes place the player
+  themselves, EventSetting positions are 0,0,0, and load only near the player, so --tour visits spots.json then
+  doors nearest-first), jumps along the chapter order when a chapter's steps are done (Chapter123 plays the
+  transition and lands in Chapter 3 at c03_1 = 100), and after every round compares both games (parts, scenes,
+  objectives, locked/stuck, game over, enemies run by exactly one game, doors/props after a 5 s re-check, new
+  ERR lines, crashes; recovers from a crash by restarting and stepping back). Minimised copies crashed silently on
+  display-changing scenes (D3D12 re-initialising in a loop): the runner shows the windows (not focused).
+  Found: coop_story sequence_open held the friend's story steps while any later scene of our last scene's group
+  was loaded and unplayed, up to 600 s; c01e00_00's _01/_02 are branches the host never plays, so the guest took
+  step 1100 six minutes late and the host's c01e01_00 waited 1:46 behind it (pending scenes wait on queued steps,
+  60 s). Now closed when the friend has started a later group (ss.friend_grp, from apply_story) and, as a
+  follower, 20 s after our last scene. Rerun: every Chapter 1 scene 1-2 s late in the guest (scene_lag.py).
+  Chapter 4 (Chapter324 lands in chapter 6, c04_1 = 25): the game plays c04e12_01 (0 s) by itself in both,
+  before c04e12_00. Guest: the friend's _01 queued _00 as 'start its sequence from _00' and played it 6 min
+  early; in another run seq_played refused the host's _00 later ('in this sequence, you'll reach it'). Now the
+  pending stand-in carries instead = the friend's scene and is dropped when ours plays that scene itself, and
+  scene_to_start holds a scene only while seq_top(grp) < its index (harness: chapter-start scenario). c04e70_00
+  (after c04_1 200) runs forever for bots in both games: no end/skip API on GameEventController/Manager, pad
+  presses (A, Decide, X) don't move it; a player-input sequence the bots can't do.
+  Plugin not running: coop_dummy net.plugin_dead (coopnet_status.txt unchanged 12 s, after 25 s): red HUD line,
+  coop_menu command()/party line; installer reads CI\Policy VerifiedAndReputablePolicyState (Smart App Control
+  blocked REFCoreDeps.dll on the owner's PC: 0x800711C7, CodeIntegrity 3033/3077). harness plugin_test.py.
