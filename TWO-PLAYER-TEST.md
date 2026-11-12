@@ -233,6 +233,52 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
       the printed form at the top of each, settings with < and > at the ends. Everything still reads clearly
       (note anything hard to read, and at which screen size).
 
+## 19. New in v0.47
+
+- [ ] **Jack follows between games**: while Jack hunts one of you, the other sees him in the same place doing
+      the same thing. When the other one gets well closer to him, he goes for them instead.
+- [ ] **The Molded**: kill one: it dies in your friend's game too, and only that one. Hit one and check it
+      dies after about the same number of shots in both games. A Molded may be in a different place on each
+      screen (each game runs its own).
+- [ ] **Your moves on your friend's screen**: climb a ladder, drop down a ledge, answer a phone, get grabbed
+      by Jack (or a Molded), and in the morgue fight with Jack kick the body bags, while the other one watches
+      your character. Note which moves show and which don't; the bug report's log names every move that
+      couldn't be shown.
+- [ ] **One game leads the story** (experimental): both switch it on (Options). The host walks into a story
+      scene while the other is in another room: the other is pulled into it too, and when it ends both can
+      move. Note any scene that leaves someone stuck.
+- [ ] **Enemies chase both players** (experimental): both switch it on (Options). Up close to Jack, he goes
+      for whichever of you is nearer. Note anything odd (he freezes for a moment, swaps back and forth).
+
+## 20. New in v0.48
+
+- [ ] **Items**: both put a key item in at the same time (the pendulum, a dog head), and one of you uses a
+      coin cage while the other is in the inventory: no crash, and nobody loses an item they didn't use.
+- [ ] **Loading**: finish the Mia tape together, and load a save right after a scene: no stuck loading screen.
+- [ ] **Molded for both**: when a Molded comes out for one of you, the other sees one come out at the same spot.
+- [ ] **One Molded**: fight a Molded together: it's in the same spot doing the same thing on both screens, it
+      goes for whoever is nearer, and it can hurt either of you. Walk away from it: it turns on the other player.
+- [ ] **Cremator puzzle** (the morgue's incinerator trays): one of you solves it: the other's trays match
+      and their key tray opens too, even if they got there later.
+- [ ] **Title screen**: scroll the tape recorder's list up and down a few times: every row keeps its own
+      name, and CO-OP is never blank.
+- [ ] **Objectives**: one of you completes an objective: it's checked off for both.
+- [ ] **Key items**: one of you places a dog head (or the statue's shotgun, the pendulum): it shows in the
+      other game too, the other player keeps their own items, and the door opens for both.
+- [ ] **Story moves on**: after a story beat one of you triggers (a door, a boss, a phone call), both of
+      you get the next objective.
+- [ ] **Boss fight deaths**: let Jack grab and kill one of you while the other is up: that player goes
+      down, can be helped up, and is still in the same fight.
+- [ ] **Phones and cutscenes** (Share story on): one of you answers a phone: the other keeps control and
+      hears the call. A real cutscene still plays for both of you.
+- [ ] **Puzzles and tapes**: one of you solves a shadow puzzle: it's solved for the other. One of you puts
+      a tape in: the other is taken into it within half a minute.
+- [ ] **Scripted moves**: one of you pulls the sheet metal under the deck or lifts a pot lid: the other sees
+      that character do it, keeps control, and finds it opened.
+- [ ] **Quick moves**: kick a body bag in the morgue fight: your friend sees you stay on screen.
+- [ ] **Mouse on the co-op screen during play**: point and click work.
+- [ ] **Stuck in a scene**: Teleport to your friend still works; Reload last save refuses and says why.
+
 ## Afterwards
 
 Each player clicks **Make a bug report** (Molded Together window, *Help*) and sends the zip

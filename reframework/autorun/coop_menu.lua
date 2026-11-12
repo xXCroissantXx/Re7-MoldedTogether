@@ -347,11 +347,24 @@ end
 -- The title screen's Continue, the way the menu does it itself (v0.41): highlight the CONTINUE
 -- row, then the title menu's own step change to that row's step (ContinueBefore), on its next
 -- update. If any of that fails, CONTINUE stays highlighted and the player is asked to press it.
+-- A managed array's items: get_elements, or item by item when it has none (v0.48, see comp_list).
+local function array_items(arr)
+    if arr == nil then return {} end
+    local ok, l = pcall(function() return arr:get_elements() end)
+    if ok and l then return l end
+    local out = {}
+    local ok2, n = pcall(arr.call, arr, "get_Count")
+    for i = 0, (ok2 and type(n) == "number") and n - 1 or -1 do
+        local it = safe(arr.call, arr, "get_Item", i)
+        if it then out[#out + 1] = it end
+    end
+    return out
+end
 local function title_continue()
     local sc = sdk.call_native_func(sdk.get_native_singleton("via.SceneManager"), sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
     local arr = sc and safe(sc.call, sc, "findComponents(System.Type)", sdk.typeof("app.TitleSubMenu"))
     local tsm
-    for _, t in ipairs(arr and safe(arr.get_elements, arr) or {}) do
+    for _, t in ipairs(array_items(arr)) do
         local go = safe(t.call, t, "get_GameObject")
         if go and safe(go.call, go, "get_Name") == "GUI_menu" then tsm = t end
     end
@@ -767,10 +780,18 @@ local function hold_game(on)
                 log("input level now " .. tostring(active) .. " (ours " .. tostring(lvl) .. ")")
             end
         end
+        -- v0.48: the game's own pointer, as its menus ask for it. In play the game pins the mouse to
+        -- turn the camera, so our screen saw a pointer that never moved (2026-11-10); on the title
+        -- screen it was already free.
+        local hid = sdk.get_managed_singleton("app.HIDManager")
+        if hid then
+            M.lock.cursor = pcall(hid.call, hid, "requestShowMouseCursor(System.String)", lock_key())
+            M.lock_hid = hid
+        end
         M.locked = true
         M.lock_mm = mm
-        log(string.format("menu open: player %s, camera %s, input level %s held", tostring(M.lock.player),
-            tostring(M.lock.camera), tostring(M.lock.level)))
+        log(string.format("menu open: player %s, camera %s, input level %s held, pointer %s", tostring(M.lock.player),
+            tostring(M.lock.camera), tostring(M.lock.level), tostring(M.lock.cursor)))
     else
         if not M.locked then return end
         -- The same MenuManager we held (a load may have made a new one: then nothing to give back).
@@ -783,7 +804,12 @@ local function hold_game(on)
             local lvl = input_level()
             if lvl and M.lock.level then pcall(m2.call, m2, "resetInputLevel(app.UICommand.InputLevel)", lvl) end
         end
-        M.locked, M.lock, M.lock_mm = false, {}, nil
+        local hid = sdk.get_managed_singleton("app.HIDManager")
+        local h2 = M.lock_hid
+        if M.lock.cursor and h2 ~= nil and hid ~= nil and (h2 == hid or safe(h2.get_address, h2) == safe(hid.get_address, hid)) then
+            pcall(h2.call, h2, "removeShowMouseCursor(System.String)", lock_key())
+        end
+        M.locked, M.lock, M.lock_mm, M.lock_hid = false, {}, nil, nil
         log("menu closed: game controls given back")
     end
 end
@@ -1218,8 +1244,16 @@ function PAGES.options()
     items[#items + 1] = setting_toggle("Share interactions", "share_interactions", true, true,
         "Fridges, switches, locks and chains done by one of you are done for all.")
     items[#items + 1] = setting_toggle("Share phone calls", "share_phones", true, true, "One of you answers, everyone gets the call.")
+    items[#items + 1] = setting_toggle("Join your friend's scripted moves", "intr_pull_me", false, false,
+        "Off: the phone, a fridge, a pot your friend uses plays on their character and you keep control. On: you're put through it too. Cutscenes always play for both.")
     items[#items + 1] = setting_toggle("Share pushed objects", "share_physics", true, true, "Chairs and bottles you push move for everyone.")
     items[#items + 1] = setting_toggle("Share boss fights", "share_bosses", true, true, "One game runs Mia, the others copy her.")
+    items[#items + 1] = setting_toggle("One boss for both", "share_jack_fight", true, true,
+        "On: Jack in the morgue and Mia are one for all of you, run by the game of whoever is nearer, so they go for any of you. Off: each game runs its own; health and defeat are shared.")
+    items[#items + 1] = setting_toggle("One Molded for both", "share_molded_moves", true, true,
+        "On: each Molded is one for all of you, run by the game of whoever is nearer, so it's in the same place on every screen and goes for any of you. Off: each game runs its own; health and deaths are shared.")
+    items[#items + 1] = setting_toggle("Molded go after any of you", "share_molded_target", true, true,
+        "With \"One Molded for both\" off: a Molded that's fighting goes for whichever of you is nearest, in every game, so it chases the same person on both screens.")
     items[#items + 1] = setting_toggle("Bump into your friend", "bump_friend", true, false,
         "Lets go in scripted scenes and when you're stuck.")
     items[#items + 1] = setting_toggle("Follow your friend into VHS tapes", "follow_tapes", true, false)
@@ -1227,13 +1261,17 @@ function PAGES.options()
         "Use a healing item next to them: it heals them, not you.")
     items[#items + 1] = setting_toggle("Show your friend's weapon", "show_weapon", true, false, nil,
         function() if show_friend_weapon_again then pcall(show_friend_weapon_again) end end)
-    items[#items + 1] = setting_toggle("Hide your friend on ladders", "hide_on_ladders", true, false, "There's no climbing animation.")
+    items[#items + 1] = setting_toggle("Hide your friend on ladders", "hide_on_ladders", false, false, "Your friend climbs with the game's own ladder animation; on hides them instead.")
     items[#items + 1] = setting_toggle("Nameplate over your friend", "nameplate", true, false)
     items[#items + 1] = setting_toggle("Friend's footsteps", "footsteps", true, false)
     items[#items + 1] = setting_toggle("Your friend's voice", "friend_voice", true, false,
         "Their grunts when they're hit, block or land, their scream if they die, getting back up.")
     items[#items + 1] = setting_toggle("Your friend's flashlight (experimental)", "friend_light", false, false,
         "In the dark, their flashlight shines where they look (once your own has been on).")
+    items[#items + 1] = setting_toggle("One game leads the story (experimental)", "story_follow_host", false, false,
+        "The host's story scenes play for both of you wherever you are, and the host's progress counts for both. Both switch it on.")
+    items[#items + 1] = setting_toggle("Enemies chase both players (experimental)", "enemy_chase_both", false, false,
+        "Up close, an enemy turns on whichever of you is nearer (its game changes to that player's). Both switch it on.")
     items[#items + 1] = setting_toggle("On-screen status", "hud", true, false)
     do
         local cur = 1
@@ -1589,15 +1627,39 @@ end
 -- it's picked) and one more ItemMax give an eighth row; the slot showing it gets the text
 -- "CO-OP", and a slot that scrolls on gets its own text back (the literal text cleared, the
 -- row's message id set again). Picking it (Enter, A) opens this menu.
-local TITLE = { idx = nil, menu_addr = nil, marked = {}, broken = false, t = -100 }
+local TITLE = { idx = nil, menu_addr = nil, marked = {}, fix = {}, broken = false, t = -100 }
+-- Every component of a type in the scene, or nil when the list can't be read. On the title screen the
+-- list often comes back without get_elements (every time in the test copies, 2026-11-12): read that
+-- as "no title menu" and the CO-OP row lost its text (the blank line people saw), so it's read by
+-- get_Count / get_Item then, and a list that can't be read at all keeps the menu we had.
+local function comp_list(tn)
+    local sc = sdk.call_native_func(sdk.get_native_singleton("via.SceneManager"), sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
+    if sc == nil then return nil end
+    for _ = 1, 3 do
+        local ok, arr = pcall(sc.call, sc, "findComponents(System.Type)", sdk.typeof(tn))
+        if ok and arr ~= nil then
+            local ok2, l = pcall(function() return arr:get_elements() end)
+            if ok2 and l then return l end
+            local ok3, n = pcall(arr.call, arr, "get_Count")
+            if ok3 and type(n) == "number" then
+                local out = {}
+                for i = 0, n - 1 do
+                    local it = safe(arr.call, arr, "get_Item", i)
+                    if it then out[#out + 1] = it end
+                end
+                return out
+            end
+        end
+    end
+    return nil
+end
 local function title_menu()
     local now = os.clock()
     if TITLE.menu and now - TITLE.t < 2 then return TITLE.menu end
     TITLE.t = now
+    local list = comp_list("app.TitleSubMenu")
+    if list == nil then return TITLE.menu end   -- unreadable this time: keep what we had
     TITLE.menu = nil
-    local sc = sdk.call_native_func(sdk.get_native_singleton("via.SceneManager"), sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
-    local arr = sc and safe(sc.call, sc, "findComponents(System.Type)", sdk.typeof("app.TitleSubMenu"))
-    local list = arr and safe(arr.get_elements, arr) or {}
     for _, t in ipairs(list) do
         local go = safe(t.call, t, "get_GameObject")
         if go and safe(go.call, go, "get_Name") == "GUI_menu" then
@@ -1628,25 +1690,50 @@ local function texts_of(item)
     return out
 end
 -- The text, on whichever slot shows our row; the others get theirs back.
+-- "Scrolling turns everything to New Game" (2026-11-11): while the list scrolls, a slot's ListIndex
+-- passes through other rows for a few frames, and the slot that had shown CO-OP was given back the text
+-- of whatever row it read then (often row 0, NEW GAME), which the game didn't redo until the next scroll.
+-- Now the CO-OP text comes off at once, and the slot's own text is put back only once the list has stood
+-- still for a few frames, from the row it settled on (and checked again on every settled frame).
+local SETTLE_SEC = 0.12
 local function title_texts()
     local sl, steps = TITLE.sl, TITLE.steps
     if sl == nil or steps == nil or TITLE.idx == nil then return end
     local items = sl:call("get_Items")
-    for i = 0, items:call("get_Count") - 1 do
+    local n_items = items:call("get_Count")
+    -- Has the list stood still? (every slot's row and the scroll position as last frame)
+    local sig = { tostring(safe(sl.call, sl, "get_ScrollIndex")), tostring(safe(sl.call, sl, "get_SelectedIndex")) }
+    local slots = {}
+    for i = 0, n_items - 1 do
         local it = items:call("get_Item", i)
-        local slot = it:call("get_Name")
         local li = it:call("get_ListIndex")
-        for _, t in ipairs(texts_of(it)) do
+        slots[#slots + 1] = { it = it, slot = it:call("get_Name"), li = li }
+        sig[#sig + 1] = tostring(li)
+    end
+    local s = table.concat(sig, ",")
+    local now = os.clock()
+    if s ~= TITLE.sig then TITLE.sig, TITLE.still = s, now end
+    local settled = now - (TITLE.still or now) >= SETTLE_SEC
+    local n_steps = steps:call("get_Count")
+    for _, x in ipairs(slots) do
+        local li, slot = x.li, x.slot
+        for _, t in ipairs(texts_of(x.it)) do
             if li == TITLE.idx then
                 if t:call("get_Message") ~= "CO-OP" then t:call("set_Message", "CO-OP") end
-                TITLE.marked[slot] = true
-            elseif TITLE.marked[slot] then
-                pcall(t.call, t, "set_Message", nil)
-                local sp = (li and li >= 0 and li < steps:call("get_Count")) and steps:call("get_Item", li) or nil
-                if sp then pcall(t.call, t, "set_MessageId", sp:get_field("ElemMsgID")) end
+                TITLE.marked[slot], TITLE.fix[slot] = true, nil
+            else
+                if TITLE.marked[slot] then
+                    pcall(t.call, t, "set_Message", nil)   -- off at once
+                    TITLE.fix[slot] = true                  -- its own text when the list settles
+                end
+                if settled and TITLE.fix[slot] then
+                    local sp = (li and li >= 0 and li < n_steps) and steps:call("get_Item", li) or nil
+                    if sp then pcall(t.call, t, "set_MessageId", sp:get_field("ElemMsgID")) end
+                end
             end
         end
         if li ~= TITLE.idx then TITLE.marked[slot] = nil end
+        if settled and li ~= TITLE.idx then TITLE.fix[slot] = nil end
     end
 end
 if re and re.on_pre_gui_draw_element then
@@ -1664,7 +1751,7 @@ end
 local function title_row(now)
     TITLE.selected = false
     if TITLE.broken or (settings and settings.title_coop_row == false) then return end
-    if not on_title() then TITLE.idx = nil return end
+    if not on_title() then TITLE.idx, TITLE.menu = nil, nil return end
     local tsm = title_menu()
     if tsm == nil then TITLE.idx = nil return end
     local addr = tsm:get_address()
@@ -1674,6 +1761,7 @@ local function title_row(now)
     if steps == nil or sl == nil then return end
     if TITLE.menu_addr ~= addr then
         TITLE.menu_addr, TITLE.idx, TITLE.marked, TITLE.seen_n, TITLE.moves, TITLE.texts = addr, nil, {}, nil, 0, {}
+        TITLE.fix, TITLE.sig, TITLE.still = {}, nil, nil
     end
     -- Ours, if it's there already (it stays in the list after a reset of scripts).
     local n = steps:call("get_Count")
@@ -1804,6 +1892,14 @@ local function read_mouse(now)
     local pok, px, py = pcall(function() return p.x, p.y end)
     if not pok or type(px) ~= "number" or type(py) ~= "number" then return out end
     p = { x = px, y = py }
+    -- v0.48: while we hold the game's pointer (in play), where the game says it is.
+    if M.lock and M.lock.cursor and M.lock_hid then
+        local gok, gx, gy = pcall(function()
+            local q = M.lock_hid:call("get_mouseScreenPoint")
+            return q.x, q.y
+        end)
+        if gok and type(gx) == "number" and type(gy) == "number" and (gx ~= 0 or gy ~= 0) then p = { x = gx, y = gy } end
+    end
     local w, h = screen()
     if p.x < 0 or p.y < 0 or p.x > w or p.y > h then return out end   -- outside the game's window
     if mo.x == nil then mo.x, mo.y = p.x, p.y end

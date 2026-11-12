@@ -1444,3 +1444,224 @@ Not synced / broken, as reported by the owner:
   (letter box, Date/N.R./Source blanks, Mono/Stereo boxes, No. = version), '<' value '>' like Options, a
   scroll bar, the dark help band. menu_preview.py/render_preview.ps1 record and draw quads and circles,
   on a table-brown background.
+- v0.47 (2026-11-10): enemies chase both players (coop_aggro.lua, experimental, settings.enemy_chase_both).
+  Every enemy brain derives from app.EnemyThinkBase (_Target, setTarget(GameObject, ReasonType: Outer,
+  SensedVision, SensedHearing, SensedFriend, Specified, Damaged), updateTarget() each frame). The game that
+  runs an enemy aims it at the clearly nearer player (0.7x the distance, within 25 m), re-applied after each
+  brain type's updateTarget (21 types hooked). Attacks on the friend: Collision.HitController.get_IsRequest
+  going on within 2 m and in front -> 'ehit <to> <dmg> <enemy>' -> the friend's game: addManualDamage
+  (newFakeDamageInfo) + playDamageS/M/LMotion (live: 150 sent -> 225 taken at that difficulty, flinch and
+  voice). Live: setTarget(ghost) kept on Jack (slot 6) but his AI wasn't hunting (the house director,
+  app.AI.MansionAISetController, wakes enemies); bots can't wake enemies yet. Plan for shared story and
+  bosses: local/build/design_shared_world.md.
+- v0.47b (2026-11-10, Molded bot tests in slot 8's basement; local/bottest/molded_*.py): the Molded spawn
+  through app.EnemyGeneratorManager.requestSpawn(app.EnemySpawnInfo, 0) (works in test copies; refused
+  when the spawn point is in view or right next to the player). Found and fixed: (1) CoopNet's v0.39
+  whole-snapshot check wanted '
+end
+' but Lua's fs.write writes '
+
+': snapSent stayed 0 from v0.39
+  to v0.46, so no enemy ever followed (each game ran its own). (2) The five pooled Em4000 ('Moldeads'
+  folder, no EnemySave) all had id p:<folder>/Em4000: ids now come from the spawn point (EnemySpawnInfo
+  EnemyInstance -> MyGUID, 's:<guid>', same in both games), a duplicate id is never synced, and a body
+  left over when its spawn point gets another is released (coop_enemy_orphan). (3) enemy_list() wanted a
+  list made only of EmNNNN; in the basement 3 sm9198_DaveDeadBody_ItemGetGimmick joined it and no list
+  qualified (no scan at all there): now the list with the most EmNNNN, others skipped. (4) Physics sync
+  sent the Molded's ragdoll parts (em4000_*_RB) as pushed props: em/pl/ch body parts skipped.
+  The Molded's movement is no longer shared: a Molded copy can't be moved (MovementController.warp,
+  Transform.set_Position/set_LocalPosition and via.physics.CharacterController.applyWorldOffset are all
+  undone the next frame; the transform's parent is 'MoldedPool'; OverwritePosition is true; turning the
+  MovementController off didn't help: likely the Havok RigidBodyCharacter). A hidden Molded (not yet out
+  of its wall) doesn't move either. coop_aggro.lua (aim at the friend's ghost + 'ehit') was dropped: a
+  Molded aimed at the ghost walked up to it and never attacked (no hurtbox). 'Enemies chase both players'
+  is now an eager handoff in check_handoffs (friend 0.7x nearer and 1 m+), which matters for Jack.
+- v0.47c (2026-11-10, friend's moves; local/bottest/anim_*.lua, stage_bank.py): the 'third person mod' is
+  a Cheat Engine camera table (Nexus RE7 mod 12; re7.CT): no animations of its own, it shows Ethan's body
+  from outside and reads states (ladder flag = PlayerEventActionManager.isOnLadder at +0x53, Molded grab
+  flag, chainsaw-Jack 'body bag area'). The ShadowBody animator has no banks: it copies Pl0000's pose, so
+  every move seen in third person is Pl0000's Motion. The 2026-11-03 'ladder' probe never left the ground
+  (turn trees 4/5), so 'no ladder animation' was wrong; the normal sets (pl0000.motbank, 29 banks, ids 0-2)
+  hold no ladder/grab clip. Moves from banks the game adds at runtime (DynamicMotionBank, ids 3-31; the
+  2026-11-08 session logged Chapter 1 fight moves from bank 3) are now shared: the clip rides with its bank
+  in bits 27-31 of the packet's chapter field (CoopNet parses a uint32), and 'mbank <id> <overwrite>
+  <motlist path>' (share_banks, 2/s on change, every 15 s) lets the other game add the same list to the
+  friend's character (add_ghost_banks: latest list per id, after the character's own; then
+  Motion.setupMotionBank(), without which an added bank stayed inactive; a slot swap or truncation is
+  not taken up otherwise). getMotionInfo(bank, id) is checked before playing: a missing clip leaves the
+  layer's last clip frozen with its EndFrame (EndFrame is no binding test), so the layer is muted. The
+  phone (sm0113_Phone01A_AnswerPhone, InteractEventAction with its own animator) plays the handset on the
+  phone's Motion; Pl0000 only played layer-0 clip 41 (below the shared range). Verified with a staged
+  bank (em2000.motlist as bank 6: clip 15 'em2000_Battle1_Em-Crawl-Normal_Loop' played on the friend);
+  real ladders/grabs/kicks still to be seen in a session.
+- v0.48 (2026-11-10, after the first v0.47 session; both players' reports are the evidence). Crashes: (1) 'kused'
+  made the other game call Inventory.reduceItem at once; three crashes came 1-2 s after such a removal while
+  that player was using the item (pendulum in both games at 19:07:34/36; dog heads 19:11:35; coin during an
+  injection 19:18). Removed: nothing is taken from an inventory; the tryUseItem hook only logs the name.
+  (2) ~250 game exceptions/s (GameObject.getComponent, Inventory.getTotalStackNum) at the end of the Mia tape
+  and on a load after a forced scene, then a hang or crash: coop_busy() (coop_dummy.lua; GameManager
+  <IsSceneLoading>k__BackingField, RequestChapterJump, RequestPlayerChange, player object changed; +1 s; gives
+  up after 180 s) and a local 're' proxy in 7 scripts whose on_frame skips while busy. Measured: IsSceneLoading
+  true for ~10 s of a load, PlayerObj nil then new in the middle. (3) request_reload refuses while
+  RunningEventControllers > 0 or busy. Sync: 'spawn <guid> <ch>' + EnemyGeneratorManager.requestSpawn on the
+  other side (asked every 2 s for 20 s; bot test: alive in copy 1 2 s after copy 0); 'objdone <id> <ch>' from a
+  1 Hz diff of ObjectiveManager.getEnableOvjectives (never across a busy period; remembered until that
+  objective is listed, they register seconds after a load); hide for 'their cutscene' only after 1.5 s; clip
+  lookup order friend's set, item set 200, set 0; teleport_to_friend by the last link position (works while
+  hidden); joining a friend's scene from > 2.5 m teleports first; HIDManager.requestShowMouseCursor /
+  removeShowMouseCursor while the co-op screen is open (bot test: request stack 0 -> 1 -> 0).
+  Findings: ItemSelectReaction.tryUseItem(item) only validates (Success without the item, nothing happens):
+  the gimmick itself runs elsewhere, so 'one places the dog heads, both games do it' needs per-gimmick work.
+  sdk.hook callbacks don't fire for calls made from Lua (bot tests can't exercise hooks). findComponents comes
+  back without array methods about 1 call in 50 (bot_prelude find_all retries). Forcing c03e22_00 did not move
+  a game on to LevelFsm_c03_3. Open: boss-fight death (a load 5 s after 'down'), lockers ('dang' pushes),
+  result-only scripted interactions (idea: EventActionController.endForceActiveTask on the receiver).
+  Full models: on 2026-11-10 the play copy had the mod's pl2000/pl2100 mesh and mdf2 files under
+  natives/stm/character as well as natives/stm/coop (all 65 natives files rewritten at 19:02, by what is
+  unknown), so FullModels() said '1' and the player saw Mia's head from inside in the tape. CoopNet
+  HealFullModels() at start moves any character/ch8/ch9 model file that also exists under coop to
+  natives/stm/coop_spare; status gets modelsMoved=N; fullModels=move if one is still there.
+  Interactions (2026-11-11, slot 12, sheet metal sm0003_Totan01A_Open at 7.7,-1.2,17.1): successInteract() on
+  the receiver walked its player 3.5 m and ran the first-person animation. The object holds
+  InteractEventAction_Open (app.InteractEventSetting) > InteractEventAction_Open_PL (app.GameEventAction +
+  MotionJackFsm, isTargetPlayer). Disabling that component: no effect. Hooking
+  EventActionController.requestTask: never called. endForceActiveTask on the player: player free but the
+  object never animates. GameEventAction.SetTargetObj/TargetObjTemp = the ghost anchor (VrDummyPlayer):
+  player untouched, anchor plays 0/2 frame-locked with the object, object ends colliders off like the
+  real thing. coop_world retarget_event + coop_dummy ghost_event (anchor pose copied by joint name to the
+  visible body at pre-PrepareRendering; 157 joints). The copied pose has not been looked at on screen.
+  Key items: app.ItemSelectReaction { ReactionSettings[{ItemID, StateName, Result}], FsmObj } on every item
+  gimmick; via.fsm.Fsm.setCurrentState(StateName) on FsmObj's Fsm does the item's effect with no item and no
+  player animation (dog heads' door ItemReaction<Item@-1.6,0.0,14.9: SelectSuccessA/B/C -> heads drawn,
+  door unlocked). The Fsm has no current state while the player is far (study -> hall): a set then is lost,
+  so 'iuse <key> <state> <ch> <item>' waits in ws.iuse_pending, one per gimmick per 2 s. The statue's FsmObj
+  is its child InteractShotgun (states SelectToyShotgun/SelectShotgun/SelectDoubleShotgun/
+  SelectBrokenShotgun). Slot 0 is the autosave: it now holds the Mia tape, so the suite runs on slot 8/12.
+  The mod sends nothing while coop_busy (a title load takes ~55 s with two copies): start_pair waits for it.
+  Story scenes: app.GameEventSetting.get_eventActions lists the parts; the player's is c03e20_00_pl0000
+  (isTargetPlayer). SetTargetObj/TargetObjTemp = ghost anchor before requestEvent: scene loads ~10 s, runs
+  12 s, ends (RunningEventControllers 1 -> 0), player never in an event (coop_story retarget_scene, restored
+  in the doOnDestroy hook; regroup by teleport_to_friend when > 6 m, which refuses beyond its own range).
+  Phone: coop_world sets coop_friend_scene_until for 20 s and the requestSetup hook retargets the scene our
+  own phone starts; not tested (no usable phone in slots 8/12). Camera during a retargeted scene not seen.
+  Shadow puzzles (slot 4, hall stand sm9091_ShadowPuzzle02A_Gimmick at -7.5,0.4,2.9): the stand's Fsm goes
+  StateCheck_Open_PauseStart -> SelectSuccess -> SelectSuccess_End (piece on) -> Open -> Open_state00 ->
+  StateCheck_Open (solved; _PauseEnd when far). InteractShadowPuzzle.successInteract only raises its count.
+  poll_puzzles watches for a change into ^Open and sends 'iuse <key> Open <ch> ShadowPuzzle'.
+  Tapes: 'tape <item> <ch>' from the video deck's item use; coop_follow_tape jumps after 6 s (FoundFootage
+  000/030/040/050 = chapter 7/10/11/12). The old follow (by the friend's chapter in the link) works
+  between test copies; why it never fired on 2026-11-10 is unknown. coop_world find_comps: an unreadable
+  findComponents is retried 3 times and a scan that still fails is skipped (it used to empty ws.doors).
+  Owner's rule 2026-11-11: real cutscenes play for both in first person; only phones and scripted world
+  interactions are the initiator's. play() retargets only a scene tagged 'story <name> <ch> phone' (the
+  sender's successInteract hook on a phone sets coop_my_phone_t) or inside coop_friend_scene_until;
+  settings.cutscenes_on_friend = true does it for all; settings.intr_pull_me = true for none.
+  Scripted-move animation: during a motion jack the player's layer 0 plays bank 0 ids from the event's
+  list (sheet metal: Animation/SetModel/sm0003/motlist/sm0003.motlist, clips 0/1 the sheet's, 2 =
+  pl0000_Interact_RemoveTotan), dyn banks 0. Path: EventActionController.CurrentTask.get_eventParam
+  (GameEventAction.Param).<eventAction>.get_motionJackFsm:getActiveMotionBank(0):get_MotionList. Sent as
+  'mbank 30 1 <path>' + action bank 30 (JACK_BANK). A DynamicMotionBank only takes its BankID with
+  OverwriteBankID true (with false: getMotionCount 0, even with the game's own holder). clip_exists plays
+  only clips named pl* from bank 30. The owner's 'third person mod' adds no clips: this is every clip it shows.
+  Morgue fight 2026-11-10 from both logs: c03e21_00 18:36, c03e22_00 (Em8000 8000 -> 4500 scripted) 18:40,
+  'dmg' applied both ways (both at 1060 by 18:42:27); user down 18:42:32, up 18:42:39, then 'prog 400,
+  rewind 5 400' at 18:43:06 = checkpoint reload with no 'down': friend_here() was false in a cutscene (a
+  grab is one), so canDie let it through. Now friend_here() goes by coop_friend_sample() within 40 m in a
+  cutscene, and GameManager.setGameOverFlag(true) is refused (SKIP_ORIGINAL) while should_go_down().
+  Bots can't start this fight: forcing c03e21_00 plays the scene but Em8000 then sits hidden; the trigger
+  500_Event_JackDaveCrestEventStart does nothing at slot 8's story point. settings.share_jack_fight adds
+  Em8000 to BOSS_FOLLOW (never run).
+  Story flow: GameFlowFsmManager.Flows[progress hash] = app.GameFlowActiveControl on '<part>_MainFlow'
+  (c03_2_MainFlow for 2c60d2ac: states 0 100 200 400 500 600 700 After End, FlowEndNo 800; main flow enum
+  index 3 = c03_2_Main). setProgressiveNo only writes the number; requestStartGameFlow(4) and
+  setCurrentFlow('c03_3_Main') did nothing visible; sendNo(600) set the number, played c03e22_00 and
+  checked an objective off. coop_story step_story queues the friend's numbers per hash and sends them
+  one at a time (1.5 s apart, not while hold_for_cutscene). Two-copy test: 600/700/800 followed, 'ends'
+  at 800. A scene that ends with an item screen pauses a bot copy (nobody to press).
+  Locker sm1344_Locker03A_LvD_Clone8 = app.InteractDrawer under an object with Fsm Gimmick_Open_PauseStart
+  -> SetSwitch(true) -> Gimmick_Open_PauseEnd; on 2026-11-10 applied during a scene: flag true, door shut.
+  Other puzzles: InteractClockPuzzle/NumberLock/Padlock/RotateArt/CardanGrille/PushMove watched by
+  poll_gimmicks ('gstate'); state names unverified. sendBattleEnded shared as 'btlend'.
+  Body bags: sm1684_Corpsebag_Battle > sm1684_Corpsebag_Kick (app.Em8000.Em8000CorpsebagInteract, no
+  SaveGUID, fields GameEventAction, InpulseForceParameter); setInteract(kicker) = 1.2 s event, clip 0
+  pl0000_Hands_Kick of Animation/SetModel/sm1684/motlist/sm1684_Interact_PL.motlist. 'kick x y z ch';
+  the receiver sets GameEventAction.SetTargetObj = ghost anchor and calls setInteract(anchor). JACK_BANK
+  clip numbers go out +1 (0 = no move in the packet).
+  Ladders (slot 9, sm0311_3fLadder01A_Slanting, app.Ladder): the player's layer 0 plays entries of
+  Animation/Props/Ladder/motlist/Ladder.motlist (0 LadderUpStart, 4/5 LadderUpL, 6/7 LadderDownL, 8/9
+  LadderUpEndL, 10/11 LadderDownEndL: no frames) whose clips are 20 Ladder-Up_Start, 24 Up_L, 26 Down_L,
+  28 Up_End_L, 30 Down_End_L; getMotionInfo(0, id) on the player gives misleading base-bank names
+  (TurnL/TurnR). jack_real maps by name (strip pl0000_, Hands_, punctuation). Bot climb: camera-steered
+  (probes/face.py), stick forward into the ladder; movement goes by the camera, not the body.
+  Hits (PlayerDamageController.playDamageS/M/L/Guard/Stagger/BlowDamageMotion on copy 0): S = only L6
+  600/601 DamageCam* (camera shake, not sent); M = 610/611 DamageLF on L0-L2; guard 750 L0 + 752 L1/L2;
+  stagger 650; L = 621 DamageRF-M; blow = 700 -> 720 -> 200 -> 304 SupineToStand (tree). Before: upper
+  layers sent only 1000+, and ACTION_LAYERS (4,1,2,...,0) sent the L1/L2 copy as arms only. Now L0 610-999
+  goes first as whole-body and upper 610-999 is sent (HIT_FROM). A muted slot keeps its MotionID with
+  BlendRate 0: read the blend before calling a clip stuck. Molded grab not produced by bots (spawn refused).
+  Boss test slot 12 (2026-11-11): sendNo(600) on 2c60d2ac starts the morgue fight in both (Em8000 8000 ->
+  4500). Default: two Jacks, each attacking its own game's player. share_jack_fight: the guest never took
+  Jack because read_snapshot only follows an awake enemy for a lower SteamID (bots share one account):
+  BOSS_FOLLOW now always follows the host and the guest never sends it; then the copy holds within ~0.1 m
+  and a 600 hit was shared, but the copy never hurts the guest. Host sent the scripted 3500 as dmg (hp drop
+  before requestSetup): setProgressiveNo now sets coop_scene_t. Slot 1 = c03_1 700, garage: steps 800/900
+  and the shutter switch (sm9013, shared) did not start the car fight; it needs the player in the garage.
+  Saves 2/7/12/13/14 are all c03_2 = 400 (the stuck story). Catch-up now lists prog/evend/btlend/objdone/
+  iuse/gstate; next_state walks every numbered state between: slot 13 test 400->500->600 (scene)->700->800,
+  objective 76ede8c2 -> 017d6cc6 in the game that was behind. getCurrentState(0) of a part stays '400'.
+  One boss for both (BOSS_HANDOFF: Em8000, Em2000, Em2100; settings.share_jack_fight, default on): the boss is
+  run by the game of the nearer player (check_handoffs eager, like enemy_chase_both), the others follow it
+  as a copy; when two games both run it the host keeps it. Bot test slot 12: Jack handed to copy 1 when copy 0
+  walked 8 m off, attacked and downed copy 1, copy 0 showed him in the same spot; the copy also landed hits
+  up close. Mia untested. The enemy suite test now picks an awake enemy (a sleeping Em3100 ignores
+  addManualDamage). re7bots.py was rebuilt 2026-11-11 from the transcripts after an edit emptied it; its
+  bytecode matched the surviving .pyc exactly (backup: local/build/recovered/).
+  check_handoffs: nothing while scripted_now(), never to a friend in a cutscene or down (revive.down_slots);
+  while our player is down a BOSS_HANDOFF boss goes to any standing friend within 30 m. In the bot pair the
+  second copy played c03e22_00 ~40 s late (its own c03e21 sequence still open), which is why one run had
+  each game running Jack for half a minute; a friend in a cutscene isn't 'here', so a death then is real.
+  Rooms unload when left and reload from the save: a far drawer read shut; poll_props sent it and
+  apply_prop saw no change. Drawers/switches beyond PROP_FAR (25 m) are neither sent nor applied; the
+  friend's change waits in pending_props until within 20 m ('world remembered' passes now).
+  Story part hash = via.murmur_hash.calc32('<part>_Main') (c01_Main 46ba27ae, c03_1_Main 9fb77189, c03_2_Main
+  2c60d2ac). Garage (slot 1, bottest/garage_test.py): steps 800/900, shutter switch sm9013, c03e02_00 twice wakes
+  Jack; BOSS_HANDOFF.Em3000 while jack_boss_fight(); seq_played ignores _1x side scenes (c03e02_10 blocked
+  c03e02_00 in the friend's game). Mia (slot 9, story_steps.py on 46ba27ae): wakes at 600, attic at 1300;
+  a game whose copy of a BOSS_HANDOFF boss is asleep follows a friend sending it awake. A bot copy closed on a
+  D3D device reset in the c01e00_00 scene once (not the mod; rerun fine). molded_handoff.py is obsolete
+  (Molded movement isn't shared since v0.47); molded_kill.py and stage_bank.py pass.
+  Double scene: the receiver played the friend's 'story c03e22_00' and then its own sendNo(600) started it
+  again. apply_story now queues it in ss.pending with hold_until (1.5 s), held while ss.steps has steps;
+  the step plays it and the queued one is dropped as already played. c03_3 (2e2d3671) steps 100-600 from
+  slot 13 followed in both. Harness story_test frames(2) -> frames(3) for the three affected scenarios.
+  Molded copies can't be moved (bot tests 2026-11-11, mold_move_test.py): set_Position, LocalPosition,
+  MovementController.warp, CharacterController.warp(), RigidBodyCharacter.warp(), UniversalPosition and the
+  root joint all leave the world matrix where it was (local changes, world doesn't; the Hip joint follows the
+  world). Earlier 'moved 0.00' trials (mold_pin_test.py) also left Molded broken: re-enabling every component
+  switched on ones that start off. Instead aim_regulars (coop_enemies): a fighting Em4xxx (think target, or the
+  friend's 'mtgt <ch> ids' within 3.5 s) gets EnemyThinkBase.setTarget(friend's VrDummyPlayer, Specified=4) when
+  a friend is nearer by 2 m (25 m max); its own setTarget/updateTarget are skipped while held (es.aim_hold).
+  mold_aim_test.py: both games aimed it at the near player and swapped with the players. Aimed at the dummy
+  it walks up and stands (no status, no attack); the dummy's game attacks for real. Option share_molded_target.
+  SUPERSEDED (2026-11-12): what pinned a Molded is its parent. Each body is a child of MoldedGenerator/
+  MoldedPool; while parented, a Lua set_Position/warp changes local only and the world matrix STOPS updating
+  for good (body frozen, CharacterController follows local). tr:set_Parent(nil) -> world == local again and
+  MovementController.warp(vec3, quat) moves it fully (Hip +1.97 of 2.00); set_Parent(pool) -> pinned again.
+  Molded movement is shared again (moves_shared: is_regular -> settings.share_molded_moves, default on):
+  puppetize/drive call unpool(e) (pool remembered in e.pool), repool on sleep/orphan (never a live puppet).
+  The game sleeps a far copy (UpdateSelf off): drive wakes it. Hand-offs are eager for Em4xxx (like bosses)
+  and go to a standing friend when we're down; the receiver wakes it and setTarget(player, 4) within 25 m.
+  aim_regulars only acts when movement sharing is off. mold_share_test.py --heal: copy1-near 0.04 m max,
+  copy0-near 0.41 m max (1.1 m once mid-lunge), hand-over both ways, the new owner targets its player;
+  unhealed runs: the runner's Molded downed its player, and a copy's swings hit the local player too.
+  New probes: mold_inspect.lua (components + placement methods), mold_move.lua modes order/overwrite/humanoid.
+  Cremator = morgue trays sm1750_MoldedTray01A_EnemyTray01-05 (Fsm OpenEnd/CloseEnd, toggled by their
+  InteractSendFsm.successInteract) + ItemTray (NotOpenInteract -> Open -> OpenInteract when 1,3,4 are shut in
+  slot 8). One-off intr lost toggles and early uses; now 'tray <name> <state> <ch>' (poll_trays, catch-up key
+  tray:<name>), applied by successInteract until it matches (3 tries). tray_test.py --late: trays matched,
+  key tray open in both. 'moldedtray01a_enemytray' is in INTR_SKIP.
+  Title row: findComponents' array has no get_elements on the title (every time in the copies; comp_list /
+  array_items read get_Count/get_Item); title_texts restores a slot's MessageId only after the list stood still
+  0.12 s (mid-scroll ListIndex passes row 0 = NEW GAME). menu_test.py has both cases (86 checks). The copies'
+  title list is 6 rows with ItemMax 5 and ctrl=false (stuck before 'press any button'), so CO-OP isn't added
+  there; not checked live. coop_world elems/find_comps and coop_enemies spawn_ids read the same way.

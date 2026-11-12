@@ -12,6 +12,48 @@
 -- with private globals (their own body, animation, weapon, look), reading coopnet_in_2/3.txt.
 -- Only friend 1's copy sends our own state, draws the window and the status lines, and owns
 -- the settings and the testing tools ("SLOT == 1" below).
+-- Loads and player swaps (v0.48). While the game loads a scene, jumps chapter or swaps the player, the
+-- objects our frame checks hold are being destroyed: every call on one throws inside the game. The
+-- 2026-11-10 session logged ~250 of those a second at the end of the Mia tape and when loading a save
+-- after a scene, and the game hung on the loading screen or crashed. coop_busy() is true during those
+-- moments and for 1 s after (GameManager.IsSceneLoading, measured: true for the ~10 s of a load, the
+-- player object swapped in the middle), and every co-op script's frame work waits for it (the
+-- re.on_frame wrapper at the top of each script). A stuck flag gives up after 3 minutes.
+coop_busy_state = { busy = false, since = nil, hold_until = 0, addr = nil, n = 0 }
+do
+    local function flag(gm, name)
+        local ok, v = pcall(gm.get_field, gm, name)
+        return ok and v == true
+    end
+    re.on_frame(function()
+        local B, now = coop_busy_state, os.clock()
+        local gm = sdk.get_managed_singleton("app.GameManager")
+        local b = gm ~= nil and (flag(gm, "<IsSceneLoading>k__BackingField") or flag(gm, "RequestChapterJump") or flag(gm, "RequestPlayerChange"))
+        local om = sdk.get_managed_singleton("app.ObjectManager")
+        local ok, p = pcall(function() return om and om:get_field("PlayerObj") end)
+        local addr = ok and p and p:get_address() or nil
+        if addr ~= B.addr then
+            B.addr = addr
+            B.hold_until = math.max(B.hold_until, now + 1.0)   -- a new (or no) player: let it settle
+        end
+        if b then
+            B.since = B.since or now
+            B.hold_until = math.max(B.hold_until, now + 1.0)
+        elseif now >= B.hold_until then
+            B.since = nil
+        end
+        local was = B.busy
+        B.busy = (b or now < B.hold_until) and not (B.since ~= nil and now - B.since > 180)
+        if B.busy and not was then B.n = B.n + 1 end
+    end)
+end
+function coop_busy() return coop_busy_state.busy == true end
+
+-- v0.48: this script's frame work waits while the game loads or swaps the player (coop_busy, coop_dummy.lua).
+local re = setmetatable({ on_frame = function(f)
+    return _G.re.on_frame(function() if coop_busy and coop_busy() then return end return f() end)
+end }, { __index = _G.re })
+
 local function coop_dummy_main(_ENV, SLOT)
 local SLOT_SUFFIX = SLOT == 1 and "" or ("_" .. SLOT)
 local function on_frame_1(f) if SLOT == 1 then re.on_frame(f) end end      -- friend 1's copy only
@@ -406,6 +448,15 @@ local net = {
 -- Read-only access for diagnostics (the console helper, testing).
 function coop_net_state() return net end
 function coop_ghost() return dummy end
+-- Where the friend last was, from the link itself (for coop_revive, v0.48): their character is hidden
+-- while we are in a grab or a scene, so "is my friend here?" can't go by the character then. nil when
+-- nothing has come for 3 s or they are in another chapter.
+function coop_friend_sample()
+    local last = net.history and net.history[#net.history]
+    if last == nil or os.clock() - last.t > 3 + (net.delay or 0) then return nil end
+    if net.peer_chapter and net.peer_chapter ~= local_chapter() then return nil end
+    return last
+end
 
 -- Link kinds (v0.44): "udp" (LAN or direct IP) is a real friend too, like "steam"; the bot
 -- counts where a test friend makes sense. Until v0.43 most features checked for "steam".
@@ -440,13 +491,46 @@ end
 -- until v0.19, which hid climbing and hits. Weapon banks also report BankID 0; bank 1 is
 -- camera-only. Clips from any other bank can't be sent (the packet has no room for the bank):
 -- each one is logged once, to find what the ladder uses.
--- The packet field is chapter + 256 * motion ID + 2^24 * layer.
+-- v0.47: banks 3-31 are ones the game adds to the player's body for a move it plays (Chapter 1's
+-- scripted fight moves came from bank 3 in the 2026-11-08 session; grabs and the like). A clip
+-- from one goes out with its bank in bits 27-31 of the same field (CoopNet parses it as a uint32;
+-- older versions read only the bits below), and the bank itself as "mbank" (see share_banks):
+-- the other game adds the same bank to the friend's character and plays the same clip.
+-- The packet field is chapter + 256 * motion ID + 2^24 * layer + 2^27 * bank.
 -- A second action on another layer (RE7 often plays one arm's move on layer 1, mask 120, and
 -- the other's on layer 2, mask 110, so with one action the left hand never moved) rides in
 -- the stance-flags field from bit 12: motion ID in bits 12-25, its layer in bits 26-28. The
 -- flags use bits 0-3 and are only ever bit-tested, so a v0.19 receiver ignores it.
 ACTION_LAYERS = { 4, 1, 2, 3, 5, 6, 7, 0 }
+HIT_FROM = 610       -- first of Ethan's hit / guard / knock-away / death clips (600-604 are DamageCam*: the first-person camera's shake, not the body)
 local act = { motion = nil, motion_go = nil }
+-- Scripted moves (v0.48). Pulling the sheet metal, kicking a body bag, a ladder, a grab: the game takes
+-- over the player's animator ("motion jack") and plays clips from the event's OWN motion list in place
+-- of bank 0 on layer 0 (measured 2026-11-11 on the sheet metal: layer 0 plays bank 0 motion 1, then 2,
+-- from Animation/SetModel/sm0003/motlist/sm0003.motlist). Until now those numbers either weren't sent
+-- (under 100) or were sent as if they were Ethan's own clips, so the friend saw nothing or the wrong
+-- move. The list is reached through the player's running event task: EventActionController.CurrentTask
+-- > eventParam (GameEventAction.Param) > eventAction > motionJackFsm > active bank 0 > MotionList. It
+-- goes to the friend as added bank JACK_BANK ("mbank", like the game's own added banks) and the clip
+-- goes out with that bank, so their copy of our character plays the very same clip.
+JACK_BANK = 30
+local function event_jack(player)
+    if act.eac_go ~= player then
+        act.eac_go = player
+        act.eac = safe(player.call, player, "getComponent(System.Type)", sdk.typeof("app.EventActionController"))
+    end
+    local eac = act.eac
+    if eac == nil or safe(eac.call, eac, "get_isActive") ~= true then return nil end
+    local task = safe(eac.get_field, eac, "CurrentTask")
+    local ep = task and safe(task.call, task, "get_eventParam")
+    local ea = ep and safe(ep.get_field, ep, "<eventAction>k__BackingField")
+    local jack = ea and safe(ea.call, ea, "get_motionJackFsm")
+    local b = jack and safe(jack.call, jack, "getActiveMotionBank", 0)
+    local ml = b and safe(b.call, b, "get_MotionList")
+    local path = ml and safe(ml.call, ml, "get_ResourcePath")
+    if path == nil or not tostring(path):match("^%S+$") then return nil end
+    return tostring(path), tonumber(safe(b.call, b, "get_BankID")) or 0
+end
 function local_action_clip(player)
     if act.motion_go ~= player then
         act.motion_go = player
@@ -454,7 +538,37 @@ function local_action_clip(player)
     end
     local m = act.motion
     if m == nil then return 0, 0, 0, 0 end
+    local jpath, jbank = event_jack(player)
+    if jpath then
+        local now = os.clock()
+        if act.jack == nil or act.jack.path ~= jpath then
+            act.jack = { path = jpath, since = now }
+            log("animation: scripted move from " .. jpath)
+            -- At once, not at the next half-second share: the clip numbers mean nothing without it.
+            if coop_send_event then coop_send_event(string.format("mbank %d 1 %s", JACK_BANK, jpath)) end
+        end
+        act.jack.t = now
+        local L = safe(m.call, m, "getLayer", 0)
+        local bank = L and tonumber(safe(L.call, L, "get_MotionBankID"))
+        local id = L and tonumber(safe(L.call, L, "get_MotionID") or 0xFFFFFFFF) or 0xFFFFFFFF
+        -- 0.3 s for the list to reach the friend before the first clip number does.
+        -- +1: the packet's 0 means "no move", and a list's only clip is often number 0 (the body-bag
+        -- kick is sm1684_Interact_PL.motlist clip 0, pl0000_Hands_Kick: it was never sent). The other
+        -- side takes the 1 off again for this bank (start_clip, clip_exists).
+        if bank == jbank and id < 65535 and now - act.jack.since > 0.3 then return id + 1, 0, 0, 0, JACK_BANK end
+        return 0, 0, 0, 0
+    end
     local count = tonumber(safe(m.call, m, "getLayerCount") or 0) or 0
+    -- Hits, guards, being knocked away and deaths (v0.48): Ethan's clips 610-999 (DamageL, DamageB-M,
+    -- Stagger, BlownAway..., Damage-Guard, ...-Dead). Played on layer 0 they are whole-body and win over
+    -- anything on the layers above (the same clip is often on layers 1 and 2 too, and those come first in
+    -- ACTION_LAYERS, which sent only the arms). Played on an upper layer alone (a flinch while standing,
+    -- a blocked hit) they used to be skipped (upper layers only sent 1000 up); now they go as the arms' move.
+    local L0 = count > 0 and safe(m.call, m, "getLayer", 0)
+    if L0 and tonumber(safe(L0.call, L0, "get_MotionBankID")) == 0 then
+        local id0 = tonumber(safe(L0.call, L0, "get_MotionID") or 0xFFFFFFFF) or 0xFFFFFFFF
+        if id0 >= HIT_FROM and id0 < 1000 then return id0, 0, 0, 0 end
+    end
     local id1, li1
     for _, li in ipairs(ACTION_LAYERS) do
         if li < count then
@@ -462,7 +576,13 @@ function local_action_clip(player)
             if L then
                 local bank = safe(L.call, L, "get_MotionBankID")
                 local id = tonumber(safe(L.call, L, "get_MotionID") or 0xFFFFFFFF) or 0xFFFFFFFF
-                if bank == 0 and id >= (li == 0 and 100 or 1000) and id < 65536 then
+                bank = tonumber(bank)
+                if bank and bank >= 3 and bank < 32 and id < 65536 then
+                    -- A move from a bank the game added for it (v0.47): it goes out alone.
+                    act.dyn_seen_t = os.clock()
+                    return id, li, 0, 0, bank
+                end
+                if bank == 0 and (id >= (li == 0 and 100 or 1000) or (li ~= 0 and id >= HIT_FROM and id < 1000)) and id < 65536 then
                     if id1 == nil then
                         id1, li1 = id, li
                         if li == 0 then return id, li, 0, 0 end   -- full body: nothing goes on top
@@ -487,8 +607,8 @@ end
 
 -- Both packet fields for our actions: (chapter field addition, stance-flags addition).
 local function action_fields(player)
-    local id, li, id2, li2 = local_action_clip(player)
-    local a = id == 0 and 0 or (256 * id + 16777216 * li)
+    local id, li, id2, li2, bk = local_action_clip(player)
+    local a = id == 0 and 0 or (256 * id + 16777216 * li + 134217728 * (bk or 0))
     local b = id2 == 0 and 0 or (id2 * 4096 + li2 * 67108864)
     return a, b
 end
@@ -541,6 +661,7 @@ local function net_io()
                     net.peer_chapter = f % 256
                     net.peer_action = math.floor(f / 256) % 65536
                     net.peer_action_layer = math.floor(f / 16777216) % 8
+                    net.peer_action_bank = math.floor(f / 134217728) % 32   -- v0.47: 0 = the usual sets
                     local fl = math.floor(v[10])
                     net.peer_action2 = (fl >> 12) & 0x3FFF
                     net.peer_action2_layer = (fl >> 26) & 7
@@ -1044,18 +1165,138 @@ end
 -- sets 0 and 30, 2026-11-03): a clip still unbound 0.15 s after starting is retried once in
 -- the item set, which then stays on until that move ends.
 local ITEM_SET = 200
-local function start_clip(L, want)
+-- A scripted move's entries that aren't clips (v0.48). On a ladder the player's layer 0 plays entries of
+-- Animation/Props/Ladder/motlist/Ladder.motlist named LadderUpStart, LadderUpL, LadderDownL,
+-- LadderUpEndL... (tree nodes, no frames of their own on another body), while the clips are
+-- pl0000_Hands_Ladder-Up_Start, pl0000_Hands_Ladder-Up_L... in the same list (2026-11-11, Chapter 1's
+-- attic ladder). The friend's character showed jogging and standing for the whole climb. Each entry is
+-- now mapped to the clip with the same name once "pl0000_", "Hands_" and punctuation are taken off;
+-- a clip named pl... plays as it is, anything else (the sheet metal's own clips) doesn't play.
+local jack_map = { sig = false, ids = {} }
+local jack_mi
+local function norm_clip(n) return (n:lower():gsub("^pl%d+_", ""):gsub("^hands_", ""):gsub("[^%a%d]", "")) end
+local function jack_real(m, id)
+    if m == nil then return nil end
+    if jack_map.sig ~= anim.dyn_sig then jack_map = { sig = anim.dyn_sig, ids = {} } end
+    local v = jack_map.ids[id]
+    if v ~= nil then return v or nil end
+    if jack_mi == nil then
+        jack_mi = safe(sdk.create_instance, "via.motion.MotionInfo")
+        if jack_mi then safe(jack_mi.add_ref, jack_mi) else return id end
+    end
+    local found = false
+    local ok, r = pcall(m.call, m, "getMotionInfo(System.UInt32, System.UInt32, via.motion.MotionInfo)", JACK_BANK, id, jack_mi)
+    if ok and r == true then
+        local name = tostring(safe(jack_mi.call, jack_mi, "get_MotionName") or "")
+        if name:lower():match("^pl%d") then
+            found = id
+        else
+            local want = norm_clip(name)
+            local n = tonumber(safe(m.call, m, "getMotionCount(System.UInt32)", JACK_BANK)) or 0
+            for i = 0, n - 1 do
+                if safe(m.call, m, "getMotionInfoByIndex(System.UInt32, System.UInt32, via.motion.MotionInfo)", JACK_BANK, i, jack_mi) == true then
+                    local n2 = tostring(safe(jack_mi.call, jack_mi, "get_MotionName") or "")
+                    if n2:lower():match("^pl%d") and norm_clip(n2) == want then
+                        found = tonumber(safe(jack_mi.call, jack_mi, "get_MotionID"))
+                        log(string.format("animation: scripted entry %d (%s) plays as clip %s (%s)", id, name, tostring(found), n2))
+                        break
+                    end
+                end
+            end
+        end
+    end
+    jack_map.ids[id] = found
+    return found or nil
+end
+local function start_clip(L, want, bank)
+    if bank == JACK_BANK then want = jack_real(anim.motion, want - 1) or (want - 1) end   -- sent +1 (see local_action_clip)
     local n = #(anim.change:get_param_types() or {})
     if n == 6 then
-        pcall(anim.change.call, anim.change, L, 0, want, 0.0, 6.0, 2, 0)
+        pcall(anim.change.call, anim.change, L, bank or 0, want, 0.0, 6.0, 2, 0)
     else
-        pcall(anim.change.call, anim.change, L, 0, want, 0.0, 6.0)
+        pcall(anim.change.call, anim.change, L, bank or 0, want, 0.0, 6.0)
     end
 end
 
--- Ladders. RE7 has no ladder animation for the player's body: climbing plays the layer-0
--- turn trees (IDs 4/5 going up, 6/7 going down, 9 and 11 at the ends) while the game moves
--- the player, so the friend's character just floated up (2026-11-03). Climbing is recognised
+-- The friend's added banks (v0.47, "mbank" events, see share_banks): motion lists their game added
+-- to their player's body for a move. They go onto the friend's character with the same bank ids
+-- (EMV Engine's way of adding clips, as in verify's fallback): the latest list for each id, after
+-- the character's own added banks. A list swapped into a slot that's already there isn't taken up
+-- (that bank went inactive, bot test 2026-11-10), so a change rebuilds ours; a rebuilt character
+-- gets them again.
+anim.dyn_cur = anim.dyn_cur or {}      -- bank id -> { path, ow }: what the friend's body has now
+anim.dyn_res = anim.dyn_res or {}      -- path -> motion list holder (loaded once)
+local function add_ghost_banks()
+    local m = anim.motion
+    if m == nil then return end
+    local addr = m:get_address()
+    if anim.dyn_motion ~= addr then
+        anim.dyn_motion, anim.dyn_sig, anim.dyn_ok = addr, nil, {}
+        anim.dyn_base = tonumber(safe(m.call, m, "getDynamicMotionBankCount") or 0) or 0
+    end
+    local ids = {}
+    for id in pairs(anim.dyn_cur) do ids[#ids + 1] = id end
+    table.sort(ids)
+    local parts = {}
+    for _, id in ipairs(ids) do parts[#parts + 1] = id .. "|" .. anim.dyn_cur[id].path end
+    local sig = table.concat(parts, ";")
+    if sig == anim.dyn_sig then return end
+    anim.dyn_sig = sig
+    safe(m.call, m, "setDynamicMotionBankCount", anim.dyn_base)
+    anim.dyn_ok = {}
+    for _, id in ipairs(ids) do
+        local b = anim.dyn_cur[id]
+        local ok, err = pcall(function()
+            local h = anim.dyn_res[b.path]
+            if h == nil then
+                local r = sdk.create_resource("via.motion.MotionListResource", b.path)
+                r:add_ref()
+                h = r:create_holder("via.motion.MotionListResourceHolder")
+                h:add_ref()
+                anim.dyn_res[b.path] = h
+            end
+            local db = sdk.create_instance("via.motion.DynamicMotionBank")
+            db:add_ref()
+            db:call(".ctor")
+            db:call("set_MotionList", h)
+            db:call("set_OverwriteBankID", b.ow)
+            db:call("set_BankID", id)
+            local count = tonumber(m:call("getDynamicMotionBankCount") or 0) or 0
+            m:call("setDynamicMotionBankCount", count + 1)
+            m:call("setDynamicMotionBank", count, db)
+        end)
+        anim.dyn_ok[id] = ok
+        log(string.format("animation: friend's bank %d (%s) %s", id, b.path, ok and "added" or ("ERR " .. tostring(err))))
+    end
+    -- Added banks only count once the motion banks are set up again: without this a bank added
+    -- after the first went unused (getMotionInfo found none of its clips, bot test 2026-11-10).
+    -- The layers keep playing through it.
+    safe(m.call, m, "setupMotionBank")
+    -- A move playing from an added bank may have started on the old list (their clip arrives
+    -- before the bank does): start it again.
+    if (anim.action_bk or 0) ~= 0 then anim.action = nil end
+end
+local function ghost_has_bank(bk) return anim.dyn_ok ~= nil and anim.dyn_ok[bk] == true end
+local motion_info
+local function clip_exists(m, bank, id)
+    if motion_info == nil then
+        motion_info = safe(sdk.create_instance, "via.motion.MotionInfo")
+        if motion_info then safe(motion_info.add_ref, motion_info) end
+    end
+    if motion_info == nil then return true end
+    -- A scripted move's list also holds the object's own clips under low numbers (the sheet metal's
+    -- list: 0 and 1 are the sheet's, 2 is pl0000_Interact_RemoveTotan) and tree entries (the ladder's
+    -- LadderUpL): only a character's clip, or an entry that maps to one, plays (jack_real).
+    if bank == JACK_BANK then return jack_real(m, id - 1) ~= nil end   -- sent +1 (see local_action_clip)
+    local ok, r = pcall(m.call, m, "getMotionInfo(System.UInt32, System.UInt32, via.motion.MotionInfo)", bank, id, motion_info)
+    return ok and r == true
+end
+
+-- Ladders. Thought in 2026-11-03 to have no animation on the player's body (layer 0 showed the
+-- turn trees, IDs 4/5), but that recording never left the ground (y stayed 0): it caught turning,
+-- not a climb. The third-person camera script shows Ethan's real ladder climb (2026-11-10), and the
+-- player's normal sets hold no ladder clip, so it most likely plays from a bank the game adds, which
+-- v0.47 shares (see share_banks/add_ghost_banks). Kept as a fallback: climbing is recognised
 -- here from the ghost's own movement instead (mostly vertical, at least 0.35 m/s, for 0.4 s;
 -- stairs move forwards too, drops are brief), and two of Ethan's clips stand in for it,
 -- looped as a full-body move: Hands_ClimbWall-119cm going up, Hands_Descend_Loop going down.
@@ -1113,11 +1354,15 @@ end
 -- One action slot: the ghost's layer idx plays the friend's move from their layer src_layer,
 -- with that layer's mask and blend mode. Slot 1 (key "action") is the first move found,
 -- slot 2 (key "action2") the second, usually the other arm.
-local function run_slot(m, idx, key, want, src_layer)
-    if anim.moving and not net.forced_action and hold_pose(want) and want ~= WEAPON_WALK and want ~= WEAPON_JOG then want = 0 end
+local function run_slot(m, idx, key, want, src_layer, bank)
+    bank = bank or 0   -- v0.47: 3-31 = a bank the friend's game added for the move (see add_ghost_banks)
+    if bank == 0 and anim.moving and not net.forced_action and hold_pose(want) and want ~= WEAPON_WALK and want ~= WEAPON_JOG then want = 0 end
     -- (Tried 2026-11-03: merging 2002 into 2001 and fading the layer in/out over 0.15 s made
     -- swings stop matching; the plain snap below looked better.)
-    if want == (anim[key] or 0) then
+    if want ~= 0 and want == (anim[key] or 0) and (tonumber(safe(m.call, m, "getLayerCount") or 0) or 0) <= idx then
+        anim[key] = nil   -- its layer is gone (the character's walk was set up again): start over
+    end
+    if want == (anim[key] or 0) and bank == (anim[key .. "_bk"] or 0) then
         if want == CLIMB_UP or want == CLIMB_DOWN then
             -- Loop the stand-in clip while the climb lasts.
             local L = safe(m.call, m, "getLayer", idx)
@@ -1130,15 +1375,27 @@ local function run_slot(m, idx, key, want, src_layer)
         if want ~= 0 and anim[rk] and os.clock() >= anim[rk] then
             anim[rk] = nil
             local L = safe(m.call, m, "getLayer", idx)
-            if L and (tonumber(safe(L.call, L, "get_EndFrame")) or 0) <= 0 and anim.bank ~= ITEM_SET then
-                local was = anim.bank
-                anim.bank_override, anim.bank = ITEM_SET, ITEM_SET
-                safe(m.call, m, "set_TargetBankType", ITEM_SET)
-                start_clip(L, want)
-                log(string.format("action: motion %d had no clip in set %s, retrying in the item set", want, tostring(was)))
-                anim[key .. "_retry2"] = os.clock() + 0.2
-            elseif L and (tonumber(safe(L.call, L, "get_EndFrame")) or 0) <= 0 then
-                anim[key .. "_retry2"] = os.clock()   -- already in the item set
+            if L and (tonumber(safe(L.call, L, "get_EndFrame")) or 0) <= 0 then
+                -- v0.48: the friend's set as it is now (their "bank" message can arrive after the move:
+                -- chainsaw swings 2500/1100/1111 found nothing, 2026-11-10), then the item set, then
+                -- bare hands (being knocked down, clip 200, while holding the chainsaw).
+                local tried = anim[key .. "_tried"] or { [anim.bank or 0] = true }
+                anim[key .. "_tried"] = tried
+                local nxt
+                for _, set in ipairs({ base_bank(), ITEM_SET, 0 }) do
+                    if not tried[set] then nxt = set break end
+                end
+                if nxt ~= nil then
+                    tried[nxt] = true
+                    local was = anim.bank
+                    anim.bank_override, anim.bank = nxt, nxt
+                    safe(m.call, m, "set_TargetBankType", nxt)
+                    start_clip(L, want)
+                    log(string.format("action: motion %d had no clip in set %s, retrying in set %s", want, tostring(was), tostring(nxt)))
+                    anim[rk] = os.clock() + 0.2
+                else
+                    anim[key .. "_retry2"] = os.clock()   -- nowhere left to look
+                end
             end
         end
         -- Still nothing in the item set either: a move from a set the friend's character
@@ -1168,9 +1425,22 @@ local function run_slot(m, idx, key, want, src_layer)
     end
     local L = action_layer(m, idx)
     if L == nil then return end
-    anim[key] = want
+    anim[key], anim[key .. "_bk"], anim[key .. "_tried"] = want, bank, nil
     if want == 0 then
         safe(L.call, L, "set_BlendRate", 0.0)
+        return
+    end
+    if bank ~= 0 and not clip_exists(m, bank, want) then
+        -- Not in that bank on their character: a clip the layer can't find leaves its last one
+        -- frozen (or the bind pose), so the layer is muted and the character keeps its own stand
+        -- or walk. A change to the friend's banks starts the move again (add_ghost_banks).
+        safe(L.call, L, "set_BlendRate", 0.0)
+        anim[key .. "_retry"], anim[key .. "_retry2"] = nil, nil
+        anim.no_clip = anim.no_clip or {}
+        if not anim.no_clip[bank * 65536 + want] then
+            anim.no_clip[bank * 65536 + want] = true
+            log(string.format("action: motion %d of added bank %d isn't on the friend's character: layer muted (no T-pose)", want, bank))
+        end
         return
     end
     -- Same mask and blend mode as the layer it came from on the friend's body (layer 0 =
@@ -1179,12 +1449,13 @@ local function run_slot(m, idx, key, want, src_layer)
     if mask then safe(L.call, L, "set_JointMaskID", mask) end
     if mode then safe(L.call, L, "set_BlendMode", mode) end
     safe(L.call, L, "set_Resource", nil)
-    start_clip(L, want)
-    anim[key .. "_retry"], anim[key .. "_retry2"] = os.clock() + 0.15, nil
+    start_clip(L, want, bank)
+    -- The item-set retry is for the usual sets only (an added bank's clip was checked above).
+    anim[key .. "_retry"], anim[key .. "_retry2"] = (bank == 0) and (os.clock() + 0.15) or nil, nil
     safe(L.call, L, "set_Speed", 1.0)
     safe(L.call, L, "set_BlendRate", 1.0)
-    log(string.format("action: friend plays motion %d from layer %d on slot %d (mask %s, mode %s, set %s)", want,
-        src_layer, idx, tostring(mask), tostring(mode), tostring(anim.bank)))
+    log(string.format("action: friend plays motion %d%s from layer %d on slot %d (mask %s, mode %s, set %s)", want,
+        bank ~= 0 and (" (added bank " .. bank .. ")") or "", src_layer, idx, tostring(mask), tostring(mode), tostring(anim.bank)))
 end
 
 function ghost_action(anchor)
@@ -1194,6 +1465,13 @@ function ghost_action(anchor)
     local src_layer = (net.test_action and (net.test_action_layer or 1))
         or (net.forced_action and (net.forced_action_layer or 0)) or (net.peer_action_layer or 1)
     local want2 = (not net.test_action and not net.forced_action and net.peer_action2) or 0
+    -- A move from a bank the friend's game added (v0.47): played once that bank is on their
+    -- character too (it comes as "mbank"); until then the character keeps its own stand or walk.
+    local want_bank = (not net.test_action and not net.forced_action and net.peer_action_bank) or 0
+    if want_bank ~= 0 then
+        pcall(add_ghost_banks)
+        if not ghost_has_bank(want_bank) then want, want_bank = 0, 0 end
+    end
     local m = anim.motion
     -- Weapon moves share IDs across the weapons' animation sets (all bank 0); the body's
     -- TargetBankType picks the set (0 hands, 30 knife, 100 handgun...), as on the friend's
@@ -1207,12 +1485,12 @@ function ghost_action(anchor)
     local cs = not net.forced_action and not net.test_action and climb_state(anchor)
     if cs and LADDER_STAND_IN then
         want, src_layer, want2 = (cs == "up") and CLIMB_UP or CLIMB_DOWN, 0, 0
-    elseif anim.moving and not net.forced_action and (want == 0 or hold_pose(want))
+    elseif want_bank == 0 and anim.moving and not net.forced_action and (want == 0 or hold_pose(want))
         and base_bank() ~= 0 and base_bank() ~= ITEM_SET then
         -- Walk or jog by the ghost's own speed (refs: walk 1.7, jog 2.7 m/s).
         want, src_layer = (anim.speed or 0) > 2.2 and WEAPON_JOG or WEAPON_WALK, 1
     end
-    run_slot(m, 1, "action", want, src_layer)
+    run_slot(m, 1, "action", want, src_layer, want_bank)
     -- The second move goes on top; not under a full-body move from layer 0.
     if src_layer == 0 and want ~= 0 then want2 = 0 end
     if want2 ~= 0 or (anim.action2 or 0) ~= 0 then
@@ -1232,6 +1510,9 @@ local function auto_animate(anchor, anchor_rot)
         vx, vz = (anchor.x - last_auto.pos.x) / dt, (anchor.z - last_auto.pos.z) / dt
     end
     speed = math.sqrt(vx * vx + vz * vz)
+    -- In a scripted full-body move (a ladder, a kick: JACK_BANK) the move carries the body; the drift
+    -- along a slanting ladder made the legs underneath flick between jogging and standing (v0.48).
+    if (net.peer_action_bank or 0) == JACK_BANK and (net.peer_action or 0) ~= 0 then speed = 0 end
     last_auto.t, last_auto.pos = now, { x = anchor.x, z = anchor.z }
     -- Light smoothing so one jittery sample doesn't flip walk/idle.
     anim.speed = (anim.speed or 0) * 0.3 + speed * 0.7
@@ -1899,10 +2180,43 @@ end
 -- the tape ends and returns us the normal way.
 TAPE_CHAPTERS = { [7] = true, [10] = true, [11] = true, [12] = true }
 local follow = { was_together = false, want_t = nil, done_for = nil }
+-- Told outright (v0.48). On 2026-11-10 a tape put in the video deck was never followed: nothing above
+-- even logged a try, and the friend's log from those minutes is lost, so why isn't known (the same
+-- follow works between two test copies). The game that uses a tape on the deck now says so ("tape
+-- <item> <chapter>", coop_world), and this game jumps after it: from 6 s on, every 2 s for 90 s,
+-- whatever the link says about the friend's chapter.
+local TAPE_ITEMS = { FoundFootage000 = 7, FoundFootage030 = 10, FoundFootage040 = 11, FoundFootage050 = 12 }
+function coop_follow_tape(item, ch)
+    local target = TAPE_ITEMS[item]
+    if target == nil or SLOT ~= 1 then return end
+    if settings and settings.follow_tapes == false then log("follow: friend put in a tape; following is switched off") return end
+    if local_chapter() ~= ch then log("follow: friend put in a tape in another chapter (" .. tostring(ch) .. ")") return end
+    follow.forced = { ch = target, t = os.clock() }
+    log("follow: friend put " .. item .. " in the video deck; going after them")
+end
+local function follow_forced(now)
+    local F = follow.forced
+    if F == nil then return false end
+    if local_chapter() == F.ch then follow.forced, follow.done_for = nil, F.ch log("follow: in the tape with your friend") return true end
+    if now - F.t > 90 then follow.forced = nil log("follow: gave up after 90 s (" .. tostring(F.msg) .. ")") return false end
+    if now - F.t < 6 or now - (F.try_t or 0) < 2 or local_cutscene() or (coop_busy and coop_busy()) then return true end
+    F.try_t = now
+    chapters.list_t = nil
+    ensure_chapter_list()
+    local target
+    for _, e in ipairs(chapters.list or {}) do if e.value == F.ch then target = e end end
+    local busy = target == nil and "that tape isn't in the chapter list" or jump_busy()
+    if busy then F.msg = busy return true end
+    jump_to_chapter(target)
+    F.msg = tostring(chapters.last)
+    log("follow: " .. F.msg)
+    return true
+end
 on_frame_1(function()
     local now = os.clock()
     if now - (follow.check_t or 0) < 1 then return end
     follow.check_t = now
+    if follow_forced(now) then return end
     local last = net.history[#net.history]
     local fresh = last ~= nil and (now - last.t) < (NET_TIMEOUT or 2)
     local mine, theirs = local_chapter(), net.peer_chapter
@@ -1996,7 +2310,7 @@ local function draw_options()
     if hc then settings.heal_friend = hv save_settings() end
     local bc, bv = imgui.checkbox("Bump into your friend (lets go in scripted scenes and when you're stuck)", settings.bump_friend ~= false)
     if bc then settings.bump_friend = bv save_settings() end
-    local lc, lv = imgui.checkbox("Hide my friend on ladders (there's no climbing animation)", settings.hide_on_ladders ~= false)
+    local lc, lv = imgui.checkbox("Hide my friend on ladders", settings.hide_on_ladders == true)
     if lc then settings.hide_on_ladders = lv save_settings() end
     local tc, tv = imgui.checkbox("Follow my friend into VHS tapes", settings.follow_tapes ~= false)
     if tc then settings.follow_tapes = tv save_settings() end
@@ -2528,6 +2842,48 @@ on_frame_1(function()
     end
 end)
 
+-- share_banks (v0.47): the banks the game added to our player's body for a move (a grab, a scripted
+-- fight move...), as "mbank <id> <overwrite 0/1> <motion list>", twice a second when the list
+-- changes and every 15 s while there are any: the friend's game adds them to our character
+-- (add_ghost_banks) and plays the moves we play from them.
+local dyn_share = { t = 0, sig = "", sent_t = -100 }
+on_frame_1(function()
+    local now = os.clock()
+    if now - dyn_share.t < 0.5 then return end
+    dyn_share.t = now
+    local kv = net.kv or {}
+    if not (coop_link_any(kv) and coop_send_event) then return end
+    local player = get_player()
+    if player == nil then return end
+    if act.motion_go ~= player then
+        act.motion_go = player
+        act.motion = safe(player.call, player, "getComponent(System.Type)", sdk.typeof("via.motion.Motion"))
+    end
+    local m = act.motion
+    if m == nil then return end
+    local list = {}
+    local n = tonumber(safe(m.call, m, "getDynamicMotionBankCount") or 0) or 0
+    for i = 0, math.min(n, 16) - 1 do
+        local db = safe(m.call, m, "getDynamicMotionBank", i)
+        local h = db and safe(db.call, db, "get_MotionList")
+        local path = h and safe(h.call, h, "get_ResourcePath")
+        local id = db and tonumber(safe(db.call, db, "get_BankID"))
+        if path and tostring(path):match("^%S+$") and id then
+            list[#list + 1] = string.format("mbank %d %d %s", id, safe(db.call, db, "get_OverwriteBankID") and 1 or 0, tostring(path))
+        end
+    end
+    -- The list of the scripted move we are in, or were in the last 20 s (v0.48, see event_jack).
+    if act.jack and act.jack.t and now - act.jack.t < 20 then
+        list[#list + 1] = string.format("mbank %d 1 %s", JACK_BANK, act.jack.path)
+    end
+    local sig = table.concat(list, ";")
+    if sig ~= dyn_share.sig or (#list > 0 and now - dyn_share.sent_t > 15) then
+        if sig ~= dyn_share.sig then log("animation: banks added to our body: " .. (sig ~= "" and sig or "none")) end
+        dyn_share.sig, dyn_share.sent_t = sig, now
+        for _, l in ipairs(list) do coop_send_event(l) end
+    end
+end)
+
 function coop_lobby_on_event(text)
     local grip = text:match("^grip (.+)$")
     if grip then
@@ -2539,6 +2895,17 @@ function coop_lobby_on_event(text)
         if #g == 7 then
             held.grip = g
             pcall(apply_grip)
+        end
+        return true
+    end
+    local mid, mow, mpath = text:match("^mbank (%d+) ([01]) (%S+)$")
+    if mid then
+        -- A bank the friend's game added to their body (share_banks): onto their character too.
+        local id = tonumber(mid)
+        local cur = anim.dyn_cur[id]
+        if cur == nil or cur.path ~= mpath or cur.ow ~= (mow == "1") then
+            anim.dyn_cur[id] = { path = mpath, ow = mow == "1" }
+            pcall(add_ghost_banks)
         end
         return true
     end
@@ -2789,16 +3156,19 @@ bot_test_name = false
 BOT_TEST_NAME = "Тест 测试 テスト 테스트 Ünï"
 
 function teleport_to_friend()
-    if dummy == nil or #parts == 0 or ghost_hidden then log("teleport: no friend to go to") return false end
+    -- v0.48: by the friend's last position from the link, not their character on screen. That is
+    -- hidden while a scene plays, so a player stuck in a scene their friend had left (the boiler
+    -- room, 2026-11-10) got "no friend to go to" from the one button that could have freed them.
+    local now = os.clock()
+    local last = net.history[#net.history]
+    if last == nil or now - last.t > 3 + (net.delay or 0) then log("teleport: no friend to go to (nothing from them for 3 s)") return false end
     if net.peer_chapter and net.peer_chapter ~= local_chapter() then log("teleport: friend is in another chapter") return false end
     local player = get_player()
     local mc = player and player:call("getComponent(System.Type)", sdk.typeof("app.MovementController"))
     if mc == nil then log("teleport: no MovementController") return false end
     -- Land where the friend stood about a second ago: ground they actually walked on.
     -- A fixed sideways offset could be inside a wall; collision pushes us apart after.
-    local g = dummy:call("get_Transform"):call("get_Position")
-    local target = Vector3f.new(g.x, g.y, g.z)
-    local now = os.clock()
+    local target = Vector3f.new(last.pos.x, last.pos.y, last.pos.z)
     for i = #net.history, 1, -1 do
         local h = net.history[i]
         if h.t <= now - net.delay - 1.0 then target = h.pos break end
@@ -3053,6 +3423,20 @@ function request_reload()
         log("reload: refused after a chapter jump")
         return false
     end
+    -- v0.48: not while a scene or scripted event is running. A load requested then crashed the game
+    -- (2026-11-10 18:34, stuck in a scene; also the one bot-copy crash). The title screen's Continue works.
+    do
+        local gm_t = sdk.find_type_definition("app.GameManager")
+        local gf = gm_t and gm_t:get_field("_GameEventMan")
+        local gem = gf and safe(gf.get_data, gf, nil)
+        local list = gem and safe(gem.get_field, gem, "RunningEventControllers")
+        local n = list and tonumber(safe(list.call, list, "get_Count") or 0) or 0
+        if n > 0 or (coop_busy and coop_busy()) then
+            reload_msg = "Not while a scene is playing or the game is loading: go to the title screen (pause menu) and pick Continue"
+            log("reload: refused (a scene is running or the game is loading)")
+            return false
+        end
+    end
     reload_msg = nil
     local sdm = sdk.get_managed_singleton("app.SaveDataManager")
     if sdm == nil then log("reload: no SaveDataManager") return false end
@@ -3184,9 +3568,18 @@ re.on_frame(function()
     -- From the newest sample, not anim.flags: that is only refreshed while the ghost
     -- animates, so once hidden for "their cutscene" it never saw the cutscene end.
     local theirs = last ~= nil and last.flags ~= nil and (last.flags & STANCE_CUTSCENE) ~= 0
+    -- v0.48: only once their scene has run 1.5 s. Quick scripted moves (kicking a body bag in the morgue
+    -- fight) are 1 s "cutscenes": the friend vanished for each kick instead of kicking (2026-11-10).
+    if theirs then
+        cs.theirs_since = cs.theirs_since or now
+        if now - cs.theirs_since < 1.5 then theirs = false end
+    else
+        cs.theirs_since = nil
+    end
     -- On a ladder (v0.24): RE7 has no body animation for climbing, so the friend floated up it.
     -- Their character is hidden for the climb instead (Options: "Hide my friend on ladders").
-    local laddering = climb.state ~= nil and not (settings and settings.hide_on_ladders == false)
+    -- v0.48: the climb itself is shared now (jack_real), so this is off unless switched on.
+    local laddering = climb.state ~= nil and settings ~= nil and settings.hide_on_ladders == true
     local hide = stale or cutscene_now or theirs or laddering
     if hide ~= ghost_hidden then
         ghost_hidden = hide
@@ -3475,6 +3868,66 @@ re.on_pre_application_entry("PrepareRendering", function()
     if not (look.enabled and net.enabled and follow and anim.ready) then return end
     local ok, err = pcall(apply_look_render)
     if not ok and not look.err then look.err = true log("look v3 ERR " .. tostring(err)) end
+end)
+
+-- Scripted interactions on the friend's body (v0.48). When the friend pulls the sheet metal, lifts a
+-- pot lid and so on, coop_world runs the game's own interaction here with its "player" part pointed
+-- at the friend's hidden anchor body (GameEventAction.SetTargetObj) instead of at our player. Tested
+-- 2026-11-11 on the sheet metal under the deck: our player stays free where they stand, the object
+-- plays its own animation and ends in the game's own "done" state, and the anchor plays the player's
+-- animation in step with it. The anchor is invisible, so while its event runs its pose is copied
+-- joint by joint (by name) onto the visible body, just before drawing, like the head look.
+ghost_event = { until_t = 0 }
+-- wait: how long the event may take to start (6 s for an interaction; a story scene first loads, 10 s
+-- measured on c03e20_00) and last (story scenes run for minutes).
+function coop_ghost_event_begin(wait, last)
+    if dummy == nil or anim.motion == nil or not anim.ready then return nil end
+    ghost_event.until_t, ghost_event.t0, ghost_event.started, ghost_event.map = os.clock() + (last or 90), os.clock(), false, nil
+    ghost_event.wait = wait or 6
+    return dummy
+end
+function coop_ghost_event_active() return os.clock() < ghost_event.until_t end
+local function mirror_event_pose()
+    local E, now = ghost_event, os.clock()
+    if now >= E.until_t or dummy == nil or anim.motion == nil then return end
+    local eac = dummy:call("getComponent(System.Type)", sdk.typeof("app.EventActionController"))
+    local active = eac ~= nil and eac:call("get_isActive") == true
+    if not active then
+        if E.started then
+            E.until_t = 0
+            log(string.format("event on the friend's body: finished after %.1f s", now - E.t0))
+        elseif now - E.t0 > (E.wait or 6) then
+            E.until_t = 0
+            log("event on the friend's body: never started")
+        end
+        return
+    end
+    if E.map == nil then
+        E.map = {}
+        local dtr = dummy:call("get_Transform")
+        local btr = anim.motion:call("get_GameObject"):call("get_Transform")
+        for _, j in ipairs(dtr:call("get_Joints"):get_elements()) do
+            local name = j:call("get_Name")
+            local bj = btr:call("getJointByName", name)
+            if bj then E.map[#E.map + 1] = { j, bj, name == "Hip" or name == "Null_Offset" } end
+        end
+    end
+    if not E.started then
+        E.started = true
+        log("event on the friend's body: playing (" .. #E.map .. " joints followed)")
+    end
+    for _, e in ipairs(E.map) do
+        e[2]:call("set_LocalRotation", e[1]:call("get_LocalRotation"))
+        if e[3] then e[2]:call("set_LocalPosition", e[1]:call("get_LocalPosition")) end
+    end
+end
+re.on_pre_application_entry("PrepareRendering", function()
+    if os.clock() >= ghost_event.until_t then return end
+    local ok, err = pcall(mirror_event_pose)
+    if not ok then
+        ghost_event.until_t = 0
+        log("event on the friend's body ERR " .. tostring(err))
+    end
 end)
 
 re.on_frame(function()

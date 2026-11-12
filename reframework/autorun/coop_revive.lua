@@ -9,6 +9,11 @@
 --   down <chapter>      I went down          up        I'm back up
 --   gameover            I died for real (if you're down too, you die with me)
 
+-- v0.48: this script's frame work waits while the game loads or swaps the player (coop_busy, coop_dummy.lua).
+local re = setmetatable({ on_frame = function(f)
+    return _G.re.on_frame(function() if coop_busy and coop_busy() then return end return f() end)
+end }, { __index = _G.re })
+
 revive = {
     downed = false, down_t = 0, pos = nil,
     near_t = nil,          -- since when the friend has been close
@@ -78,9 +83,20 @@ local function any_friend_down()
     return false
 end
 
--- A friend who is up is with us, and we're not in a cutscene.
+-- A friend who is up is with us. In a cutscene or a grab their character is hidden here, so it goes by
+-- the link instead (v0.48). Until then a death during a grab was always a real one: on 2026-11-10 a
+-- player revived in the morgue fight was killed in Jack's grab 20 s later, their game loaded the
+-- checkpoint (story back to before the fight) and they fought on alone while the friend finished it.
+local GRAB_FRIEND_M = 40
 local function friend_here()
-    if local_cutscene and local_cutscene() then return false end
+    if local_cutscene and local_cutscene() then
+        if rv.down_slots[1] then return false end
+        local smp = coop_friend_sample and coop_friend_sample()
+        local p = sdk.get_managed_singleton("app.ObjectManager"):get_field("PlayerObj")
+        local pos = p and safe(function() return p:call("get_Transform"):call("get_Position") end)
+        if smp == nil or pos == nil or smp.pos == nil then return false end
+        return (smp.pos.x - pos.x) ^ 2 + (smp.pos.z - pos.z) ^ 2 < GRAB_FRIEND_M * GRAB_FRIEND_M
+    end
     for k = 1, 3 do
         if not rv.down_slots[k] and friend_ghost(k) ~= nil then return true end
     end
@@ -125,6 +141,7 @@ end
 
 local function get_up(why)
     rv.downed, rv.near_t = false, nil
+    rv.up_t = os.clock()
     pcall(down_look, false)
     local dc = player_dc()
     if dc then
@@ -174,6 +191,33 @@ if m1 then hook_die(m1) end
 if m2 then hook_die(m2) end
 log("revive hooks: isEnableDieByDamageInfo " .. tostring(m1 ~= nil) .. ", canDie " .. tostring(m2 ~= nil))
 
+-- The game's own game over (v0.48). A scripted kill (a boss's finishing grab, a timeline's PlayerDeadTrack,
+-- the fsm action SetGameOver) doesn't ask canDie: it sets the game-over flag, the screen fades and the
+-- checkpoint loads. With a friend up and near, that flag is refused and we go down instead, for the
+-- friend to get us up; with nobody there (or once the 90 s are up) it goes through as before.
+rv.gameover_refused = 0
+do
+    local gmt = sdk.find_type_definition("app.GameManager")
+    local m = gmt and gmt:get_method("setGameOverFlag(System.Boolean)")
+    local skip = false
+    if m then
+        pcall(sdk.hook, m, function(args)
+            skip = false
+            pcall(function()
+                if (sdk.to_int64(args[3]) & 1) == 1 and should_go_down() then skip = true end
+            end)
+            if skip then
+                rv.gameover_refused = rv.gameover_refused + 1
+                rv.gameover_t = os.clock()
+                log("game over refused: a friend is up, going down instead")
+                pcall(go_down)
+                return sdk.PreHookResult.SKIP_ORIGINAL
+            end
+        end, function(r) return r end)
+    end
+    log("revive hooks: setGameOverFlag " .. tostring(m ~= nil))
+end
+
 -- While down: hold position, keep 1 health, watch for the friend.
 re.on_frame(function()
     local now = os.clock()
@@ -183,6 +227,17 @@ re.on_frame(function()
         if dc and not dc:call("get_isDead") and now - (rv.allow_t or now) > 10 then rv.allow_death = false end
         rv.allow_t = rv.allow_t or now
         return
+    end
+    -- Helped up after a refused game over, but the game still has us dead 6 s on (the kill had gone too
+    -- far to walk away from): let this life end the game's way rather than leave a player who can't move.
+    if not rv.downed and rv.gameover_t and rv.up_t and rv.up_t > rv.gameover_t and now - rv.up_t > 6 then
+        rv.gameover_t = nil
+        local dc = player_dc()
+        local ps = player()
+        ps = ps and safe(ps.call, ps, "getComponent(System.Type)", sdk.typeof("app.PlayerStatus"))
+        if (dc and safe(dc.call, dc, "get_isDead") == true) or (ps and safe(ps.call, ps, "get_IsDead") == true) then
+            die_for_real("still dead after being helped up")
+        end
     end
     if not rv.downed then return end
     local ok, err = pcall(function()
@@ -296,6 +351,13 @@ function revive_hud()
 end
 
 -- Testing: take a hit big enough to kill (you go down if a friend or the bot is with you).
+function revive_test_would_go_down() return should_go_down() end
+function revive_test_refuse_gameover()
+    if not should_go_down() then return false end
+    rv.gameover_refused, rv.gameover_t = rv.gameover_refused + 1, os.clock()
+    go_down()
+    return true
+end
 function revive_test_fatal_hit()
     local p, dc = player(), player_dc()
     if p == nil or dc == nil then return "no player" end

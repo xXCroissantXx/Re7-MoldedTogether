@@ -18,6 +18,11 @@
 -- screen and, for a ping, a marker where you stood, with the distance and a pointer when
 -- it's off screen.
 
+-- v0.48: this script's frame work waits while the game loads or swaps the player (coop_busy, coop_dummy.lua).
+local re = setmetatable({ on_frame = function(f)
+    return _G.re.on_frame(function() if coop_busy and coop_busy() then return end return f() end)
+end }, { __index = _G.re })
+
 local talk = {
     list = {},            -- { t = os.time(), text, key }
     loaded = false, dirty = false, save_t = 0,
@@ -82,6 +87,17 @@ local function list_key(text)
     if kind == "drawer" or kind == "switch" then return kind .. ":" .. id end
     if kind == "intr" and text:match(" phone$") then return "intr:" .. id end   -- answered calls
     if kind == "intr" and text:match(" lock$") then return "intr:" .. id end    -- cut chains, picked locks (v0.38)
+    -- The story and what goes with it (v0.48). On 2026-11-10 "Catch up" sent only world changes, so a
+    -- game whose story had stopped (it sat at the c03_2 step 400 all evening, its old objectives up) was
+    -- never brought forward. Now the latest step of every story part ("prog", walked through step by
+    -- step on the other side), finished events and fights, checked-off objectives, used key-item
+    -- gimmicks and solved puzzles are kept and sent too.
+    if kind == "prog" or kind == "evend" or kind == "btlend" or kind == "objdone" or kind == "gstate" then return kind .. ":" .. id end
+    if kind == "tray" then return "tray:" .. id end   -- the morgue's incinerator trays: the latest state of each
+    if kind == "iuse" then
+        local st = text:match("^iuse %S+ (%S+)")
+        return st and ("iuse:" .. id .. ":" .. st) or nil
+    end
     if kind == "kill" then
         local name = text:match("^kill %S+ %-?%d+ (%S+)")
         -- Only the Molded die for good; Jack and bosses get back up, so their kills aren't replayed.
@@ -96,6 +112,8 @@ coop_talk_list_key = list_key
 local function change_chapter(text)
     local kind = text:match("^(%a+)")
     if kind == "drawer" or kind == "switch" then return tonumber(text:match("^%a+ %S+ [01] (%-?%d+)")) end
+    -- "prog <hash> <value> <chapter>", "iuse <gimmick> <state> <chapter> <item>", "gstate <gimmick> <state> <chapter>"
+    if kind == "prog" or kind == "iuse" or kind == "gstate" or kind == "tray" then return tonumber(text:match("^%a+ %S+ %S+ (%-?%d+)")) end
     return tonumber(text:match("^%a+ %S+ (%-?%d+)"))
 end
 

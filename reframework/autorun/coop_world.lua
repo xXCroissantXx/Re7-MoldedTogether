@@ -16,6 +16,11 @@
 -- both worlds so nobody gets stuck. A pickup for an area the other player hasn't loaded
 -- yet is remembered and applied when it loads.
 
+-- v0.48: this script's frame work waits while the game loads or swaps the player (coop_busy, coop_dummy.lua).
+local re = setmetatable({ on_frame = function(f)
+    return _G.re.on_frame(function() if coop_busy and coop_busy() then return end return f() end)
+end }, { __index = _G.re })
+
 world_sync = {
     doors = {},        -- id -> { d = DoorPush, locked, open }
     doors_t = -100, poll_t = 0, items_t = -100,
@@ -52,8 +57,36 @@ end
 -- A managed array's items, or {} (v0.33: a query during a load once returned a non-array).
 local function elems(arr)
     if arr == nil then return {} end
+    if type(arr) == "table" then return arr end
     local ok, r = pcall(function() return arr:get_elements() end)
-    return (ok and r) or {}
+    if ok and r then return r end
+    -- No get_elements on it (v0.48): read it item by item instead.
+    local ok2, n = pcall(arr.call, arr, "get_Count")
+    if not ok2 or type(n) ~= "number" then return {} end
+    local out = {}
+    for i = 0, n - 1 do
+        local ok3, it = pcall(arr.call, arr, "get_Item", i)
+        if ok3 and it then out[#out + 1] = it end
+    end
+    return out
+end
+-- Every component of a type in the scene, or nil when the answer can't be read (v0.48). About one call
+-- in 50 the list comes back without its array methods; read as "nothing there" it emptied the door and
+-- prop lists for a moment, and a friend's door close or drawer arriving just then was dropped as "not
+-- loaded here" (seen in a bot run 2026-11-11, and the likely cause of doors not following in the
+-- basement on 2026-11-10). Asked up to 3 times; a scan that still can't be read is skipped, not trusted.
+local function find_comps(sc, tn)
+    if sdk.find_type_definition(tn) == nil then return {} end      -- a type this game doesn't have: none
+    for _ = 1, 3 do
+        local ok, arr = pcall(sc.call, sc, "findComponents(System.Type)", sdk.typeof(tn))
+        if ok and arr ~= nil and pcall(function() return arr:get_elements() end) then return arr end
+        -- Without get_elements, but readable item by item (v0.48: always so on the title screen).
+        if ok and arr ~= nil then
+            local ok2, n = pcall(arr.call, arr, "get_Count")
+            if ok2 and type(n) == "number" then return elems(arr) end
+        end
+    end
+    return nil
 end
 
 local function chapter()
@@ -113,7 +146,8 @@ local function is_open(state) return state ~= nil and state >= 3 and state <= 5 
 
 local function refresh_doors()
     local sc = scene()
-    local arr = sc and safe(sc.call, sc, "findComponents(System.Type)", sdk.typeof("app.DoorPush"))
+    local arr = sc and find_comps(sc, "app.DoorPush")
+    if arr == nil then return end      -- unreadable scan: keep what we have
     local seen = {}
     for _, d in ipairs(elems(arr)) do
         local id = id_of(d)
@@ -264,10 +298,25 @@ end
 coop_world_stream_doors = stream_door_angles
 
 local function poll_doors(now)
+    for id, c in pairs(ws.unlock_check or {}) do
+        local s = ws.doors[id]
+        if s == nil or c.n >= 3 then
+            ws.unlock_check[id] = nil
+        elseif now >= c.t then
+            if safe(s.d.call, s.d, "get_isLocked") == true then
+                c.n, c.t = c.n + 1, now + 1
+                ws.applying[id] = now
+                pcall(s.d.call, s.d, "unlockDoor")
+                log(string.format("door %s still locked after your friend's unlock: unlocked again (try %d)", id, c.n))
+            else
+                ws.unlock_check[id] = nil
+            end
+        end
+    end
     -- Only doors the scene still has (v0.24): one unloaded by an area change threw inside the
     -- game, like the pushed objects did (see poll_phys).
     local sc = scene()
-    local arr = sc and safe(sc.call, sc, "findComponents(System.Type)", sdk.typeof("app.DoorPush"))
+    local arr = sc and find_comps(sc, "app.DoorPush")
     if arr == nil then return end
     local live = {}
     for _, d in ipairs(elems(arr)) do live[d:get_address()] = true end
@@ -341,6 +390,10 @@ local function apply_door(kind, id, ch)
         if s.d:call("get_isLocked") then
             pcall(s.d.call, s.d, "unlockDoor")
             note("your friend unlocked a door")
+            -- Checked again (v0.48): on the father key door (sm2021, a two-sided item lock) unlockDoor once left
+            -- it locked in a bot run; poll_doors calls it again a second later, up to 3 times.
+            ws.unlock_check = ws.unlock_check or {}
+            ws.unlock_check[id] = { t = os.clock() + 1, n = 0 }
         end
     elseif kind == "open" then
         door_take_by_peer(s)
@@ -396,7 +449,8 @@ end
 
 local function refresh_items()
     local sc = scene()
-    local arr = sc and safe(sc.call, sc, "findComponents(System.Type)", sdk.typeof("app.Item"))
+    local arr = sc and find_comps(sc, "app.Item")
+    if arr == nil then return end      -- unreadable scan: keep what we have
     local seen = {}
     for _, it in ipairs(elems(arr)) do
         local id = id_of(it)
@@ -518,7 +572,8 @@ local function interactions_shared() return not (settings and settings.share_int
 -- get-in and get-out went across in the 2026-11-03 session).
 local INTR_SKIP = { "save", "tape", "video", "vhs", "record", "itembox", "event", "cs_",
     "shotgun", "statue", "pendulum", "item", "wp0", "wp1", "wp2", "wp4",
-    "getinto", "getout", "ignition", "ethancar", "puzzle", "ladder", "hide", "crouch", "climb" }
+    "getinto", "getout", "ignition", "ethancar", "puzzle", "ladder", "hide", "crouch", "climb",
+    "moldedtray01a_enemytray" }   -- the morgue's tray incinerators toggle: shared by state (poll_trays)
 local function intr_names(c)
     local out = {}
     local go = safe(c.call, c, "get_GameObject")
@@ -575,6 +630,9 @@ do
                     local c = sdk.to_managed_object(args[2])
                     if c == nil then return end
                     local tn = c:get_type_definition():get_full_name()
+                    -- Our own player answering a phone (this hook doesn't fire for a friend's, which is
+                    -- called from here): coop_story tags the call's scene with it.
+                    if mname == "successInteract" and is_phone(c) then coop_my_phone_t = os.clock() end
                     if TRACKED_TYPES[tn] and mname == "successInteract" then return end
                     local key = mname .. ":" .. tn .. ":" .. tostring(id_of(c) or intr_names(c))
                     if seen[key] then return end
@@ -831,7 +889,8 @@ end
 local function refresh_dbox(sc)
     local seen = {}
     for _, tn in ipairs(DESTRUCT_TYPES) do
-        local arr = safe(sc.call, sc, "findComponents(System.Type)", sdk.typeof(tn))
+        local arr = find_comps(sc, tn)
+        if arr == nil then return end      -- unreadable scan: keep what we have
         for _, c in ipairs(elems(arr)) do
             local go = safe(c.call, c, "get_GameObject")
             local has_item = go and safe(go.call, go, "getComponent(System.Type)", sdk.typeof("app.ItemDropDestruct"))
@@ -916,7 +975,8 @@ local function refresh_props()
     pcall(refresh_dbox, sc)
     local seen = {}
     for _, pt in ipairs(PROP_TYPES) do
-        local arr = safe(sc.call, sc, "findComponents(System.Type)", sdk.typeof(pt.type))
+        local arr = find_comps(sc, pt.type)
+        if arr == nil then return end      -- unreadable scan: keep what we have
         for _, c in ipairs(elems(arr)) do
             local id = id_of(c)
             if id then
@@ -931,11 +991,31 @@ local function refresh_props()
     for key in pairs(ws.props) do if not seen[key] then ws.props[key] = nil end end
 end
 
+-- How far a prop is from our player (v0.48). RE7 unloads the rooms you've left and loads them again from
+-- the save when you come back; in between a drawer reads as shut. A bot test (2026-11-11) caught the far
+-- game sending that as "I shut it" and taking the friend's change as already done, so on its way back the
+-- drawer was in the old state. Drawers and switches more than PROP_FAR m away are neither sent nor applied
+-- at once: the friend's change waits until we're near again. Drawers only: switches can sit far from where
+-- they're used.
+PROP_FAR = 25
+function coop_world_prop_dist(s)
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local p = om and om:get_field("PlayerObj")
+    local pp = p and safe(function() return p:call("get_Transform"):call("get_Position") end)
+    local q = safe(function() return s.c:call("get_GameObject"):call("get_Transform"):call("get_Position") end)
+    if pp == nil or q == nil then return 0 end
+    return math.sqrt((pp.x - q.x) ^ 2 + (pp.z - q.z) ^ 2)   -- across the floor: some props sit far below what you use (the shadow puzzle switch, 20 m)
+end
+
 local function poll_props(now)
     pcall(poll_dbox, now)
+    if coop_world_restore_retargeted then pcall(coop_world_restore_retargeted, now) end
+    if coop_world_check_drawers then pcall(coop_world_check_drawers, now) end
     for key, s in pairs(ws.props) do
         local on = safe(s.pt.state, s.c) == true
         local ours = ws.applying[key] and now - ws.applying[key] < 3
+        -- Far away nobody touched it: the room unloading or loading back changed what it reads.
+        if on ~= s.on and s.kind == "drawer" and coop_world_prop_dist(s) > PROP_FAR then ours = true end
         if on ~= s.on and not ours then
             if s.kind == "box" and on then send(string.format("break %s %d", s.id, chapter()))
             elseif s.kind == "drawer" then send(string.format("drawer %s %d %d", s.id, on and 1 or 0, chapter()))
@@ -950,6 +1030,51 @@ local function poll_props(now)
     end
 end
 
+-- A friend's interaction is theirs to perform (v0.48). successInteract() alone ran the whole thing on
+-- OUR player: walked 3.5 m to the sheet metal and put through the first-person animation (measured
+-- 2026-11-11). The interaction's event has a part for the player (app.GameEventAction with
+-- isTargetPlayer, next to an InteractEventSetting under the object); pointed at the friend's body
+-- instead, the object still animates and reaches the game's own end state while we stay free.
+-- settings.intr_pull_me = true brings the old way back. Parts are pointed back afterwards.
+ws.retargeted = {}
+local function retarget_event(c, body, own)
+    local go = safe(c.call, c, "get_GameObject")
+    local tr = go and safe(go.call, go, "get_Transform")
+    -- own: the component sits on the gimmick's own top object (the statue, a puzzle stand), whose parent
+    -- is the whole room: only that object's parts, not every interaction in the hall.
+    local par = tr and not (own and safe(tr.call, tr, "get_Child") ~= nil) and safe(tr.call, tr, "get_Parent")
+    local n = 0
+    local function walk(t, depth)
+        local g = safe(t.call, t, "get_GameObject")
+        local gea = g and safe(g.call, g, "getComponent(System.Type)", sdk.typeof("app.GameEventAction"))
+        if gea and safe(gea.call, gea, "get_isTargetPlayer") == true then
+            pcall(gea.set_field, gea, "SetTargetObj", body)
+            pcall(gea.set_field, gea, "TargetObjTemp", body)
+            ws.retargeted[#ws.retargeted + 1] = { gea = gea, t = os.clock() }
+            n = n + 1
+        end
+        if depth < 4 then
+            local ch, k = safe(t.call, t, "get_Child"), 0
+            while ch and k < 40 do walk(ch, depth + 1) ch = safe(ch.call, ch, "get_Next") k = k + 1 end
+        end
+    end
+    walk(par or tr, 0)
+    return n
+end
+local function restore_retargeted(now)
+    if #ws.retargeted == 0 then return end
+    local busy = coop_ghost_event_active and coop_ghost_event_active()
+    for i = #ws.retargeted, 1, -1 do
+        local r = ws.retargeted[i]
+        if now - r.t > 100 or (not busy and now - r.t > 8) then
+            pcall(r.gea.set_field, r.gea, "SetTargetObj", nil)
+            pcall(r.gea.set_field, r.gea, "TargetObjTemp", nil)
+            table.remove(ws.retargeted, i)
+        end
+    end
+end
+coop_world_restore_retargeted = restore_retargeted
+
 local function apply_prop(kind, id, want, ch, phone, lasting)
     if ch ~= chapter() then return end
     local key = kind .. ":" .. id
@@ -963,6 +1088,20 @@ local function apply_prop(kind, id, want, ch, phone, lasting)
         else
             log(kind .. " not loaded here: " .. id)
         end
+        return
+    end
+    -- A drawer, locker or switch changed while our own scene plays (v0.48): the game holds its props'
+    -- state machines still during a scene. On 2026-11-10 a locker the friend opened during the boiler
+    -- room scene took the "open" flag here and stayed shut (the flag then made every later try a no-op).
+    -- It waits for the scene to end, and afterwards the prop's own machine is checked (drawer_check).
+    if (kind == "drawer" or kind == "switch") and local_cutscene and local_cutscene() then
+        ws.pending_props[key] = { kind = kind, id = id, want = want, ch = ch }
+        log(kind .. " " .. id .. ": waits for your scene to end")
+        return
+    end
+    if kind == "drawer" and coop_world_prop_dist(s) > PROP_FAR then
+        ws.pending_props[key] = { kind = kind, id = id, want = want, ch = ch, far = true }
+        log("remembered " .. kind .. ": " .. id .. " (far from you: set when you're near)")
         return
     end
     local before = safe(s.pt.state, s.c) == true
@@ -1021,10 +1160,21 @@ local function apply_prop(kind, id, want, ch, phone, lasting)
             ws.applying[key] = os.clock() + 12
             ok, err = pcall(start_chain_cut, s.c, id)
         else
+            local parts = 0
+            if not (settings and settings.intr_pull_me == true) then
+                -- A phone starts its call's scene from here a moment later: coop_story gives that to the
+                -- friend's body too while this is set.
+                if phone or is_phone(s.c) then coop_friend_scene_until = os.clock() + 20 end
+                local body = coop_ghost_event_begin and coop_ghost_event_begin()
+                if body then parts = retarget_event(s.c, body) end
+                log(string.format("intr %s: %s", id, body == nil and "no friend's body yet: it plays on you"
+                    or (parts > 0 and (parts .. " player part(s) given to your friend's body") or "no player part in it")))
+            end
             ok, err = pcall(s.c.call, s.c, "successInteract")
         end
         if phone or is_phone(s.c) then
-            note("your friend answered the phone: the call plays for you too")
+            note((settings and settings.intr_pull_me == true) and "your friend answered the phone: the call plays for you too"
+                or "your friend answered the phone: you hear the call too")
         elseif is_chain(s.c) or is_lockpick(s.c) then
             -- Their own note comes when it's done.
         else
@@ -1036,6 +1186,7 @@ local function apply_prop(kind, id, want, ch, phone, lasting)
     else
         ok, err = pcall(s.c.call, s.c, "SetSwitch(System.Boolean)", want)
         note(want and "your friend opened a drawer" or "your friend shut a drawer")
+        ws.drawer_check[key] = { want = want, t = os.clock() + 2.5, tries = 0 }
     end
     log(string.format("%s %s: %s -> %s%s", kind, id, tostring(before), tostring(safe(s.pt.state, s.c)),
         ok and "" or (" ERR " .. tostring(err))))
@@ -1055,7 +1206,8 @@ local function phys_shared() return not (settings and settings.share_physics == 
 
 local function refresh_phys()
     local sc = scene()
-    local arr = sc and safe(sc.call, sc, "findComponents(System.Type)", sdk.typeof("app.Havok.RigidBodyDynamics"))
+    local arr = sc and find_comps(sc, "app.Havok.RigidBodyDynamics")
+    if arr == nil then return end      -- unreadable scan: keep what we have
     local seen = {}
     for _, c in ipairs(elems(arr)) do
         local go = safe(c.call, c, "get_GameObject")
@@ -1064,10 +1216,13 @@ local function refresh_phys()
         if known and ws.phys[known] then seen[known] = true
         elseif go then
             local p = safe(function() return go:call("get_Transform"):call("get_Position") end)
-            if p then
+            local lname = tostring(go and go:call("get_Name") or ""):lower()
+            -- Characters' own body parts (v0.47, bot test 2026-11-10): a Molded's ragdoll pieces
+            -- (em4000_Head_RB, em4050_blade_RB...) went out as pushed props several times a second.
+            local body = lname:find("^em%d%d%d%d") ~= nil or lname:find("^pl%d%d%d%d") ~= nil or lname:find("^ch%d%d%d%d") ~= nil
+            if p and not body then
                 local key = string.format("%s@%.1f,%.1f,%.1f", tostring(go:call("get_Name")), p.x, p.y, p.z)
                 if ws.phys[key] == nil then
-                    local lname = tostring(go:call("get_Name")):lower()
                     ws.phys[key] = { key = key, c = c, go = go, last = { x = p.x, y = p.y, z = p.z }, sent_t = -100,
                         weaponish = lname:find("knife", 1, true) ~= nil or lname:find("^wp%d") ~= nil
                             or lname:find("weapon", 1, true) ~= nil
@@ -1093,7 +1248,7 @@ local function poll_phys(now)
     -- the 2026-11-03 session had about 565 of those, in bursts at every door, and three
     -- "VMContext was already corrupted" warnings, which can end in a crash.
     local sc = scene()
-    local arr = sc and safe(sc.call, sc, "findComponents(System.Type)", sdk.typeof("app.Havok.RigidBodyDynamics"))
+    local arr = sc and find_comps(sc, "app.Havok.RigidBodyDynamics")
     if arr == nil then return end
     local live = {}
     for _, c in ipairs(elems(arr)) do live[c:get_address()] = true end
@@ -1229,6 +1384,39 @@ local function check_phys_moves(now)
     end
 end
 
+-- Did a drawer or locker we changed on the friend's word really move? Its object's state machine rests
+-- in "..._PauseStart" shut and "..._PauseEnd" open (measured on the basement locker, sm1344_Locker03A:
+-- Gimmick_Open_PauseStart -> SetSwitch(true) -> Gimmick_Open_PauseEnd). If the flag says one thing and
+-- the machine rests in the other 2.5 s later, the switch is thrown again (off, then as wanted), up to 3
+-- times. Machines with other state names are left alone.
+ws.drawer_check = {}
+local function check_drawers(now)
+    for key, c in pairs(ws.drawer_check) do
+        local s = ws.props[key]
+        if s == nil or c.tries >= 3 then
+            ws.drawer_check[key] = nil
+        elseif now >= c.t and not (local_cutscene and local_cutscene()) then
+            local go = safe(s.c.call, s.c, "get_GameObject")
+            local tr = go and safe(go.call, go, "get_Transform")
+            local par = tr and safe(tr.call, tr, "get_Parent")
+            local pg = par and safe(par.call, par, "get_GameObject")
+            local fsm = pg and safe(pg.call, pg, "getComponent(System.Type)", sdk.typeof("via.fsm.Fsm"))
+            local st = fsm and tostring(safe(fsm.call, fsm, "getCurrentState(System.UInt32)", 0) or "") or ""
+            local wrong = (c.want and st:match("PauseStart$") ~= nil) or (not c.want and st:match("PauseEnd$") ~= nil)
+            if not wrong then
+                ws.drawer_check[key] = nil
+            else
+                c.tries, c.t = c.tries + 1, now + 2.5
+                ws.applying[key] = now
+                pcall(s.c.call, s.c, "SetSwitch(System.Boolean)", not c.want)
+                pcall(s.c.call, s.c, "SetSwitch(System.Boolean)", c.want)
+                log(string.format("%s: flag says %s but it rests in %s: thrown again (try %d)", key, c.want and "open" or "shut", st, c.tries))
+            end
+        end
+    end
+end
+coop_world_check_drawers = check_drawers
+
 -- Changes the friend made in an area that wasn't loaded here, applied once it is.
 local function apply_pending()
     for id, ch in pairs(ws.pending_unlock) do
@@ -1237,8 +1425,10 @@ local function apply_pending()
             pcall(apply_door, "unlock", id, ch)
         end
     end
+    local in_scene = local_cutscene and local_cutscene()
     for key, p in pairs(ws.pending_props) do
-        if ws.props[key] and p.ch == chapter() then
+        local held = (p.kind == "drawer" or p.kind == "switch") and (in_scene or (p.kind == "drawer" and ws.props[key] and coop_world_prop_dist(ws.props[key]) > PROP_FAR - 5))
+        if ws.props[key] and p.ch == chapter() and not held then
             ws.pending_props[key] = nil
             pcall(apply_prop, p.kind, p.id, p.want, p.ch, p.phone, p.lasting)
         end
@@ -1340,51 +1530,470 @@ do
             pcall(function()
                 local so = sdk.to_managed_object(args[3])
                 local id = so and (safe(so.call, so, "ToString()") or safe(so.call, so, "ToString"))
-                ws.used_pre = id and { id = tostring(id), before = inv_count(active_inventory(), tostring(id)) } or nil
+                -- v0.48: the name only. Counting the inventory here ran in the middle of the game's own
+                -- item use (155 game exceptions from getTotalStackNum in one session).
+                ws.used_pre = id and { id = tostring(id), c = sdk.to_managed_object(args[2]) } or nil
             end)
         end, function(r)
             pcall(function()
                 local u = ws.used_pre
                 ws.used_pre = nil
                 local res = sdk.to_int64(r) & 0xFFFFFFFF
-                if u and res == 0 and KEY_CATS[item_category(u.id) or -1] then
-                    ws.used[u.id] = { t = os.clock(), ch = chapter(), before = u.before }
-                    log("used " .. u.id .. " on something (" .. u.before .. " before)")
+                if u and res == 0 then
+                    ws.used[u.id] = { t = os.clock(), ch = chapter() }
+                    log("used " .. u.id .. " on something")
+                    -- Told to the friend from the next frame's poll, not from inside the game's item use.
+                    if u.c then
+                        pcall(u.c.add_ref, u.c)
+                        ws.iuse_out[#ws.iuse_out + 1] = { c = u.c, id = u.id, t = os.clock() }
+                    end
                 end
             end)
             return r
         end)
     end
 end
-local function poll_used(now)
-    local inv = active_inventory()
-    for id, u in pairs(ws.used) do
-        if chapter() == u.ch then
-            local c = inv_count(inv, id)
-            if c < u.before then
-                send(string.format("kused %s %d %d", id, u.before - c, u.ch))
-                ws.used[id] = nil
-            elseif now - u.t > 600 then
-                ws.used[id] = nil   -- still there after 10 minutes: not one that gets used up
+-- v0.48: nothing is taken from anyone's inventory any more. v0.41-v0.47 sent "kused" when a key item was
+-- used up, and the other game removed its own copy with Inventory.reduceItem as soon as it had one. On
+-- 2026-11-10 that took an item out from under the game three times while its owner was using it (both
+-- players putting the pendulum in their clocks; dog heads being placed; a coin taken during an injection),
+-- and each time that game crashed a second later. It also emptied the other player's antique coins and
+-- took a dog head back after a reload. Key items and coins are each player's own; the doors and locks
+-- they open are shared by "unlock". An old version's "kused" is ignored.
+-- Key-item gimmicks are shared by their result (v0.48). The dog heads' door, the statue, the clock and
+-- every lock that takes an item carry an app.ItemSelectReaction: a list of { ItemID, StateName, Result }
+-- and a state machine (via.fsm.Fsm on the same object). Using the right item sends that machine to
+-- StateName. Tested 2026-11-11 on the dog heads' door in a game that had no dog head: setCurrentState(
+-- "SelectSuccessA") showed head A on the door, B and C the same, and with all three the door unlocked;
+-- the player wasn't moved or put in an animation. So when one of you uses an item, the other game gets
+-- "iuse <gimmick> <state> <chapter> <item>" and sets the same state; nobody's inventory is touched.
+-- The gimmick is named by its object's name and position (it has no id of its own). Not shared: tapes
+-- in the video deck (they change chapter; followed separately), antique-coin cages (what you buy is your
+-- own), lockpicks (their own code above), and a plain one-key door (its unlock is shared already).
+ws.iuse_out, ws.iuse_pending, ws.iuse_last = {}, {}, {}
+local function reaction_key(c)
+    local go = safe(c.call, c, "get_GameObject")
+    local tr = go and safe(go.call, go, "get_Transform")
+    local p = tr and safe(tr.call, tr, "get_Position")
+    if p == nil then return nil end
+    local par = safe(tr.call, tr, "get_Parent")
+    local pg = par and safe(par.call, par, "get_GameObject")
+    local name = tostring(safe(go.call, go, "get_Name") or "") .. "<" .. tostring(pg and safe(pg.call, pg, "get_Name") or "")
+    return string.format("%s@%.1f,%.1f,%.1f", (name:gsub("%s", "_")), p.x, p.y, p.z)
+end
+local function reaction_settings(c)
+    local out = {}
+    local list = safe(c.get_field, c, "ReactionSettings")
+    local n = list and tonumber(safe(list.call, list, "get_Count")) or 0
+    for i = 0, n - 1 do
+        local e = safe(list.call, list, "get_Item", i)
+        if e then
+            out[#out + 1] = { item = tostring(safe(e.get_field, e, "ItemID") or ""), state = tostring(safe(e.get_field, e, "StateName") or ""),
+                result = tonumber(safe(e.get_field, e, "Result")) or -1 }
+        end
+    end
+    return out
+end
+local function under_door(c)
+    local go = safe(c.call, c, "get_GameObject")
+    local tr = go and safe(go.call, go, "get_Transform")
+    for _ = 1, 4 do
+        if tr == nil then return false end
+        local g = safe(tr.call, tr, "get_GameObject")
+        if g and safe(g.call, g, "getComponent(System.Type)", sdk.typeof("app.DoorPush")) then return true end
+        tr = safe(tr.call, tr, "get_Parent")
+    end
+    return false
+end
+-- Why this gimmick's item use stays with the player who did it, or nil when it is shared.
+local function reaction_private(c, item, sets)
+    local key = (reaction_key(c) or ""):lower()
+    if key:find("videodeck", 1, true) or item:find("FoundFootage", 1, true) or item == "SaveTape" then return "a tape" end
+    if item == "Coin" or item == "CoinOld" then return "antique coins are your own" end
+    if key:find("keypick", 1, true) or key:find("keylock", 1, true) or item == "CylinderKey" then return "a lockpick" end
+    local wins = 0
+    for _, e in ipairs(sets) do if e.result == 0 then wins = wins + 1 end end
+    if wins <= 1 and under_door(c) then return "a door key (the unlock is shared)" end
+    return nil
+end
+local function find_reaction(key)
+    local sc = scene()
+    local arr = sc and find_comps(sc, "app.ItemSelectReaction")
+    for _, c in ipairs(elems(arr)) do
+        if reaction_key(c) == key then return c end
+    end
+    return nil
+end
+local function apply_iuse(key, state, ch, item, later)
+    if ch ~= chapter() then return true end
+    if settings and settings.share_item_gimmicks == false then return true end
+    -- One change at a time per gimmick, 2 s apart, in the order they were made (three dog heads placed
+    -- in a row each need the door's machine to come back from the one before).
+    if not later then
+        local waiting = false
+        for _, e in ipairs(ws.iuse_pending) do if e.key == key then waiting = true end end
+        if waiting or (ws.iuse_last[key] and os.clock() - ws.iuse_last[key] < 2) then
+            ws.iuse_pending[#ws.iuse_pending + 1] = { key = key, state = state, ch = ch, item = item, t = os.clock() }
+            return false
+        end
+    end
+    local c = find_reaction(key)
+    if c == nil then
+        if not later then
+            ws.iuse_pending[#ws.iuse_pending + 1] = { key = key, state = state, ch = ch, item = item, t = os.clock() }
+            log("iuse " .. key .. " " .. state .. ": not loaded here yet, kept for when it is")
+        end
+        return false
+    end
+    -- The machine is on the object the gimmick names (FsmObj): itself on the dog heads' door, a child
+    -- (InteractShotgun) on the statue.
+    local go = safe(c.get_field, c, "FsmObj") or c:call("get_GameObject")
+    local fsm = safe(go.call, go, "getComponent(System.Type)", sdk.typeof("via.fsm.Fsm"))
+    if fsm == nil then
+        go = c:call("get_GameObject")
+        fsm = safe(go.call, go, "getComponent(System.Type)", sdk.typeof("via.fsm.Fsm"))
+    end
+    -- Far from the player a gimmick's state machine isn't running (no current state) and a change is
+    -- lost when it starts (tested from the study, 25 m from the hall door): wait until it runs.
+    local cur = fsm and tostring(safe(fsm.call, fsm, "getCurrentState(System.UInt32)", 0) or "") or ""
+    if fsm ~= nil and (cur == "" or cur == "nil") then
+        if not later then
+            ws.iuse_pending[#ws.iuse_pending + 1] = { key = key, state = state, ch = ch, item = item, t = os.clock() }
+            log("iuse " .. key .. " " .. state .. ": that gimmick isn't running here yet (too far), kept for when it is")
+        end
+        return false
+    end
+    if fsm == nil or safe(fsm.call, fsm, "hasState(System.String)", state) ~= true then
+        log("iuse " .. key .. ": no state " .. state .. " here")
+        return true
+    end
+    ws.iuse_last[key] = os.clock()
+    -- If the state plays a player animation, the friend's body performs it (as with their other interactions).
+    local parts = 0
+    local body = not (settings and settings.intr_pull_me == true) and coop_ghost_event_begin and coop_ghost_event_begin()
+    if body then parts = retarget_event(c, body, true) end
+    local before = tostring(safe(fsm.call, fsm, "getCurrentState(System.UInt32)", 0))
+    local ok, err = pcall(fsm.call, fsm, "setCurrentState(System.String)", state)
+    log(string.format("iuse %s: %s -> %s (%s)%s%s", key, before, state, item, parts > 0 and (", " .. parts .. " player part(s) on the friend's body") or "",
+        ok and "" or (" ERR " .. tostring(err))))
+    note(item == "ShadowPuzzle" and "your friend solved a puzzle: it's solved in your game too"
+        or ("your friend used a key item (" .. item .. "): done in your game too"))
+    ws.applied = ws.applied + 1
+    return true
+end
+local function poll_iuse(now)
+    for i = #ws.iuse_out, 1, -1 do
+        local u = table.remove(ws.iuse_out, i)
+        local sets = reaction_settings(u.c)
+        local state
+        for _, e in ipairs(sets) do if e.item == u.id and e.result == 0 then state = e.state end end
+        local key = reaction_key(u.c)
+        local why = reaction_private(u.c, u.id, sets)
+        if state == nil or state == "" or key == nil then
+            log("used " .. u.id .. ": no success state for it on " .. tostring(key))
+        elseif why then
+            log("used " .. u.id .. " on " .. key .. ": not shared (" .. why .. ")")
+            -- A tape in the video deck: the friend's game follows us into it (coop_dummy, coop_follow_tape).
+            if u.id:find("^FoundFootage") then send(string.format("tape %s %d", u.id, chapter())) end
+        elseif not (settings and settings.share_item_gimmicks == false) then
+            send(string.format("iuse %s %s %d %s", key, state, chapter(), u.id))
+        end
+    end
+    if #ws.iuse_pending > 0 and now - (ws.iuse_pend_t or 0) > 2 then
+        ws.iuse_pend_t = now
+        local tried, i = {}, 1
+        while i <= #ws.iuse_pending do            -- oldest first, one per gimmick per pass
+            local e = ws.iuse_pending[i]
+            local drop = now - e.t > 3600 or e.ch ~= chapter()
+            if not drop and not tried[e.key] then
+                tried[e.key] = true
+                drop = apply_iuse(e.key, e.state, e.ch, e.item, true)
+            end
+            if drop then table.remove(ws.iuse_pending, i) else i = i + 1 end
+        end
+    end
+end
+-- Shadow puzzles (v0.48). The stand is an item gimmick like the others (the piece goes on with
+-- SelectSuccess, shared above) and its state machine goes to "Open" when the shadow is matched. Tested
+-- 2026-11-11 on the hall puzzle in a game that hadn't solved it: setCurrentState("Open") ran Open_state00
+-- and settled in StateCheck_Open with the solved piece shown; the player wasn't touched. So the game
+-- that solves it is watched for that change (twice a second) and the other gets the same "iuse" with
+-- state Open. A change we made on the friend's word isn't sent back.
+ws.puz_state = {}
+local function poll_puzzles(now)
+    if now - (ws.puz_t or 0) < 0.5 then return end
+    ws.puz_t = now
+    if settings and settings.share_item_gimmicks == false then return end
+    local sc = scene()
+    local arr = sc and find_comps(sc, "app.InteractShadowPuzzle")
+    local done = {}
+    for _, c in ipairs(elems(arr)) do
+        local go = safe(c.call, c, "get_GameObject")
+        local tr = go and safe(go.call, go, "get_Transform")
+        local r
+        for _ = 1, 4 do
+            if tr == nil or r then break end
+            local g = safe(tr.call, tr, "get_GameObject")
+            r = g and safe(g.call, g, "getComponent(System.Type)", sdk.typeof("app.ItemSelectReaction"))
+            tr = safe(tr.call, tr, "get_Parent")
+        end
+        local key = r and reaction_key(r)
+        if key and not done[key] then
+            done[key] = true
+            local fo = safe(r.get_field, r, "FsmObj") or safe(r.call, r, "get_GameObject")
+            local fsm = fo and safe(fo.call, fo, "getComponent(System.Type)", sdk.typeof("via.fsm.Fsm"))
+            local st = fsm and tostring(safe(fsm.call, fsm, "getCurrentState(System.UInt32)", 0) or "") or ""
+            local was = ws.puz_state[key]
+            ws.puz_state[key] = st
+            if was ~= nil and was ~= "" and was ~= "nil" and st:match("^Open") and not was:match("^Open")
+                and not (ws.iuse_last[key] and now - ws.iuse_last[key] < 20) then
+                log("puzzle " .. key .. ": solved here (" .. was .. " -> " .. st .. ")")
+                send(string.format("iuse %s Open %d ShadowPuzzle", key, chapter()))
             end
         end
     end
-    -- A friend's used-up key items: taken from ours once we have them.
-    for id, k in pairs(ws.kused) do
-        if now - k.t > 1800 then ws.kused[id] = nil
-        else
-            local c = inv_count(inv, id)
-            if c > 0 and k.n > 0 then
-                local n = math.min(c, k.n)
-                local ok = inv and pcall(inv.call, inv, "reduceItem(System.String, System.Int32, System.Boolean)", id, n, false)
-                if ok then
-                    k.n = k.n - n
-                    note("your friend used " .. id .. ": it's gone from yours too")
+end
+
+-- The other puzzles (v0.48): the clock's hands, number locks, padlocks, the turning paintings, the
+-- cardan grille, pushed blocks. Each is an InteractObjectBase of its own kind sitting under a gimmick
+-- object with a state machine, like the shadow puzzle's stand, whose machine went to "Open" when solved.
+-- Whether these use the same name isn't known (no save has one unsolved), so this goes by what is seen:
+-- every change of such a gimmick's state is logged ("puzzle watch"), and a change INTO a state named
+-- Open..., Clear..., Solved... or Success... is sent ("gstate <gimmick> <state> <chapter>"). The other
+-- game sets that same state on the same gimmick if its machine has it and isn't there already, once it
+-- is running (near the player), never during a scene. Nothing is sent for other names: the log from a
+-- real session will show what they are.
+local PUZZLE_TYPES = { "app.InteractClockPuzzle", "app.InteractNumberLock", "app.InteractPadlock",
+    "app.InteractRotateArt", "app.InteractCardanGrille", "app.InteractPushMove" }
+local function solved_name(st) return st:match("^Open") or st:match("^Clear") or st:match("^Solved") or st:match("^Success") end
+ws.gim_state, ws.gim_pending, ws.gim_last = {}, {}, {}
+local function gimmick_key(go)
+    local tr = safe(go.call, go, "get_Transform")
+    local p = tr and safe(tr.call, tr, "get_Position")
+    if p == nil then return nil end
+    local par = safe(tr.call, tr, "get_Parent")
+    local pg = par and safe(par.call, par, "get_GameObject")
+    local name = tostring(safe(go.call, go, "get_Name") or "") .. "<" .. tostring(pg and safe(pg.call, pg, "get_Name") or "")
+    return string.format("%s@%.1f,%.1f,%.1f", (name:gsub("%s", "_")), p.x, p.y, p.z)
+end
+-- Every puzzle gimmick loaded: key -> its state machine.
+local function puzzle_gimmicks()
+    local out = {}
+    local sc = scene()
+    if sc == nil then return out end
+    for _, tn in ipairs(PUZZLE_TYPES) do
+        local arr = find_comps(sc, tn)
+        for _, c in ipairs(elems(arr)) do
+            local go = safe(c.call, c, "get_GameObject")
+            local tr = go and safe(go.call, go, "get_Transform")
+            for _ = 1, 4 do
+                if tr == nil then break end
+                local g = safe(tr.call, tr, "get_GameObject")
+                local fsm = g and safe(g.call, g, "getComponent(System.Type)", sdk.typeof("via.fsm.Fsm"))
+                if fsm then
+                    local key = gimmick_key(g)
+                    if key then out[key] = fsm end
+                    break
                 end
-                if k.n <= 0 or not ok then ws.kused[id] = nil end
+                tr = safe(tr.call, tr, "get_Parent")
             end
         end
     end
+    return out
+end
+local function poll_gimmicks(now)
+    if now - (ws.gim_t or 0) < 0.5 then return end
+    ws.gim_t = now
+    if settings and settings.share_item_gimmicks == false then return end
+    local all = puzzle_gimmicks()
+    local in_scene = local_cutscene and local_cutscene()
+    for key, fsm in pairs(all) do
+        local st = tostring(safe(fsm.call, fsm, "getCurrentState(System.UInt32)", 0) or "")
+        local was = ws.gim_state[key]
+        ws.gim_state[key] = st
+        if was ~= nil and was ~= st and st ~= "" and st ~= "nil" and was ~= "" and was ~= "nil" then
+            local ours = ws.gim_last[key] and now - ws.gim_last[key] < 20
+            log(string.format("puzzle watch: %s %s -> %s%s", key, was, st, ours and " (on your friend's word)" or ""))
+            if solved_name(st) and not solved_name(was) and not ours then
+                send(string.format("gstate %s %s %d", key, st, chapter()))
+            end
+        end
+        local pnd = ws.gim_pending[key]
+        if pnd and pnd.ch == chapter() and not in_scene and st ~= "" and st ~= "nil" then
+            ws.gim_pending[key] = nil
+            if solved_name(st) then
+                log("puzzle " .. key .. ": already solved here (" .. st .. ")")
+            elseif safe(fsm.call, fsm, "hasState(System.String)", pnd.state) ~= true then
+                log("puzzle " .. key .. ": no state " .. pnd.state .. " here")
+            else
+                ws.gim_last[key] = now
+                local ok, err = pcall(fsm.call, fsm, "setCurrentState(System.String)", pnd.state)
+                log(string.format("puzzle %s: %s -> %s (from the friend)%s", key, st, pnd.state, ok and "" or (" ERR " .. tostring(err))))
+                note("your friend solved a puzzle: it's solved in your game too")
+                ws.applied = ws.applied + 1
+            end
+        end
+    end
+    for key, pnd in pairs(ws.gim_pending) do
+        if pnd.ch ~= chapter() or now - pnd.t > 3600 then ws.gim_pending[key] = nil end
+    end
+end
+local function apply_gstate(key, state, ch)
+    if ch ~= chapter() or not solved_name(state) then return end
+    if settings and settings.share_item_gimmicks == false then return end
+    ws.gim_pending[key] = { state = state, ch = ch, t = os.clock() }
+    log("puzzle " .. key .. ": your friend solved it (" .. state .. "); done here when it's loaded and you're free")
+end
+
+-- The morgue's tray incinerators, "the cremator puzzle" (v0.48). Five trays (sm1750_MoldedTray01A_EnemyTray01-05)
+-- each toggle between OpenEnd and CloseEnd when used, and the key tray (ItemTray) unlocks once the right ones
+-- are shut. They went out as one-off "intr" (sent the first time only, and lost if the morgue wasn't loaded
+-- in the other game), so a tray shut and opened again, or one used before the friend got there, left the
+-- two games with different trays shut: the friend got the key and the puzzle was still locked for the
+-- other player (2026-11-11; the bot test reproduced it: copy 0 locked, copy 1 unlocked). Now each tray's
+-- state is sent when it changes ("tray <name> <state> <chapter>", kept for the catch-up), and the other
+-- game uses its own tray until it matches, when the morgue is loaded and no scene is playing.
+local TRAY_PAT = "^sm1750_MoldedTray01A_EnemyTray%d+$"
+ws.tray_state, ws.tray_ours = {}, {}
+ws.tray_want = ws.tray_want or {}
+local function tray_end(st) return st == "OpenEnd" or st == "CloseEnd" end
+local function tray_list(now)
+    if ws.tray_cache and now - ws.tray_cache_t < 3 then return ws.tray_cache end
+    local out = {}
+    local sc = scene()
+    for _, c in ipairs(elems(sc and find_comps(sc, "app.InteractSendFsm"))) do
+        local go = safe(c.call, c, "get_GameObject")
+        local tr = go and safe(go.call, go, "get_Transform")
+        local par = tr and safe(tr.call, tr, "get_Parent")
+        local pg = par and safe(par.call, par, "get_GameObject")
+        local name = pg and tostring(safe(pg.call, pg, "get_Name") or "") or ""
+        if name:match(TRAY_PAT) then
+            local fsm = safe(pg.call, pg, "getComponent(System.Type)", sdk.typeof("via.fsm.Fsm"))
+            if fsm then out[name] = { fsm = fsm, isf = c } end
+        end
+    end
+    ws.tray_cache, ws.tray_cache_t = out, now
+    return out
+end
+local function poll_trays(now)
+    if now - (ws.tray_t or 0) < 0.5 then return end
+    ws.tray_t = now
+    if not interactions_shared() then return end
+    local in_scene = local_cutscene and local_cutscene()
+    for name, t in pairs(tray_list(now)) do
+        local st = tostring(safe(t.fsm.call, t.fsm, "getCurrentState(System.UInt32)", 0) or "")
+        if st == "" or st == "nil" then
+            ws.tray_cache = nil   -- unloaded: look again
+        else
+            local was = ws.tray_state[name]
+            ws.tray_state[name] = st
+            if was and was ~= st and tray_end(st) then
+                local ours = ws.tray_ours[name] and now - ws.tray_ours[name] < 6
+                log(string.format("tray %s: %s -> %s%s", name, was, st, ours and " (on your friend's word)" or ""))
+                if not ours then send(string.format("tray %s %s %d", name, st, chapter())) end
+            end
+            local w = ws.tray_want[name]
+            if w and w.ch == chapter() and not in_scene and tray_end(st) then
+                if st == w.state then
+                    ws.tray_want[name] = nil
+                elseif now >= (w.next_t or 0) then
+                    if (w.tries or 0) >= 3 then
+                        log("tray " .. name .. ": still " .. st .. " after 3 tries (the friend's is " .. w.state .. "), left as it is")
+                        ws.tray_want[name] = nil
+                    else
+                        w.tries, w.next_t = (w.tries or 0) + 1, now + 4
+                        ws.tray_ours[name] = now
+                        local ok, err = pcall(t.isf.call, t.isf, "successInteract")
+                        log(string.format("tray %s: %s -> %s like the friend's%s", name, st, w.state, ok and "" or (" ERR " .. tostring(err))))
+                        if w.tries == 1 then note("your friend worked an incinerator tray: it's the same in your game") end
+                        ws.applied = ws.applied + 1
+                    end
+                end
+            end
+        end
+    end
+    for name, w in pairs(ws.tray_want) do if w.ch ~= chapter() then ws.tray_want[name] = nil end end
+end
+local function apply_tray(name, state, ch)
+    if ch ~= chapter() or not name:match(TRAY_PAT) or not tray_end(state) then return end
+    if not interactions_shared() then return end
+    ws.tray_want[name] = { state = state, ch = ch }
+    if ws.tray_state[name] == nil then log("tray " .. name .. " " .. state .. ": the morgue isn't loaded here, done when it is") end
+end
+
+-- Body-bag kicks in the morgue fight (v0.48). A hanging bag (sm1684_Corpsebag_Battle) has a child
+-- sm1684_Corpsebag_Kick with app.Em8000.Em8000CorpsebagInteract: setInteract(kicker) runs a 1.2 s event
+-- (the kicker's kick, clip pl0000_Hands_Kick) and throws the bag on its chain. Each game ran its own
+-- bags, so a kick moved nothing on the other screen. Now our kick is noticed (our player's event task
+-- is owned by a bag's kick object) and sent as "kick <x> <y> <z> <chapter>"; the other game runs the
+-- same bag's setInteract with our body there as the kicker. Tested 2026-11-11 between two copies: the
+-- bag swung 2.6 m in both, the other player wasn't moved or put in the animation.
+ws.kick = { on = false }
+local function kick_type() return sdk.find_type_definition("app.Em8000.Em8000CorpsebagInteract") end
+local function poll_kicks(now)
+    if kick_type() == nil then return end
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local p = om and om:get_field("PlayerObj")
+    local eac = p and safe(p.call, p, "getComponent(System.Type)", sdk.typeof("app.EventActionController"))
+    local on, owner = false, nil
+    if eac and safe(eac.call, eac, "get_isActive") == true then
+        owner = safe(eac.call, eac, "get_activeOwnerObj")
+        on = owner ~= nil and safe(owner.call, owner, "getComponent(System.Type)", sdk.typeof("app.Em8000.Em8000CorpsebagInteract")) ~= nil
+    end
+    if on and not ws.kick.on and not (settings and settings.share_interactions == false) then
+        local tr = safe(owner.call, owner, "get_Transform")
+        local pos = tr and safe(tr.call, tr, "get_Position")
+        if pos then send(string.format("kick %.1f %.1f %.1f %d", pos.x, pos.y, pos.z, chapter())) end
+    end
+    ws.kick.on = on
+    -- A bag's kicker is pointed back at the player once the friend's kick is over.
+    if ws.kick.back and now >= ws.kick.back.t then
+        pcall(ws.kick.back.gea.set_field, ws.kick.back.gea, "SetTargetObj", nil)
+        pcall(ws.kick.back.gea.set_field, ws.kick.back.gea, "TargetObjTemp", nil)
+        ws.kick.back = nil
+    end
+end
+local function apply_kick(x, y, z, ch)
+    if ch ~= chapter() or kick_type() == nil then return end
+    if settings and (settings.share_interactions == false or settings.intr_pull_me == true) then return end
+    local sc = scene()
+    local arr = sc and find_comps(sc, "app.Em8000.Em8000CorpsebagInteract")
+    local best, bd
+    for _, c in ipairs(elems(arr)) do
+        local go = safe(c.call, c, "get_GameObject")
+        local tr = go and safe(go.call, go, "get_Transform")
+        local pos = tr and safe(tr.call, tr, "get_Position")
+        if pos then
+            local d = (pos.x - x) ^ 2 + (pos.y - y) ^ 2 + (pos.z - z) ^ 2
+            if bd == nil or d < bd then best, bd = c, d end
+        end
+    end
+    if best == nil or bd > 0.25 then log(string.format("kick at %.1f %.1f %.1f: no such bag loaded here", x, y, z)) return end
+    local body = coop_ghost_event_begin and coop_ghost_event_begin()
+    if body == nil then log("kick: no friend's body yet") return end
+    local gea = safe(best.get_field, best, "GameEventAction")
+    if gea then
+        pcall(gea.set_field, gea, "SetTargetObj", body)
+        pcall(gea.set_field, gea, "TargetObjTemp", body)
+        ws.kick.back = { gea = gea, t = os.clock() + 3 }
+    end
+    local ok, err = pcall(best.call, best, "setInteract", body)
+    log(string.format("your friend kicked the bag at %.1f %.1f %.1f%s", x, y, z, ok and "" or (" ERR " .. tostring(err))))
+    ws.applied = ws.applied + 1
+end
+
+coop_world_iuse_test = function(c, item) ws.iuse_out[#ws.iuse_out + 1] = { c = c, id = item, t = os.clock() } end   -- bot tests
+
+local function poll_used(now)
+    pcall(poll_iuse, now)
+    pcall(poll_puzzles, now)
+    pcall(poll_gimmicks, now)
+    pcall(poll_trays, now)
+    pcall(poll_kicks, now)
+    for id, u in pairs(ws.used) do
+        if now - u.t > 600 or chapter() ~= u.ch then ws.used[id] = nil end
+    end
+    ws.kused = {}
 end
 
 -- Giving a friend who's behind the host's key items and weapons (v0.41, experimental): "inv_req"
@@ -1610,6 +2219,19 @@ function coop_world_on_event(text)
     if okt then pcall(on_give_reply, okt, true, okn) return true end
     local nt, nwhy = text:match("^give_no (%x+) (%S+)$")
     if nt then pcall(on_give_reply, nt, false, nwhy) return true end
+    local kx, ky, kz, kch = text:match("^kick (%-?[%d%.]+) (%-?[%d%.]+) (%-?[%d%.]+) (%-?%d+)$")
+    if kx then pcall(apply_kick, tonumber(kx), tonumber(ky), tonumber(kz), tonumber(kch)) return true end
+    local gkey, gst, gch = text:match("^gstate (%S+) (%S+) (%-?%d+)$")
+    if gkey then pcall(apply_gstate, gkey, gst, tonumber(gch)) return true end
+    local tname, tst, tch = text:match("^tray (%S+) (%S+) (%-?%d+)$")
+    if tname then pcall(apply_tray, tname, tst, tonumber(tch)) return true end
+    local titem, tch = text:match("^tape (%S+) (%-?%d+)$")
+    if titem then
+        if coop_follow_tape then pcall(coop_follow_tape, titem, tonumber(tch)) end
+        return true
+    end
+    local ukey, ustate, uch, uitem = text:match("^iuse (%S+) (%S+) (%-?%d+) (%S+)$")
+    if ukey then pcall(apply_iuse, ukey, ustate, tonumber(uch), uitem) return true end
     local kid, kn, kch = text:match("^kused (%S+) (%d+) (%-?%d+)")
     if kid then
         if KEY_CATS[item_category(kid) or -1] then

@@ -35,6 +35,11 @@
 -- shotguns, magnum, grenade launcher, machine gun...) and every blade's SND_DF_WP_SE_CUTTING
 -- (knife, axe...), so each weapon's own sound plays from its own files. Sent as "gshot",
 -- "gswing" and "greload <weapon>".
+-- v0.48: this script's frame work waits while the game loads or swaps the player (coop_busy, coop_dummy.lua).
+local re = setmetatable({ on_frame = function(f)
+    return _G.re.on_frame(function() if coop_busy and coop_busy() then return end return f() end)
+end }, { __index = _G.re })
+
 local TRIGGERS = {
     shot = 3908091806,     -- SND_DF_WP_SE_SHOT
     swing = 1824153269,    -- SND_DF_WP_SE_CUTTING

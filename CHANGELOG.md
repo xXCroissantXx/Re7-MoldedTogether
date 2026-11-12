@@ -1,5 +1,186 @@
 # Changelog
 
+## v0.48 (2026-11-10)
+Fixes from the first v0.47 session (two players, the Chapter 3 basement to the yard): four crashes, two stuck
+loading screens and a list of things that didn't match between the two games. Everyone needs v0.48.
+
+Crashes and hangs:
+- **Using an item no longer crashes the game.** When one of you used up a key item, the mod took the same item
+  out of the other player's inventory at once, even if that player was in the middle of using it. That crashed a
+  game three times in one evening (both putting the pendulum in the clock; placing the dog heads; a coin taken
+  during an injection). The mod no longer takes anything from anyone's inventory.
+- **No more hang or crash at loading screens.** At the end of the Mia tape and when loading a save after a
+  scene, the mod kept checking objects the game had just removed, hundreds of times a second, until the game
+  hung on the loading screen or crashed. All of the mod's checks now wait while the game loads or swaps the
+  player.
+- **"Reload last save" refuses while a scene is playing or the game is loading** (it crashed the game there),
+  and says to use Continue from the title screen instead.
+
+Playing together:
+- **Antique coins, key items and what you buy with them are your own.** Your friend spending a coin took one of
+  yours and gave you nothing; after a reload, using a key again took your friend's.
+- **Molded show up for both of you.** Each game only brought a Molded out when its own player set it off, so
+  one of you fought Molded the other never saw. Now when one comes out in one game, the other game brings the
+  same one out through the game's own spawner (bot-tested: out in the second game 2 s later).
+- **One Molded for both of you.** Since v0.47 each game ran its own copy of every Molded, so the same Molded
+  could be in different places on your screen and your friend's. The mod couldn't move a copy: every Molded
+  sits inside the game's "pool" of Molded bodies, and while it does, the game ignores any outside attempt to
+  place it. Now a copy is taken out of the pool while it follows, and each Molded is run by the game of
+  whoever of you is nearer, with the game's own AI: it goes for that player and can hurt them, and every
+  other screen shows it in the same spot, doing the same thing. When one of you is nearer, or the one
+  it's after goes down, it changes to their game and goes for them (bot-tested both ways: never more
+  than about 1 m apart on the two screens, usually a few centimetres, and it attacked the near player).
+  Its swings also hit anyone standing in them on any screen. Option **One Molded for both** (on); off goes
+  back to each game running its own, with health and deaths still shared.
+- **The cremator puzzle in the basement is shared.** The morgue's incinerator trays each open and shut, and
+  the key tray unlocks once the right ones are shut. Each tray was sent only the first time it was used,
+  and lost if your game hadn't loaded the morgue yet, so a tray shut and opened again (or used before you
+  got there) left your trays different from your friend's: they got the key and yours stayed locked. Each
+  tray's state is now shared and your game sets its trays to match when you're there (bot-tested: one
+  player solved it with the other elsewhere; when the second arrived, their trays matched and their key
+  tray was open). It's in "Catch up" too.
+- **An objective one of you checks off is checked off for the other** (bot-tested), with Share story on.
+- **Key items one of you uses count for both.** Put a dog head on the hall door, the shotgun on the
+  statue or the pendulum in the clock, and the same thing happens in your friend's game, without your
+  friend needing the item and without anything leaving their inventory. If your friend is far away it
+  happens when they get near (bot-tested: three dog heads placed by one player, the door unlocked for
+  both). Tapes, antique-coin cages and lockpicks stay your own.
+- **A shadow puzzle one of you solves is solved for both** (bot-tested on the hall puzzle: the second game
+  went straight to solved without the piece or the solving).
+- **Tapes: your friend is told to follow.** Putting a tape in the video deck now tells your friend's game
+  outright to come along (it used to wait until it noticed, and on 2026-11-10 it never did). Bot-tested:
+  the second game was in the tape 17 s after the first put it in. "Follow your friend into VHS tapes"
+  still switches it off.
+- **The story really moves on for both of you.** The mod used to copy your friend's story number and
+  nothing else, so one game could sit at the end of a part for a whole evening (no phone call, no new
+  objective, old objectives still up) while the other was a part ahead. Your friend's steps now go through
+  your game's own story machine, one at a time, so each step's scene, objective and unlocks happen in your
+  game too, and a part ends and the next begins in both (bot-tested: three steps and the end of a part
+  followed in the second game). Needs Share story.
+- **"Catch up" brings the story along.** It used to send only world changes (doors, drawers, kills), so a
+  game whose story had stopped stayed stopped. It now also sends where each part of the story is, the
+  objectives checked off, the key items used and the puzzles solved, and a game that's behind is walked
+  through every step it missed, one at a time, so each step's scene, objective and unlocks happen there
+  too (bot-tested on your yard saves, which are all stopped at the same old step).
+- **One Jack for both in the morgue fight.** Each game used to run its own Jack, so he was in a
+  different place on each screen. Now there's one: he's run by the game of whichever of you is nearer
+  (in RE7 an enemy can only go for its own game's player), so he goes for whoever is close, and the
+  others see him in the same place (bot-tested: he stood within about 0.1 m of himself in both games,
+  turned on the second player when the first walked away, and a hit in one game counted in both). Mia's
+  fights work the same way now. Option **One boss for both** (on).
+  He's never handed to someone who is down or in a scene, and if the one he's after goes down he turns
+  on whoever is still standing nearby.
+- **The garage car fight and Mia are one for both too.** Bot-tested: in the car fight Jack stood within
+  0.1 m of himself in both games, went for one player and was handed to the other when the first went
+  down; Mia in Chapter 1 (in the house and in the attic) followed the same way. The car fight's scene used
+  to play in only one game (the shutter opening counted as a step of it): now both play it.
+- **A friend's cutscene no longer plays twice.** A scene that comes with a story step (the morgue fight's
+  opening) played once as "your friend's scene" and again when the step itself arrived. It now waits a
+  moment for the step, which plays it once (bot-tested).
+- **Every boss fight shares more.** The game's own "this fight is over" signal is now shared, on top of
+  the bosses' health, the new death rules and the story steps that start each phase.
+- **Drawers and switches are right when you come back to a room.** The game reloads a room you've left from
+  the save when you return; meanwhile its drawers read as shut, and the mod sent that to your friend as
+  "shut" and took your friend's change as already done. Changes far from you now wait until you're near
+  (bot-tested).
+- **Lockers and drawers your friend opens during your scene** now wait for the scene and are checked
+  afterwards (a locker took the "open" flag during the boiler room scene and stayed shut).
+- **Dying in a boss fight no longer splits you up.** On 2026-11-10 a player revived in the morgue fight
+  was killed in Jack's grab 20 s later; their game loaded the checkpoint and they fought on alone while the
+  friend finished the fight. A death during a grab or a scene was always a real one, and a scripted kill
+  went straight to the game-over screen. Now both make you go down, for your friend to get you up, as long
+  as your friend is up and within 40 m (bot-tested: down and revived from inside a scene). If the game still
+  counts you dead 6 s after being helped up, that life ends the normal way.
+- **Phone calls are the answerer's.** When your friend answers a phone, the call runs in your game on
+  their character: you hear it, it counts for you, and you keep control wherever you are. Real cutscenes
+  still play for both of you in first person, as before. New option **Join your friend's scripted moves**
+  (off) puts you through phones and other scripted moves again. Not tested: the test saves have no
+  ringing phone.
+- **Your friend's scripted moves are theirs.** When your friend pulled the sheet metal under the deck or
+  used something similar, your own character was walked over and put through the same first-person
+  animation. Now your friend's character performs it on your screen, you keep control, and the thing ends
+  up opened for both (bot-tested on the sheet metal).
+- **Your friend no longer vanishes during quick scripted moves** such as kicking a body bag in the morgue
+  fight: they are only hidden once their scene has lasted 1.5 s.
+- **Every scripted move your friend makes can now show.** Pulling the sheet metal, kicking a body bag,
+  ladders, grabs: for these the game plays clips from the event's own animation list, which the mod never
+  sent (or sent as if they were ordinary clips, so the wrong move played). The list now goes across with
+  the move, and your friend's character plays the very clip their game plays (bot-tested on the sheet
+  metal: the second game loaded the list and played the pull). Not seen on screen yet.
+- **Your friend flinches when hit.** A hit that only moved their arms or upper body (a flinch while
+  standing, a blocked blow) was never sent, and a full-body hit was sometimes sent as arms only. Every
+  hit, guard, knock-away and death reaction now shows on their character as the game plays it.
+- **Your friend climbs ladders.** RE7 plays a ladder from its own list whose entries the friend's side
+  couldn't play, so your friend's character jogged and stood on the spot for the whole climb (and the mod
+  hid them on ladders by default). Each entry now plays its matching clip: start, each step, the top
+  (bot-tested on the Chapter 1 attic ladder). "Hide your friend on ladders" is now off by default.
+- **Body-bag kicks in the morgue fight are shared.** The kick never showed (it is clip number 0 of its
+  list, which the mod read as "no move") and the bag only moved in the kicker's game. Now your friend's
+  character kicks and the bag swings on your screen too (bot-tested: the bag swung 2.6 m in both games).
+- **More of your friend's moves show**: a move that isn't found in their weapon's set is looked up again once
+  their set has arrived, then in the item set, then bare-handed (chainsaw swings and being knocked down while
+  holding it were missing).
+- **Stuck after your friend's scene?** Teleport to your friend now works while they are hidden, and joining
+  their scene from the next room brings you next to them first (a player was left locked in the boiler room).
+- **Doors and drawers follow more reliably.** Now and then the game's answer to "which doors are loaded"
+  can't be read; the mod took that as "none", forgot every door for a moment, and a door your friend closes
+  or opens just then was dropped (caught in a bot run; the likely reason doors stopped following in the
+  basement). An unreadable answer is now asked again and never trusted.
+- **The mouse works on the co-op screen during play**: it asks the game for its own pointer, as the game's
+  menus do.
+- **The title screen's CO-OP row behaves when you scroll.** Scrolling could turn rows into "NEW GAME" until
+  you scrolled again: while the list moves, a row passes through others for a moment and the mod gave it
+  the text of the row it read then. It now waits until the list stops. The CO-OP row going blank came from
+  the game's list of menus sometimes coming back in a form the mod couldn't read, so it lost track of the
+  menu; it now reads that form too. The same fix helps "Continue" from the lobby, Molded ids and doors.
+- **Your own character's face no longer shows in first person** (seen in the Mia tape): the full-model
+  files were back in the game's own folders as well as the co-op one. The mod now moves such files out of
+  the game's way every time it starts (to natives/stm/coop_spare; nothing is deleted).
+
+Known, not fixed yet:
+- The other puzzles (the clock's hands, number locks, padlocks, the turning paintings) are shared the way
+  the shadow puzzles are, but no save has one unsolved, so this has never run: your next bug report will
+  show whether it worked ("puzzle watch" lines).
+- A friend's phone call or scripted move on their character has only been checked by the bots' numbers,
+  not by eye: if one looks wrong or leaves you stuck, switch on **Join your friend's scripted moves** and
+  send a bug report.
+- Lockers and some pushed doors your friend opens stay shut on your screen.
+
+## v0.47 (2026-11-10)
+Found by bot tests: two copies of the game, linked, in the Chapter 3 basement with the Molded brought out through
+the game's own spawner.
+- **Enemies follow between games again.** From v0.39 to v0.46 no enemy movement got through: the link threw
+  every enemy update away as cut off (a line-ending mismatch), so each game ran its own Jack. Jack is one Jack
+  again: he runs in the game of whichever of you is nearer, and the other sees him there doing the same.
+- **The right Molded dies.** The game keeps its Molded in a pool and all of them had the same name to the mod,
+  so a kill, a hit or a health check for one could land on another Molded in your friend's game. Each Molded is
+  now known by the spot it came out of. Bots checked: a hit on one took the same health off that one in the
+  other game, and killing it killed that one only.
+- **Molded deaths and damage are shared in the basement again.** Three item spots (Dave's body) joined the
+  game's enemy list down there and the mod lost track of the list, so nothing about the Molded was shared.
+- **The Molded run in each game**, as they did since v0.39, with their deaths, damage and health shared. The
+  mod can't move a copy of a Molded (the game puts it back every frame), so a copy stood still, or stayed in
+  its wall, while the real one fought the other player.
+- **No more stream of "pushed objects"** next to a Molded: its body parts went out as moved chairs and bottles
+  several times a second.
+- **Your friend's special moves show on their character.** For grabs, scripted fight moves and the like the
+  game loads an extra animation set onto your body just for that moment, and those moves never reached the
+  other game. Now the other game loads the same set onto your friend's character and plays the same move.
+  Bots checked it with a set loaded on the fly: your friend's character played a move that exists only in that
+  set, switched when the set changed, and stood still rather than T-posing while a set was still on its way.
+  Not seen in a real session yet: which of the ladders, the phone, Jack's grabs and the morgue fight use these
+  sets (drop-downs, climbing over things and hit reactions were already shared). Answering a phone is mostly
+  the phone's own animation (your body hardly moves in it), so your character may not show much there.
+- **One game leads the story** (experimental, off by default: Options > **One game leads the story**; both
+  switch it on). The host's story scenes play for the other player wherever they are (close by, they're
+  brought next to the host first), and the host's story progress counts for both. Tested by bots: a scene the
+  host started with the other player 47 m away played in both games; the far one finished about 27 s later.
+- **Enemies chase both players** (experimental, off by default: Options > **Enemies chase both players**; both
+  switch it on). Up close, Jack goes to the game of whichever of you is clearly nearer (a third nearer and 1 m
+  or more) instead of waiting until one of you is 3 m nearer, so he turns on the one next to him. An enemy
+  can only attack its own game's player: aimed at your friend's character, a Molded walked up to it and
+  stood there, so that first version of the option was dropped.
+
 ## v0.46 (2026-11-10)
 - **The co-op screen looks more like the game's Options and Extra Content sheets**: old paper lying a little
   crooked on the table with faint stains and darker edges; the form printed at the top of each sheet (the

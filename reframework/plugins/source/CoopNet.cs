@@ -573,7 +573,7 @@ public class CoopNet
         public float LookYaw, LookPitch;   // camera relative to body, radians
     }
 
-    const string Version = "0.46";
+    const string Version = "0.48";
     const int PacketSize = 64;
     static readonly byte[] Magic = { (byte)'R', (byte)'7', (byte)'C', (byte)'2' };
     const int KeepSamples = 32;
@@ -606,6 +606,7 @@ public class CoopNet
             Directory.CreateDirectory(s_dataDir);
             s_cfg = LoadConfig();
             s_running = true;
+            HealFullModels();
 
             // Steam starts in every mode so the in-game Connect panel can show our own
             // SteamID and switch to a friend live, even from bot mode.
@@ -1018,6 +1019,10 @@ public class CoopNet
         }
         catch (IOException) { return; }
         catch (UnauthorizedAccessException) { return; }
+        // Lua's fs.write ends lines with "\r\n" on Windows, so the "\nend\n" check below never
+        // matched: from v0.39 to v0.46 every snapshot was counted as cut off and none went out,
+        // and each game ran its own enemies (found by the bot test, 2026-11-10; v0.47).
+        text = text.Replace("\r\n", "\n");
         var nl = text.IndexOf('\n');
         if (nl <= 0 || !text.StartsWith("seq ")) return;
         // Whole snapshots only (v0.39): Lua ends each with an "end" line. One read halfway
@@ -1399,6 +1404,7 @@ public class CoopNet
             text += $"lastCommand={s_lastCommand}\nlastBackup={s_lastBackup}\nbackups={s_backupCount}\nversion={Version}\nevSent={s_evSent}\nevRecv={s_evRecv}\nsnapSent={s_snapSent}\nsnapRecv={s_snapRecv}\n"
                 + $"evPartial={s_evPartial}\nsnapPartial={s_snapPartial}\nsnapTooBig={s_snapTooBig}\n";
             text += $"fullModels={FullModels()}\n";
+            text += $"modelsMoved={s_modelsMoved}\n";
         }
         WriteStatusSafe(text);
     }
@@ -1408,6 +1414,46 @@ public class CoopNet
     // paths. REFramework only reads loose files with its Loose File Loader on, so:
     // "1" = files present and loader on, "off" = files present but loader off, "0" = none.
     // Re-checked every 10 s (players copy the files in while the game runs).
+    // Full-model files back in the game's own folders (v0.48). "Use full models.cmd" moves the
+    // mod's models to natives\stm\coop so only the friend's character uses them. In the
+    // 2026-11-10 session they were in the game's own folders again (as well as under coop), and
+    // the player saw their own character's face in first person. At every start, a model file
+    // that also exists under coop is moved out of the game's way, to natives\stm\coop_spare
+    // (nothing is deleted; a file the setup never moved is left alone, it may be another mod's).
+    static int s_modelsMoved, s_modelsLeft;
+    static void HealFullModels()
+    {
+        try
+        {
+            var game = Path.GetFullPath(Path.Combine(s_dataDir, "..", ".."));
+            var stm = Path.Combine(game, "natives", "stm");
+            foreach (var top in new[] { "character", "ch8", "ch9" })
+            {
+                var src = Path.Combine(stm, top);
+                if (!Directory.Exists(src)) continue;
+                foreach (var f in Directory.GetFiles(src, "*", SearchOption.AllDirectories))
+                {
+                    var name = Path.GetFileName(f);
+                    if (!name.Contains(".mesh.") && !name.Contains(".mdf2.")) continue;
+                    var rel = f.Substring(stm.Length + 1);
+                    if (!File.Exists(Path.Combine(stm, "coop", rel))) continue;
+                    try
+                    {
+                        var spare = Path.Combine(stm, "coop_spare", rel);
+                        Directory.CreateDirectory(Path.GetDirectoryName(spare));
+                        if (File.Exists(spare)) File.Delete(spare);
+                        File.Move(f, spare);
+                        s_modelsMoved++;
+                    }
+                    catch (Exception) { s_modelsLeft++; }
+                }
+            }
+            if (s_modelsMoved + s_modelsLeft > 0)
+                API.LogInfo($"[CoopNet] full models: {s_modelsMoved} files moved out of the game's own folders, {s_modelsLeft} could not be moved");
+        }
+        catch (Exception e) { API.LogWarning("[CoopNet] full models check: " + e.Message); }
+    }
+
     static string s_fullModels = "0";
     static DateTime s_fullModelsAt = DateTime.MinValue;
     static string FullModels()
@@ -1422,6 +1468,9 @@ public class CoopNet
             var f = Path.Combine(game, "natives", "stm", "coop", "character", "player", "pl2000", "pl2001", "pl2001.mesh.220128762");
             var unmoved = Path.Combine(game, "natives", "stm", "character", "player", "pl2000", "pl2001", "pl2001.mesh.220128762");
             if (!File.Exists(f)) { s_fullModels = File.Exists(unmoved) ? "move" : "0"; return s_fullModels; }
+            // Set up, but a copy is in the game's own folder too (and couldn't be moved at start):
+            // the player sees the inside of their own character's head.
+            if (File.Exists(unmoved)) { s_fullModels = "move"; return s_fullModels; }
             var cfg = ReadShared(Path.Combine(game, "re2_fw_config.txt"));
             s_fullModels = cfg.Contains("LooseFileLoader_Enabled=true") ? "1" : "off";
         }

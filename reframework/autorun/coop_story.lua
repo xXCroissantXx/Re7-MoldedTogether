@@ -17,6 +17,11 @@
 --     IN_STEP seconds after we were pulled into a cutscene of theirs. Outside that each
 --     game keeps its own story.
 
+-- v0.48: this script's frame work waits while the game loads or swaps the player (coop_busy, coop_dummy.lua).
+local re = setmetatable({ on_frame = function(f)
+    return _G.re.on_frame(function() if coop_busy and coop_busy() then return end return f() end)
+end }, { __index = _G.re })
+
 story_sync = {
     played = {},       -- cutscene name -> true (started on this side, by us or the friend)
     applying = {},     -- key -> clock: changes we made on the friend's word (not sent back)
@@ -157,6 +162,16 @@ sdk.hook(ec:get_method("requestSetup(app.GameEventSetting, via.Transform)"), fun
         local st = sdk.to_managed_object(args[3])
         local name = st and tostring(st:call("get_eventName"))
         if name ~= nil then coop_scene_t = os.clock() end   -- any scripted scene (collision, v0.34)
+        -- A call the friend answered: our own phone starts the scene a moment later (coop_world sets
+        -- coop_friend_scene_until). It is the friend's scene: their body takes the player's part.
+        if name ~= nil and os.clock() < (coop_friend_scene_until or 0) and coop_story_retarget_setting
+            and not (settings and settings.intr_pull_me == true) and not (ss.retargeted and ss.retargeted[name]) then
+            local n = coop_story_retarget_setting(st, name)
+            if n > 0 then
+                ss.applying["ev:" .. name] = os.clock()
+                log("friend's call " .. name .. ": " .. n .. " player part(s) given to your friend's body")
+            end
+        end
         if name == nil or not is_story_event(name) then return end
         local ch = chapter()
         if ss.played_chapter ~= ch then ss.played, ss.played_chapter = {}, ch end
@@ -168,7 +183,10 @@ sdk.hook(ec:get_method("requestSetup(app.GameEventSetting, via.Transform)"), fun
         ss.running[name] = os.clock()
         log(string.format("scene %s starts (%s, story clock %d)", name, ours("ev:" .. name) and "your friend's" or "yours",
             coop_story_clock()))
-        if first and not ours("ev:" .. name) then send(string.format("story %s %d", name, ch)) end
+        -- A scene our own phone started (coop_world notes the moment we answer): told apart from a real
+        -- cutscene, so the friend's game gives it to our body instead of playing it on the friend.
+        local tag = (coop_my_phone_t and os.clock() - coop_my_phone_t < 15) and " phone" or ""
+        if first and not ours("ev:" .. name) then send(string.format("story %s %d%s", name, ch, tag)) end
     end)
 end, function(r) return r end)
 
@@ -188,6 +206,7 @@ do
                     ss.running[name] = nil
                     log(string.format("scene %s ended after %.0f s (story clock %d)", name, os.clock() - t0, coop_story_clock()))
                 end
+                if name and coop_story_scene_given_back then coop_story_scene_given_back(name) end
             end)
         end, function(r) return r end)
     end
@@ -209,6 +228,9 @@ local gf = sdk.find_type_definition("app.GameFlowFsmManager")
 sdk.hook(gf:get_method("setProgressiveNo(System.UInt32, System.Int32)"), function(args)
     pcall(function()
         local h, v = u32(args[3]), i32(args[4])
+        -- A story step is a scripted moment too (v0.48): the morgue fight's step 600 takes 3500 off Jack
+        -- before its scene is set up, and the host's game sent that as damage (coop_enemies scripted_now).
+        coop_scene_t = os.clock()
         -- The story clock's stage hashes (v0.39).
         local ch = chapter()
         if ss.prog_ch ~= ch then ss.prog_seen, ss.prog_ch = {}, ch end
@@ -224,6 +246,20 @@ re.on_frame(function()
         save_played()
     end
 end)
+-- A fight's end (v0.48): the game marks every boss fight and ambush over with sendBattleEnded(hash), the
+-- way it marks events with sendEventEnded. It was never shared, so a fight one game had won stayed open
+-- in the other. Same rules as a finished event: copied when together, kept for later when apart.
+do
+    local mb = gf:get_method("sendBattleEnded(System.UInt32)")
+    if mb then
+        pcall(sdk.hook, mb, function(args)
+            pcall(function()
+                local h = u32(args[3])
+                if not ours(string.format("be:%08x", h)) then send(string.format("btlend %08x %d", h, chapter())) end
+            end)
+        end, function(r) return r end)
+    end
+end
 sdk.hook(gf:get_method("sendEventEnded(System.UInt32)"), function(args)
     pcall(function()
         local h = u32(args[3])
@@ -247,6 +283,11 @@ local function friend_distance(slot)
     return math.sqrt((gp.x - pp.x) ^ 2 + (gp.y - pp.y) ^ 2 + (gp.z - pp.z) ^ 2)
 end
 
+-- One game leads the story (v0.47, experimental, Options): the host (the game that runs the enemies)
+-- leads; in the other game the host's scenes play wherever we are, and its progress is always copied.
+local function follower()
+    return settings ~= nil and settings.story_follow_host == true and coop_enemy_role_now == "guest"
+end
 -- In step: for IN_STEP s after a shared cutscene ENDS (v0.30). It used to count from the start:
 -- a 31 s cutscene (Mia, 2026-11-08) ended after the window closed, so the "event finished" that
 -- followed was dropped and Mia stood frozen in the friend's game, blocking the way.
@@ -296,7 +337,10 @@ end
 -- A scene of this sequence already played here (this chapter): its name, or nil.
 local function seq_played(grp)
     for n in pairs(played_here()) do
-        if seq_of(n) == grp then return n end
+        -- Variants numbered 10 and up are side scenes, not steps (v0.48): the garage shutter opening,
+        -- c03e02_10, made the friend's game refuse the car fight c03e02_00 as "a step it plays itself".
+        local g, i = seq_of(n)
+        if g == grp and (i == nil or i < 10) then return n end
     end
     return nil
 end
@@ -322,6 +366,8 @@ end
 function coop_story_reset_chapter(v)
     if ss.played_chapter == v then ss.played = {} save_played() end
     ss.pending, ss.missed, ss.in_step_until, ss.last_seq, ss.running = {}, {}, nil, nil, {}
+    ss.steps = {}
+    ss.obj_done = {}   -- v0.48: starts the friend's objective check-offs over
     if ss.prog_ch == v then ss.prog_seen = {} end
     log("chapter " .. tostring(v) .. " starts over (chapter jump): its scenes count as not played")
     send(string.format("rewind %d 0", v))
@@ -350,6 +396,68 @@ local function scene_to_start(name)
     return name
 end
 
+-- A friend's scene is theirs to perform (v0.48). A story scene (app.GameEventSetting) lists its parts in
+-- EventActions; the one for the player (cNNeNN_NN_pl0000, isTargetPlayer) can be pointed at the friend's
+-- body with SetTargetObj, like an interaction's. Tested 2026-11-11 with c03e20_00: the scene loaded, ran
+-- its 12 s and ended with the friend's body in it; our player was never in an event and never moved.
+-- A scene can leave its player somewhere else (a fall, a room that locks): when it ends and the friend is
+-- more than 6 m away, we are brought next to them.
+-- The owner's rule (2026-11-11): real cutscenes are watched by both players in first person, as before;
+-- only phone calls (and the scripted world interactions in coop_world) are the initiator's alone, with
+-- the other player hearing it and having it count. So only a scene tagged as a phone call is given to
+-- the friend's body; settings.cutscenes_on_friend = true (coop_settings.json) does it for every scene.
+ss.retargeted = ss.retargeted or {}
+ss.phone_scene = ss.phone_scene or {}
+local function scenes_on_friend(name)
+    if settings and settings.intr_pull_me == true then return false end
+    if settings and settings.cutscenes_on_friend == true then return true end
+    return ss.phone_scene[name] ~= nil or os.clock() < (coop_friend_scene_until or 0)
+end
+local function retarget_setting(st, name)
+    local body = coop_ghost_event_begin and coop_ghost_event_begin(60, 900)
+    if body == nil then return 0, "no friend's body yet" end
+    local acts = st:call("get_eventActions")
+    local n, list = 0, {}
+    for k = 0, (acts and acts:call("get_Count") or 0) - 1 do
+        local a = acts:call("get_Item", k)
+        if a and a:call("get_isTargetPlayer") == true then
+            pcall(a.set_field, a, "SetTargetObj", body)
+            pcall(a.set_field, a, "TargetObjTemp", body)
+            list[#list + 1] = a
+            n = n + 1
+        end
+    end
+    if n > 0 then ss.retargeted[name] = { acts = list, t = os.clock() } end
+    return n
+end
+local function retarget_scene(name)
+    local em = event_mgr()
+    local list = em and em:get_field("EventSettings")
+    for i = 0, (list and list:call("get_Count") or 0) - 1 do
+        local st = list:call("get_Item", i)
+        if st and tostring(st:call("get_eventName")) == name then return retarget_setting(st, name) end
+    end
+    return 0, "scene not loaded"
+end
+coop_story_retarget_setting = function(st, name)        -- for the scene-start hook
+    local ok, n, why = pcall(retarget_setting, st, name)
+    return ok and n or 0, why
+end
+-- When our copy of a friend's scene has ended: point its player part back at the player, and stand
+-- with the friend if the scene took them somewhere.
+local function scene_given_back(name)
+    local r = ss.retargeted[name]
+    if r == nil then return end
+    ss.retargeted[name] = nil
+    for _, a in ipairs(r.acts) do
+        pcall(a.set_field, a, "SetTargetObj", nil)
+        pcall(a.set_field, a, "TargetObjTemp", nil)
+    end
+    ss.regroup_t = os.clock() + 1.5
+    log("friend's " .. name .. ": ended here, played on your friend's body")
+end
+coop_story_scene_given_back = scene_given_back
+
 local function play(name)
     local em = event_mgr()
     -- Already asked for here (our own trigger in the same moment): don't ask twice (v0.39).
@@ -361,6 +469,11 @@ local function play(name)
     end
     ss.applying["ev:" .. name] = os.clock()
     mark_played(name, chapter())
+    if scenes_on_friend(name) then
+        local okr2, n, why = pcall(retarget_scene, name)
+        log(string.format("friend's %s: %s", name, (okr2 and (n or 0) > 0) and (n .. " player part(s) given to your friend's body: you keep control")
+            or ("plays on you (" .. tostring(okr2 and (why or "it has no player part") or n) .. ")")))
+    end
     local ok, err = pcall(em.call, em, "requestEvent(System.String, via.Transform, System.Boolean)",
         sdk.create_managed_string(name), nil, false)
     ss.applied = ss.applied + 1
@@ -382,8 +495,9 @@ local function busy_here()
     return nil
 end
 
-local function apply_story(name, ch)
+local function apply_story(name, ch, phone)
     coop_scene_t = os.clock()   -- the friend's scene is starting: no bumping for a while (v0.34)
+    if phone and ch == chapter() then ss.phone_scene[name] = os.clock() end
     if ch ~= chapter() then
         log("story event in another chapter, ignored: " .. name)
         if ch > 0 and (ss.last_together_t or -100) > os.clock() - 120 then
@@ -416,18 +530,38 @@ local function apply_story(name, ch)
     end
     if start ~= name then log("friend's " .. name .. ": " .. tostring(why)) end
     local d = friend_distance()
-    if d == nil or d > NEAR then
+    if ss.phone_scene[name] and scenes_on_friend(name) then
+        -- Their phone call: it runs here on their body wherever we stand; nobody is moved.
+        log(string.format("friend's %s is a phone call: it plays on their body here, you keep control (%s m away)", name,
+            d and string.format("%.0f", d) or "?"))
+        d = 0
+    end
+    if (d == nil or d > NEAR) and follower() then
+        -- The host leads: their scene plays here too; close by, we're brought next to them first.
+        if d and d <= 30 and teleport_to_friend then pcall(teleport_to_friend) end
+        log(string.format("friend's %s: the host leads, playing it here (%s m away)", name, d and string.format("%.0f", d) or "?"))
+        note("the host's story: you're brought into this scene")
+    elseif d == nil or d > NEAR then
         note(string.format("your friend is watching a cutscene (%s m away: you'll see it when you get there)",
             d and string.format("%.0f", d) or "?"))
         log(string.format("friend's %s: not joined, %s m away (you'll see it when you get there)", name,
             d and string.format("%.0f", d) or "?"))
         return
+    elseif d > 2.5 and teleport_to_friend then
+        -- v0.48: joining their scene from the next room left a player locked in the boiler room while
+        -- the fight started without them (2026-11-10): stand next to them first.
+        local tok = select(2, pcall(teleport_to_friend))
+        log(string.format("friend's %s: joining from %.0f m away, brought next to them first (%s)", name, d, tostring(tok)))
     end
     local busy = busy_here()
     if busy then
         ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1 }
         log("friend's " .. start .. " waits: you're " .. busy)
-    elseif setting_loaded(start) then play(start)
+    elseif setting_loaded(start) then
+        -- Not at once (v0.48): a scene the friend's story step started comes with that step ("prog"), and the
+        -- step played it here a second time (the morgue scene twice in a bot test). It waits 1.5 s, and while
+        -- a step is queued; the step plays it, and if the step doesn't, it plays after (the loop below).
+        ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1, hold_until = os.clock() + 1.5 }
     else
         ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1 }
         log("waiting for " .. start .. " to load here")
@@ -444,6 +578,23 @@ re.on_frame(function()
     if ss.cut_on and not on then ss.cut_end_t = os.clock() end
     ss.cut_on = on
 end)
+re.on_frame(function()
+    local now = os.clock()
+    if ss.regroup_t and now >= ss.regroup_t then
+        ss.regroup_t = nil
+        local d = friend_distance()
+        if d and d > 6 and d < 400 and teleport_to_friend then
+            local tok = select(2, pcall(teleport_to_friend))
+            log(string.format("after your friend's scene they are %.0f m away: brought next to them (%s)", d, tostring(tok)))
+            note(tok == true and "your friend's scene moved them: you're brought along"
+                or string.format("your friend's scene took them %.0f m away: go to them", d))
+        end
+    end
+    -- A part still pointed at the friend 15 minutes on (its scene never ended here): give it back.
+    for name, r in pairs(ss.retargeted) do
+        if now - r.t > 900 then scene_given_back(name) end
+    end
+end)
 local HOLD_AFTER_CUTSCENE = 8
 -- Also while our own scene sequence is still playing out (v0.39): the friend's progress from
 -- the end of the dinner would skip our chair, as it did on 2026-11-02. Our game sets those
@@ -453,35 +604,121 @@ local function hold_for_cutscene()
 end
 
 local function together()
+    if follower() then return true end
     if in_step() then return true end
     local d = friend_distance(coop_event_slot or 1)
     return d ~= nil and d <= NEAR
 end
 
-local function apply_prog(hash, value, ch)
-    if ch ~= chapter() then return end
-    if hold_for_cutscene() then
-        local key = string.format("pg:%08x", hash)
-        local m = ss.missed[key]
-        if m == nil or m.ch ~= ch or value > m.value then ss.missed[key] = { kind = "prog", hash = hash, value = value, ch = ch } end
-        log(string.format("progress %08x %d held (your scene is playing, just ended, or its sequence is still playing out; your game may get there itself)", hash, value))
-        return
+-- Story progress, for real (v0.48). Each part of the story (c03_2_Main...) is an object "<part>Flow"
+-- with a state machine whose states are named by the progress numbers ("400", "600"...) and an
+-- app.GameFlowActiveControl; GameFlowFsmManager.Flows maps the progress hash to it. The number alone is
+-- only a record: until now the friend's number was copied with setProgressiveNo and nothing else moved,
+-- so on 2026-11-10 one game sat in c03_2 at "800" for the rest of the evening (no phone call, no new
+-- objective, the old ones still up) while the other was in c03_3. GameFlowActiveControl.sendNo(n) is the
+-- game's own step: tested 2026-11-11 on c03_2 (400 -> sendNo(600)): the number, the machine and the
+-- game's next beat (its scene, the objective checked off) all followed. At FlowEndNo the part ends and
+-- the next one starts. So the friend's numbers are queued per part and taken one at a time, lowest
+-- first, 1.5 s apart, never during our own scene: every step's own logic runs, none is jumped over.
+-- settings.story_flow_steps = false goes back to copying the number only.
+ss.steps = ss.steps or {}          -- hash -> { ch, list = ascending values, t = last step }
+local function flow_control(fm, hash)
+    local flows = fm and fm:get_field("Flows")
+    local ok, c = pcall(function() return flows:call("get_Item", hash) end)
+    return ok and c or nil
+end
+-- The next step of a story part between where ours is and the friend's (v0.48): a catch-up from 400 to
+-- 800 goes 500, 600, 700, 800, so each step's own beat (a scene, an objective, a door) happens here too.
+-- The part's machine names its steps by number (c03_1: 0, 100, ... 1100; c03_2: 0 100 200 400 500 600 700).
+local function next_state(hash, cur, value)
+    local ctl = flow_control(flow_mgr(), hash)
+    local go = ctl and ctl:call("get_GameObject")
+    local fsm = go and go:call("getComponent(System.Type)", sdk.typeof("via.fsm.Fsm"))
+    if fsm == nil then return value end
+    for v = cur + 10, value - 10, 10 do
+        if fsm:call("hasState(System.String)", tostring(v)) == true then return v end
     end
-    if not together() then
-        local key = string.format("pg:%08x", hash)
-        local m = ss.missed[key]
-        if m == nil or m.ch ~= ch or value > m.value then ss.missed[key] = { kind = "prog", hash = hash, value = value, ch = ch } end
-        log(string.format("progress %08x %d not copied yet (apart; kept for when you're together)", hash, value))
-        return
-    end
+    return value
+end
+local function step_story(hash, value)
     local fm = flow_mgr()
     local var = fm and fm:call("getProgressiveNo(System.UInt32)", hash)
     local cur = var and var:call("get_S32") or 0
-    if value > cur then
-        ss.applying[string.format("pg:%08x", hash)] = os.clock()
+    if value <= cur then return false end
+    ss.applying[string.format("pg:%08x", hash)] = os.clock()
+    local ctl = not (settings and settings.story_flow_steps == false) and flow_control(fm, hash) or nil
+    local how = "number only"
+    if ctl then
+        local go = ctl:call("get_GameObject")
+        local fsm = go and go:call("getComponent(System.Type)", sdk.typeof("via.fsm.Fsm"))
+        local is_state = fsm and fsm:call("hasState(System.String)", tostring(value)) == true
+        local is_end = tonumber(ctl:get_field("FlowEndNo")) == value
+        if is_state or is_end then
+            local ok, err = pcall(ctl.call, ctl, "sendNo(System.Int32)", value)
+            how = ok and ("story part " .. tostring(go:call("get_Name")) .. (is_end and " ends" or " steps")) or ("sendNo ERR " .. tostring(err))
+            if ok then ss.in_step_until = math.max(ss.in_step_until or 0, os.clock() + IN_STEP) end
+        end
+    end
+    if how == "number only" or how:find("ERR") then
         pcall(fm.call, fm, "setProgressiveNo(System.UInt32, System.Int32)", hash, value)
-        ss.applied = ss.applied + 1
-        log(string.format("progress %08x %d -> %d (from the friend)", hash, cur, value))
+    end
+    ss.applied = ss.applied + 1
+    log(string.format("progress %08x %d -> %d (from the friend; %s)", hash, cur, value, how))
+    return true
+end
+local function apply_prog(hash, value, ch)
+    if ch ~= chapter() then return end
+    local q = ss.steps[hash]
+    if q == nil or q.ch ~= ch then q = { ch = ch, list = {}, t = -100 } ss.steps[hash] = q end
+    for _, v in ipairs(q.list) do if v == value then return end end
+    q.list[#q.list + 1] = value
+    table.sort(q.list)
+end
+re.on_frame(function()
+    if next(ss.steps) == nil then return end
+    local now = os.clock()
+    if now - (ss.steps_t or 0) < 0.5 then return end
+    ss.steps_t = now
+    local ch = chapter()
+    local can = together() and not hold_for_cutscene()
+    for hash, q in pairs(ss.steps) do
+        if q.ch ~= ch or #q.list == 0 then
+            ss.steps[hash] = nil
+        elseif can and now - q.t >= 1.5 then
+            local v = q.list[1]
+            local fm = flow_mgr()
+            local var = fm and fm:call("getProgressiveNo(System.UInt32)", hash)
+            local cur = var and var:call("get_S32") or 0
+            local okn, nx = pcall(next_state, hash, cur, v)
+            if not okn or nx == nil or nx >= v then
+                nx = v
+                table.remove(q.list, 1)
+            end
+            if pcall(step_story, hash, nx) then q.t = now end
+            return                         -- one step a pass: the next waits for what this one starts
+        elseif not can and not q.said then
+            q.said = true
+            log(string.format("progress %08x %d waits (%s)", hash, q.list[1], together() and "your scene is playing or just ended" or "you're apart"))
+            -- v0.48: say so on screen when it's waiting for the two of you to be together (a catch-up
+            -- pressed from across the map did nothing visible).
+            if not together() then note("your friend's story is further on: go to them and it catches up here") end
+        end
+        if can then q.said = nil end
+    end
+end)
+
+local function apply_btlend(hash, ch)
+    if ch ~= chapter() then return end
+    if hold_for_cutscene() or not together() then
+        ss.missed[string.format("be:%08x", hash)] = { kind = "btlend", hash = hash, ch = ch }
+        log(string.format("fight %08x end kept for later (%s)", hash, together() and "your scene is playing" or "you're apart"))
+        return
+    end
+    local fm = flow_mgr()
+    if fm and not fm:call("isBattleEnded(System.UInt32)", hash) then
+        ss.applying[string.format("be:%08x", hash)] = os.clock()
+        pcall(fm.call, fm, "sendBattleEnded(System.UInt32)", hash)
+        log(string.format("fight %08x ended (from the friend)", hash))
     end
 end
 
@@ -565,6 +802,8 @@ local function after_load()
         if n > 0 then save_played() end
     end
     ss.pending, ss.missed, ss.in_step_until, ss.last_seq, ss.running = {}, {}, nil, nil, {}
+    ss.steps = {}
+    ss.obj_done = {}   -- v0.48: starts the friend's objective check-offs over
     log(string.format("save loaded: chapter %d, story clock %d; %d scenes from after it count as not played", ch, clock, n))
     if known and coop_talk_rewind then pcall(coop_talk_rewind, ch, clock) end
     send(string.format("rewind %d %d", ch, clock))
@@ -698,7 +937,90 @@ function coop_story_compare(k)
     return "same"
 end
 
+-- Objectives (v0.48). "After my friend opened the door it didn't clear 'get out of the house' for me"
+-- (2026-11-10): an objective one game checks off (app.ObjectiveControl.removeObjectiveItem) is checked
+-- off in the other too, found there by its ObjectiveId. Only checking off: adding one from outside could
+-- collide with the game adding it itself later. Not while loading (every objective leaves then), and
+-- only with Share story on.
+local function obj_guid(g)
+    local b = {}
+    for i = 0, 7 do b[#b + 1] = string.format("%02x", (g:get_field("mData4_" .. i) or 0) & 0xFF) end
+    return string.format("%08x%04x%04x%s", (g:get_field("mData1") or 0) & 0xFFFFFFFF,
+        (g:get_field("mData2") or 0) & 0xFFFF, (g:get_field("mData3") or 0) & 0xFFFF, table.concat(b))
+end
+-- Found by comparing the active list once a second (a hook on removeObjectiveItem can't be exercised by
+-- the bot tests). A load, a chapter change or a player swap in between starts the comparison over.
+local function active_objectives()
+    local om = sdk.get_managed_singleton("app.ObjectiveManager")
+    local list = om and om:call("getEnableOvjectives")
+    if list == nil then return nil end
+    local set = {}
+    for i = 0, (list:call("get_Count") or 0) - 1 do
+        local id = tostring(list:call("get_Item", i):get_field("ObjectiveId")):gsub("-", ""):lower()
+        set[id] = true
+    end
+    return set
+end
+ss.obj_prev, ss.obj_t, ss.obj_busy_n, ss.obj_ch = nil, 0, nil, nil
+re.on_frame(function()
+    local now = os.clock()
+    if now - ss.obj_t < 1 then return end
+    ss.obj_t = now
+    local ok, cur = pcall(active_objectives)
+    if not ok or cur == nil then ss.obj_prev = nil return end
+    local bn = coop_busy_state and coop_busy_state.n or 0
+    local ch = chapter()
+    if ss.obj_prev and ss.obj_busy_n == bn and ss.obj_ch == ch and sharing() then
+        for id in pairs(ss.obj_prev) do
+            if not cur[id] and not (ss.obj_applied and ss.obj_applied[id]) then
+                send(string.format("objdone %s %d", id, ch))
+                log("objective checked off here: " .. id)
+            end
+        end
+    end
+    ss.obj_prev, ss.obj_busy_n, ss.obj_ch, ss.obj_applied = cur, bn, ch, nil
+    -- One the friend checked off before it was listed here (objectives register a few seconds after a
+    -- load): checked off now.
+    for id, d in pairs(ss.obj_done or {}) do
+        if d.ch ~= ch or now - d.t > 1800 then ss.obj_done[id] = nil
+        elseif cur[id] and ss.obj_apply then pcall(ss.obj_apply, id, ch) end
+    end
+end)
+ss.obj_done = ss.obj_done or {}   -- the friend's check-offs: applied when that objective is active here
+local function apply_objdone(id, ch)
+    if ch ~= chapter() or not sharing() then return end
+    ss.obj_done[id] = { ch = ch, t = os.clock() }
+    local sc = sdk.call_native_func(sdk.get_native_singleton("via.SceneManager"), sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
+    local arr = sc and sc:call("findComponents(System.Type)", sdk.typeof("app.ObjectiveControl"))
+    local om = sdk.get_managed_singleton("app.ObjectiveManager")
+    local list = om and om:call("getEnableOvjectives")
+    local active = {}
+    for i = 0, (list and list:call("get_Count") or 0) - 1 do
+        active[tostring(list:call("get_Item", i):get_field("ObjectiveId")):gsub("-", ""):lower()] = true
+    end
+    for _, c in ipairs(arr and arr:get_elements() or {}) do
+        local g = c:get_field("ObjectiveId")
+        if g and obj_guid(g) == id then
+            if active[id] then
+                ss.obj_applied = ss.obj_applied or {}
+                ss.obj_applied[id] = true   -- ours to do, not to send back
+                local ok, err = pcall(c.call, c, "removeObjectiveItem")
+                log("objective " .. id .. " checked off (your friend's game did)" .. (ok and "" or (" ERR " .. tostring(err))))
+                note("an objective was checked off: your friend did it")
+            end
+            return
+        end
+    end
+end
+
+ss.obj_apply = apply_objdone
 function coop_story_on_event(text)
+    local oid, och = text:match("^objdone (%x+) (%-?%d+)$")
+    if oid then
+        local ok, err = pcall(apply_objdone, oid, tonumber(och))
+        if not ok then log("objdone ERR " .. tostring(err)) end
+        return true
+    end
     local pch, pclock, pdiff = text:match("^spos (%-?%d+) (%-?%d+) ?(%-?%d*)")
     if pch then
         ss.spos[coop_event_slot or 1] = { ch = tonumber(pch), clock = tonumber(pclock), t = os.clock(), diff = tonumber(pdiff) }
@@ -722,8 +1044,13 @@ function coop_story_on_event(text)
         log("story sharing is off, ignored: " .. text)
         return true
     end
-    local name, ch = text:match("^story (%S+) (%-?%d+)")
-    if name then pcall(apply_story, name, tonumber(ch)) return true end
+    local bh, bch = text:match("^btlend (%x+) (%-?%d+)$")
+    if bh then
+        if sharing() then pcall(apply_btlend, tonumber(bh, 16), tonumber(bch)) end
+        return true
+    end
+    local name, ch, stag = text:match("^story (%S+) (%-?%d+) ?(%a*)")
+    if name then pcall(apply_story, name, tonumber(ch), stag == "phone") return true end
     local h, v, pch = text:match("^prog (%x+) (%-?%d+) (%-?%d+)")
     if h then pcall(apply_prog, tonumber(h, 16), tonumber(v), tonumber(pch)) return true end
     local eh, ech = text:match("^evend (%x+) (%-?%d+)")
@@ -751,6 +1078,9 @@ re.on_frame(function()
     end
     for _, m in pairs(list) do
         if m.kind == "evend" then pcall(apply_evend, m.hash, m.ch) end
+    end
+    for _, m in pairs(list) do
+        if m.kind == "btlend" then pcall(apply_btlend, m.hash, m.ch) end
     end
 end)
 
@@ -780,7 +1110,13 @@ re.on_frame(function()
         -- While we're busy (paused, down...) it keeps waiting, for up to 2 minutes (v0.37).
         p.first = p.first or p.t
         if busy and now - p.first < 120 then p.t = now end
-        if now - p.t > PENDING_FOR or p.ch ~= chapter() or d == nil or d > NEAR then
+        local steps_queued = false
+        for _, q in pairs(ss.steps or {}) do if q.ch == chapter() and #q.list > 0 then steps_queued = true end end
+        local held = (p.hold_until and now < p.hold_until) or (steps_queued and now - p.first < 60)
+        if held then p.t = now end
+        if held then
+            -- see apply_story: the friend's step may play it
+        elseif now - p.t > PENDING_FOR or p.ch ~= chapter() or d == nil or (d > NEAR and not follower()) then
             ss.pending[name] = nil
             log("gave up waiting for " .. name)
         else
