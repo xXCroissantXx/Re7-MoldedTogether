@@ -1,2 +1,4 @@
 local/
 *.dmp
+__pycache__/
+*.pyc

@@ -32,7 +32,8 @@ climb and fight where they do, over Steam (no port forwarding).
 | **Gunshots and swings** | Each of your friend's guns makes its own bang (handguns, shotgun, magnum and the rest), with the muzzle flash and smoke at their gun; their reloads and their knife and axe swings are heard too. |
 | Not shared | Item boxes (each player has their own). |
 
-Made with [coop-anything](https://github.com/cranebeaker/coop-anything). MIT licensed.
+Made with [coop-anything](https://github.com/cranebeaker/coop-anything). MIT licensed. Want to help? See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Install (every player)
 
