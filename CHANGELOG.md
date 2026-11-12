@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.49 (2026-11-12)
+Release candidate: everything that's shared is now on by default and the same for everyone, several Molded at
+once were tested, and a few rare failures that would have shown up in longer sessions are fixed. Everyone needs
+v0.49.
+
+You all share one game, out of the box:
+- **Share story, One game leads the story and Enemies chase both players are on by default.** Before, a new
+  player got them off, although every real session and every bot test ran with them on. Now a fresh install
+  plays the way the mod was tested: the host's story steps and scenes count for everyone, and enemies turn on
+  whoever is nearer.
+- **One Molded for both, One boss for both, Molded go after any of you, One game leads the story and Enemies
+  chase both players are now the same for everyone**, like Share story: changing one changes it for the whole
+  group. Before, they changed only in the game where you flipped them, and two games that disagreed about who
+  runs a Molded or a boss would both run it.
+
+The Molded:
+- **Several Molded at once** (bot-tested with two, one next to each player): each game runs the one next to its
+  own player and shows the other one where the other game has it (never more than about half a metre apart),
+  and each goes for the player next to it.
+- **A Molded your friend has out now always comes out for you too.** When a Molded had come out in your game
+  once and the game had put it away again, its spawn point counted as used and the mod never asked for it
+  again, so your friend could fight a Molded you didn't have (bot test: two out in one game, one in the other).
+  It's now brought out again, unless it died in your game.
+- **A Molded no longer jumps on your screen when the game swaps its body.** The game sometimes gives a Molded
+  a fresh body from its pool; the new body was left to its own AI for a few seconds (3 m off in a bot test),
+  and the mod could even keep the old body awake next to it. The new body follows at once now, and the old
+  one is let go.
+- **A Molded no longer stays with a player who walked away from it.** When one game took a Molded back because
+  the other had gone quiet for 3 seconds, it kept it for up to two minutes, even with the other player standing
+  next to it (bot test: 18 m from its own player for a minute). It now goes to the nearer player as soon as
+  their game shows it has that Molded.
+
+Deaths:
+- **A fatal hit while your friend is in a cutscene puts you down**, not into a real game over. Your friend's
+  character is hidden during their scene, and that counted as "nobody here to help": in the bot suite a player
+  killed by Jack while the other watched a scene got a game over (and the game stayed paused). Now a friend
+  who's up and in the same chapter counts, scene or not, at any distance (v0.48 also wanted them within 40 m
+  during a grab); if nobody comes, being down still ends for real after 90 seconds. A death that does go
+  through is now explained in the log (bot-tested: friend in a scene 54 m away, you go down).
+
+Polish:
+- **"Teleport to your friend" waits 3 seconds after a scene ends.** In the bot tests a game crashed twice in the
+  game's own scene clean-up when its player was moved far away right as a scene finished; the button now says
+  to try again in a moment instead (and the automatic regroup after a friend's phone call waits for it).
+- **A different version is named on screen** once, with who needs to update, not only on the status line (which
+  can be switched off).
+- **Rare missed reads fixed.** About one time in fifty the game hands back a list the mod couldn't read; in a few
+  places that was taken as "nothing there" (a Molded's AI looked missing for good, a spawn request was skipped,
+  a joint list came back empty). Every list is now read item by item when that happens.
+- The README is rewritten for this release (what's shared, every option with its default, known limits), and the
+  bug-report zip is now called molded-together-report-<date>.zip.
+
 ## v0.48 (2026-11-10)
 Fixes from the first v0.47 session (two players, the Chapter 3 basement to the yard): four crashes, two stuck
 loading screens and a list of things that didn't match between the two games. Everyone needs v0.48.

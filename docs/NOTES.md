@@ -1665,3 +1665,43 @@ end
   0.12 s (mid-scroll ListIndex passes row 0 = NEW GAME). menu_test.py has both cases (86 checks). The copies'
   title list is 6 rows with ItemMax 5 and ctrl=false (stuck before 'press any button'), so CO-OP isn't added
   there; not checked live. coop_world elems/find_comps and coop_enemies spawn_ids read the same way.
+- v0.49 (2026-11-12, release candidate; no real session since v0.48). Defaults: share_story,
+  story_follow_host and enemy_chase_both now default ON (reads are '~= false'; coop_talk SHARED_OPTS on=true)
+  because every bot run and real session used the play copy's settings, where they were on, while a fresh
+  install got them off. prepare.py COOP_FRESH=1 gives the copies a new player's settings (only the test keys).
+  share_jack_fight, share_molded_moves, share_molded_target, story_follow_host and enemy_chase_both were
+  'shared' in the menu (setting_toggle 4th arg) but missing from SHARED_OPTS, so coop_set_shared_option only
+  set them locally: added. Several Molded (mold_multi_test.py, slot 8, two Molded 5.5 m apart, one bot by
+  each): each game ran its own player's Molded and copied the other, <= 0.6 m apart. Found there: after a
+  'took back (no data 3 s)' mv.no_handoff held a Molded 30-120 s even with the friend next to it; now
+  es.friend_has[id] (set by the friend's 'ehp' check-ins, which list every awake Em4xxx in their game,
+  copies included) lifts the hold for 7 s. Don't force more spawns than the pool has in a test (bodies get
+  reused, ids change). arr_items() (v049_items.py) in coop_dummy/enemies/gunsound/story replaces every bare
+  get_elements (5 unguarded); think_of retries a missing think after 2 s instead of caching false;
+  spawn_requests reads get_Count/get_Item, and a spawn point IsSpawned with no EnemyInstance (body back in
+  the pool) gets IsSpawned=false + requestSpawn once per 'spawn' wish unless es.dead_here[id] (died here
+  this chapter; cleared when seen alive): the second Molded then came out 2 s later in the other game
+  (requestSpawn itself reports 'Invoke threw an exception' but spawns). Body swaps: the game puts a copy to
+  sleep and gives its spawn point a new body (B1F-Engineroom00_blade, ~25 s in); drive's wake() kept the old
+  one awake too, so the id flipped between two bodies and the copy stood 3.13 m off. Now wake() only while
+  spawn_body[id] is this body, and a body that inherits a friend-owned id (scan 'is now') gets e.replaced,
+  which settled() takes as out, so it is puppetized at once. Molded suite test 3/3 after (<= 0.38 m).
+  One crash in suite run final49e: copy 0 at the end of its own c03e20_00 (requested by the test with a nil
+  Transform, ~62 s), GameEventController.doOnDestroy -> GameEventManager.<>c__DisplayClass10_0.<requestEvent>
+  b__1 (closure holds eventName + setting); 1 s after copy 1 went down to Jack. Not reproduced in 2 reruns of
+  that stretch; coop_story's doOnDestroy hook only reads the setting's name. It came back in run final49f
+  (2 of 3 full runs, 0 of 4 short ones): both times the suite runner warped copy 0 home (53 m, out of the
+  scene's area) right as the scene ended, so the setting's area likely unloaded before the controller's
+  teardown. Runner now waits 3 s after a scene; teleport_to_friend refuses for 3 s after any
+  GameEventController.doOnDestroy (coop_scene_end_t); the phone-scene regroup waits 3.5 s. Revive: friend_here() only counted a SHOWN ghost unless we were in
+  a scene, so a friend in their own scene (ghost hidden) counted as gone: suite run final49a, copy 0 in
+  c03e20_00 (puts its player ~53 m off), copy 1 killed by Jack -> real game over (GameManager
+  IsGameOverPause true, CurrentPause 8, hp 0, nothing logged). Now any friend up with a fresh same-chapter
+  link sample counts (40 m limit dropped; DOWN_LIMIT still ends it), and a death that goes through is logged.
+  Suite test 'revive in a scene' (friend 54 m off in c03e20_00, hidden: would go down) and 'molded: one
+  Molded for both' (spawn in both, run/copy split, <= 0.51 m, a 400 hit and the kill seen in both) added.
+  'story far' skips when story_follow_host is on by default. Version mismatch: one show_msg per version
+  heard, naming who should update. Report zip renamed molded-together-report-<stamp>. README rewritten
+  (release candidate: what's shared, every option with its default, known limits incl. nothing past
+  Chapter 3 played in co-op). Bot-copy REFramework logs reach 200+ MB from minimized-window device resets
+  (test copies only).

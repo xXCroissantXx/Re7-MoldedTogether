@@ -1237,8 +1237,8 @@ end
 
 function PAGES.options()
     local items = {}
-    items[#items + 1] = setting_toggle("Share story", "share_story", false, true,
-        "Cutscenes one of you reaches play for both when you're together; the same for everyone.")
+    items[#items + 1] = setting_toggle("Share story", "share_story", true, true,
+        "Cutscenes and story progress one of you reaches count for both; the same for everyone.")
     items[#items + 1] = setting_toggle("Share supplies", "share_supplies", false, true,
         "One copy of ammo and healing for everyone (harder); the same for everyone.")
     items[#items + 1] = setting_toggle("Share interactions", "share_interactions", true, true,
@@ -1268,10 +1268,10 @@ function PAGES.options()
         "Their grunts when they're hit, block or land, their scream if they die, getting back up.")
     items[#items + 1] = setting_toggle("Your friend's flashlight (experimental)", "friend_light", false, false,
         "In the dark, their flashlight shines where they look (once your own has been on).")
-    items[#items + 1] = setting_toggle("One game leads the story (experimental)", "story_follow_host", false, false,
-        "The host's story scenes play for both of you wherever you are, and the host's progress counts for both. Both switch it on.")
-    items[#items + 1] = setting_toggle("Enemies chase both players (experimental)", "enemy_chase_both", false, false,
-        "Up close, an enemy turns on whichever of you is nearer (its game changes to that player's). Both switch it on.")
+    items[#items + 1] = setting_toggle("One game leads the story", "story_follow_host", true, true,
+        "The host's story scenes play for everyone wherever you are, and the host's progress counts for all; the same for everyone.")
+    items[#items + 1] = setting_toggle("Enemies chase both players", "enemy_chase_both", true, true,
+        "Up close, an enemy turns on whichever of you is nearer (its game changes to that player's); the same for everyone.")
     items[#items + 1] = setting_toggle("On-screen status", "hud", true, false)
     do
         local cur = 1

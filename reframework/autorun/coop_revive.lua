@@ -87,18 +87,27 @@ end
 -- the link instead (v0.48). Until then a death during a grab was always a real one: on 2026-11-10 a
 -- player revived in the morgue fight was killed in Jack's grab 20 s later, their game loaded the
 -- checkpoint (story back to before the fight) and they fought on alone while the friend finished it.
-local GRAB_FRIEND_M = 40
+-- Friend k's last position from the link (fresh, same chapter), whether or not their character is shown.
+local function friend_link_pos(k)
+    local env = coop_slot_envs and coop_slot_envs[k]
+    local fn = env and rawget(env, "coop_friend_sample")
+    if fn == nil and k == 1 then fn = coop_friend_sample end
+    local smp = fn and safe(fn)
+    return smp and smp.pos or nil
+end
+-- v0.49: a friend in THEIR cutscene is hidden here too, and counted as gone: in the bot suite a player
+-- killed by Jack while the friend watched a 60 s scene (one that puts its player 53 m off) got a real
+-- game over, and the game sat paused on it, without a word in the log. v0.48's 40 m limit (for our own
+-- grab or scene) went too: a friend whose character is shown counted at any distance anyway, and being
+-- down still ends for real after DOWN_LIMIT if nobody comes. So: a friend who's up and in this chapter,
+-- by the link (fresh data), counts, whoever is in a scene.
 local function friend_here()
-    if local_cutscene and local_cutscene() then
-        if rv.down_slots[1] then return false end
-        local smp = coop_friend_sample and coop_friend_sample()
-        local p = sdk.get_managed_singleton("app.ObjectManager"):get_field("PlayerObj")
-        local pos = p and safe(function() return p:call("get_Transform"):call("get_Position") end)
-        if smp == nil or pos == nil or smp.pos == nil then return false end
-        return (smp.pos.x - pos.x) ^ 2 + (smp.pos.z - pos.z) ^ 2 < GRAB_FRIEND_M * GRAB_FRIEND_M
-    end
+    local in_scene = local_cutscene and local_cutscene()
     for k = 1, 3 do
-        if not rv.down_slots[k] and friend_ghost(k) ~= nil then return true end
+        if not rv.down_slots[k] then
+            if not in_scene and friend_ghost(k) ~= nil then return true end
+            if friend_link_pos(k) ~= nil then return true end
+        end
     end
     return false
 end
@@ -173,7 +182,14 @@ local function hook_die(method)
         skip_next = false
         local ok = pcall(function()
             local dc = player_dc()
-            if dc and sdk.to_int64(args[2]) == dc:get_address() and should_go_down() then skip_next = true end
+            if dc and sdk.to_int64(args[2]) == dc:get_address() then
+                if should_go_down() then skip_next = true
+                elseif not rv.allow_death and os.clock() - (rv.real_log_t or -100) > 10 then
+                    -- Said in the log (v0.49): the suite's real death left nothing to go on.
+                    rv.real_log_t = os.clock()
+                    log("a fatal hit goes through: no friend up in this chapter")
+                end
+            end
         end)
         if skip_next then
             pcall(go_down)
@@ -204,7 +220,10 @@ do
         pcall(sdk.hook, m, function(args)
             skip = false
             pcall(function()
-                if (sdk.to_int64(args[3]) & 1) == 1 and should_go_down() then skip = true end
+                if (sdk.to_int64(args[3]) & 1) == 1 then
+                    if should_go_down() then skip = true
+                    elseif not rv.allow_death then log("the game's game over goes through: no friend up in this chapter") end
+                end
             end)
             if skip then
                 rv.gameover_refused = rv.gameover_refused + 1

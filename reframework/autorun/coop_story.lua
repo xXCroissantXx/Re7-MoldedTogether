@@ -30,6 +30,24 @@ story_sync = {
     sent = 0, applied = 0, msg = "-", msg_t = -100, pend_t = 0,
 }
 local ss = story_sync
+
+-- A managed array's items (v0.49): get_elements, or item by item when the game hands back an array
+-- without it (about one read in 50, and every read on the title screen). A failed read used to be taken
+-- for an empty list: an enemy's AI looked missing for good, a joint list came back empty.
+local function arr_items(arr)
+    if arr == nil then return {} end
+    local ok, l = pcall(function() return arr:get_elements() end)
+    if ok and l then return l end
+    local out = {}
+    local okn, n = pcall(arr.call, arr, "get_Count")
+    if okn and type(n) == "number" then
+        for i = 0, n - 1 do
+            local oki, it = pcall(arr.call, arr, "get_Item", i)
+            if oki and it then out[#out + 1] = it end
+        end
+    end
+    return out
+end
 local STORY_NAME = "^c%d%de%d%d_%d%d$"
 -- Jack's scripted moments (breaking through the hatch-room wall, 2026-11-02) are events too,
 -- named em3000_*; they follow the same rules (same chapter, friend within NEAR).
@@ -130,10 +148,10 @@ local function note(msg)
     log(msg)
 end
 
--- "Share story" (Molded Together window, off by default): off = neither send nor apply.
--- Off unless ticked: in the first real session it pushed the player who was behind
--- (tape ended early, washed-out picture, chapter change stuck), 2026-11-02.
-local function sharing() return settings ~= nil and settings.share_story == true end
+-- "Share story" (Options): off = neither send nor apply. Off by default from 2026-11-02 (the first real
+-- session pushed the player who was behind: tape ended early, washed-out picture, chapter change stuck);
+-- on by default since v0.49, after those were fixed and every later session and bot test ran with it on.
+local function sharing() return settings ~= nil and settings.share_story ~= false end
 
 -- Story steps are always sent (v0.23), and applied only with Share story on: with it off the
 -- other game just keeps track of how far you are, to warn when your stories drift apart.
@@ -198,6 +216,7 @@ do
     if m then
         pcall(sdk.hook, m, function(args)
             pcall(function()
+                coop_scene_end_t = os.clock()   -- for teleport_to_friend (v0.49)
                 local c = sdk.to_managed_object(args[2])
                 local st = c and c:call("get_eventSetting")
                 local name = st and tostring(st:call("get_eventName"))
@@ -283,10 +302,11 @@ local function friend_distance(slot)
     return math.sqrt((gp.x - pp.x) ^ 2 + (gp.y - pp.y) ^ 2 + (gp.z - pp.z) ^ 2)
 end
 
--- One game leads the story (v0.47, experimental, Options): the host (the game that runs the enemies)
--- leads; in the other game the host's scenes play wherever we are, and its progress is always copied.
+-- One game leads the story (v0.47, Options; on by default and the same for everyone since v0.49): the host
+-- (the game that runs the enemies) leads; in the other game the host's scenes play wherever we are, and
+-- its progress is always copied.
 local function follower()
-    return settings ~= nil and settings.story_follow_host == true and coop_enemy_role_now == "guest"
+    return settings ~= nil and settings.story_follow_host ~= false and coop_enemy_role_now == "guest"
 end
 -- In step: for IN_STEP s after a shared cutscene ENDS (v0.30). It used to count from the start:
 -- a 31 s cutscene (Mia, 2026-11-08) ended after the window closed, so the "event finished" that
@@ -453,7 +473,7 @@ local function scene_given_back(name)
         pcall(a.set_field, a, "SetTargetObj", nil)
         pcall(a.set_field, a, "TargetObjTemp", nil)
     end
-    ss.regroup_t = os.clock() + 1.5
+    ss.regroup_t = os.clock() + 3.5   -- after teleport_to_friend's 3 s wait at a scene's end (v0.49)
     log("friend's " .. name .. ": ended here, played on your friend's body")
 end
 coop_story_scene_given_back = scene_given_back
@@ -998,7 +1018,7 @@ local function apply_objdone(id, ch)
     for i = 0, (list and list:call("get_Count") or 0) - 1 do
         active[tostring(list:call("get_Item", i):get_field("ObjectiveId")):gsub("-", ""):lower()] = true
     end
-    for _, c in ipairs(arr and arr:get_elements() or {}) do
+    for _, c in ipairs(arr_items(arr)) do
         local g = c:get_field("ObjectiveId")
         if g and obj_guid(g) == id then
             if active[id] then

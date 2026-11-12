@@ -573,7 +573,7 @@ public class CoopNet
         public float LookYaw, LookPitch;   // camera relative to body, radians
     }
 
-    const string Version = "0.48";
+    const string Version = "0.49";
     const int PacketSize = 64;
     static readonly byte[] Magic = { (byte)'R', (byte)'7', (byte)'C', (byte)'2' };
     const int KeepSamples = 32;
@@ -1097,7 +1097,7 @@ public class CoopNet
         {
             var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", Inv);
             var desk = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-            var dir = Path.Combine(desk, "coop-re7-report-" + stamp);
+            var dir = Path.Combine(desk, "molded-together-report-" + stamp);
             Directory.CreateDirectory(dir);
             var names = new List<string>();
             var status = Path.Combine(s_dataDir, "coopnet_status.txt");
@@ -1152,7 +1152,7 @@ public class CoopNet
                 Process.Start(psi);
             }
             API.LogInfo("[CoopNet] bug report: " + dir + ".zip (" + n + " files)");
-            return "bug report on your desktop: coop-re7-report-" + stamp + ".zip (" + n + " files)";
+            return "bug report on your desktop: molded-together-report-" + stamp + ".zip (" + n + " files)";
         }
         catch (Exception e) { API.LogWarning("[CoopNet] bug report failed: " + e); return "bug report FAILED: " + e.Message; }
     }

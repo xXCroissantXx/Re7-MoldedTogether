@@ -94,6 +94,24 @@ local function safe(f, ...)
     return nil, r
 end
 
+-- A managed array's items (v0.49): get_elements, or item by item when the game hands back an array
+-- without it (about one read in 50, and every read on the title screen). A failed read used to be taken
+-- for an empty list: an enemy's AI looked missing for good, a joint list came back empty.
+local function arr_items(arr)
+    if arr == nil then return {} end
+    local ok, l = pcall(function() return arr:get_elements() end)
+    if ok and l then return l end
+    local out = {}
+    local okn, n = pcall(arr.call, arr, "get_Count")
+    if okn and type(n) == "number" then
+        for i = 0, n - 1 do
+            local oki, it = pcall(arr.call, arr, "get_Item", i)
+            if oki and it then out[#out + 1] = it end
+        end
+    end
+    return out
+end
+
 local function get_player()
     local om = sdk.get_managed_singleton("app.ObjectManager")
     return om and om:get_field("PlayerObj")
@@ -104,7 +122,7 @@ local function dump_tree(go, depth, budget)
     if budget.n <= 0 then return end
     budget.n = budget.n - 1
     local comps = {}
-    for _, c in ipairs((safe(function() return go:call("get_Components"):get_elements() end)) or {}) do
+    for _, c in ipairs(arr_items(safe(go.call, go, "get_Components"))) do
         local tn = c:get_type_definition():get_full_name()
         if tn == "via.render.Mesh" then
             local h = safe(c.call, c, "getMesh")
@@ -159,7 +177,7 @@ function find_full_model()
         local r = tr and safe(tr.call, tr, "get_GameObject")
         return r ~= nil and tostring(safe(r.call, r, "get_Name")) == "VrDummyPlayer"
     end
-    for _, m in ipairs((arr and arr:get_elements()) or {}) do
+    for _, m in ipairs(arr_items(arr)) do
         local h = safe(m.call, m, "getMesh")
         local path = h and safe(h.call, h, "get_ResourcePath")
         if path and not seen[path] and path:find("^Character/") and safe(m.call, m, "get_SkinningMesh") and not on_ghost(m) then
@@ -399,7 +417,7 @@ end
 
 local function find_look_joints(tr)
     local arr = safe(tr.call, tr, "get_Joints")
-    local elems = (arr and safe(arr.get_elements, arr)) or {}
+    local elems = arr_items(arr)
     local names, neck, head = {}, nil, nil
     for _, j in ipairs(elems) do
         local n = tostring(safe(j.call, j, "get_Name"))
@@ -2301,7 +2319,7 @@ local function draw_options()
     if lchanged then settings.friend_light = lv save_settings() end
     -- Story cutscenes and progress follow whichever player reaches them first. One setting
     -- for both players (coop_talk.lua keeps the two games matched).
-    local sc, sv = imgui.checkbox("Share story (cutscenes and progress, experimental; same for both)", settings.share_story == true)
+    local sc, sv = imgui.checkbox("Share story (cutscenes and progress; same for both)", settings.share_story ~= false)
     if sc then if coop_set_shared_option then coop_set_shared_option("share_story", sv) else settings.share_story = sv save_settings() end end
     local wc, wv = imgui.checkbox("Show your friend's weapon (experimental)", settings.show_weapon ~= false)
     if wc then settings.show_weapon = wv save_settings() pcall(show_friend_weapon_again) end
@@ -2786,7 +2804,7 @@ re.on_frame(function()
             if w ~= held.sent and w ~= "-" and held.local_go then
                 -- For weapon sounds later: what the held weapon is made of (logged once per weapon).
                 local names = {}
-                for _, c in ipairs(safe(function() return held.local_go:call("get_Components"):get_elements() end) or {}) do
+                for _, c in ipairs(arr_items(safe(held.local_go.call, held.local_go, "get_Components"))) do
                     names[#names + 1] = c:get_type_definition():get_full_name()
                 end
                 log("weapon: holding " .. w .. "; components: " .. table.concat(names, ", "))
@@ -2968,7 +2986,7 @@ local function draw_lobby()
         imgui.text("Full character models: installed (Third Person Full Model Placeholders)")
     elseif kv.fullModels == "off" then
         imgui.text("Full character models: copied in, but REFramework's Loose File Loader is off.")
-        imgui.text("  Close the game and double-click \"Use full models.cmd\" (in the coop-re7 download).")
+        imgui.text("  Close the game and double-click \"Use full models.cmd\" (in the Molded Together download).")
     elseif kv.fullModels == "move" then
         imgui.text("Full character models: copied in but not set up (your own view may show the inside")
         imgui.text("  of the head). Close the game and double-click \"Use full models.cmd\".")
@@ -3160,6 +3178,13 @@ function teleport_to_friend()
     -- hidden while a scene plays, so a player stuck in a scene their friend had left (the boiler
     -- room, 2026-11-10) got "no friend to go to" from the one button that could have freed them.
     local now = os.clock()
+    -- Not in the 3 s after a scene of ours ended (v0.49): a warp away from a scene's spot while the game was
+    -- still tearing it down crashed a bot copy twice (GameEventController.doOnDestroy); coop_story notes the end.
+    if coop_scene_end_t and now - coop_scene_end_t < 3 then
+        join.msg = "a scene just ended: try again in a moment"
+        log("teleport: refused, a scene ended " .. string.format("%.1f", now - coop_scene_end_t) .. " s ago")
+        return false
+    end
     local last = net.history[#net.history]
     if last == nil or now - last.t > 3 + (net.delay or 0) then log("teleport: no friend to go to (nothing from them for 3 s)") return false end
     if net.peer_chapter and net.peer_chapter ~= local_chapter() then log("teleport: friend is in another chapter") return false end
@@ -3759,7 +3784,7 @@ local function look2_joints(m)
     local tr = go:call("get_Transform")
     local arr = tr:call("get_Joints")
     local neck, head
-    for _, j in ipairs((arr and arr:get_elements()) or {}) do
+    for _, j in ipairs(arr_items(arr)) do
         local n = tostring(safe(j.call, j, "get_Name")):lower()
         if neck == nil and n:find("neck") then neck = j end
         if head == nil and n:find("head") and not n:find("end") then head = j end
@@ -3906,7 +3931,7 @@ local function mirror_event_pose()
         E.map = {}
         local dtr = dummy:call("get_Transform")
         local btr = anim.motion:call("get_GameObject"):call("get_Transform")
-        for _, j in ipairs(dtr:call("get_Joints"):get_elements()) do
+        for _, j in ipairs(arr_items(dtr:call("get_Joints"))) do
             local name = j:call("get_Name")
             local bj = btr:call("getJointByName", name)
             if bj then E.map[#E.map + 1] = { j, bj, name == "Hip" or name == "Null_Offset" } end
@@ -4040,7 +4065,7 @@ local function hud_lines()
     if bad > hud.bad_prev then hud.bad_t = os.clock() end
     hud.bad_prev = bad
     if os.clock() - hud.bad_t < 10 then
-        out[#out + 1] = { "Friend's packets don't match: check you both have the same coop-re7 version", 0xFF6B6BFF }
+        out[#out + 1] = { "Friend's packets don't match: check you both have the same Molded Together version", 0xFF6B6BFF }
     end
     local em = enemy_sync_hud and enemy_sync_hud()
     if em then out[#out + 1] = { em, 0xFF7FE6FF } end

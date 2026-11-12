@@ -291,13 +291,21 @@ end
 -- two old settings files, turns it off: the safer way).
 -- v0.24: the other sharing switches too. on = the value when the settings file has none.
 local SHARED_OPTS = {
-    { key = "share_story", label = "Share story", on = false },
+    -- v0.49: on by default (every bot test and real session ran with it on: "you all share one game").
+    { key = "share_story", label = "Share story", on = true },
     { key = "share_supplies", label = "Share supplies", on = false },
     { key = "share_phones", label = "Share phone calls", on = true },
     { key = "share_interactions", label = "Share interactions", on = true },
     { key = "share_physics", label = "Share pushed objects", on = true },
     { key = "share_enemies_group", label = "Share enemies with 3-4 players", on = true },
     { key = "share_bosses", label = "Share boss fights", on = true },
+    -- v0.49: these were flipped in one game only, though both games must agree (one Molded or boss run by
+    -- one game and copied by the other only works when both do it).
+    { key = "share_jack_fight", label = "One boss for both", on = true },
+    { key = "share_molded_moves", label = "One Molded for both", on = true },
+    { key = "share_molded_target", label = "Molded go after any of you", on = true },
+    { key = "story_follow_host", label = "One game leads the story", on = true },
+    { key = "enemy_chase_both", label = "Enemies chase both players", on = true },
 }
 local opts = { sent_t = -100 }
 
@@ -360,8 +368,13 @@ end
 function coop_talk_version_warning()
     local mine = kv().version
     if talk.friend_ver == nil or mine == nil or talk.friend_ver == mine then return nil end
-    return string.format("Your friend has coop-re7 v%s and you have v%s: both install the same version",
+    return string.format("Your friend has Molded Together v%s and you have v%s: both install the same version",
         talk.friend_ver, mine)
+end
+-- The newer of two "0.48"-style versions (v0.49), for the one-time message.
+local function ver_num(v)
+    local a, b = tostring(v or ""):match("^(%d+)%.(%d+)")
+    return a and (tonumber(a) * 1000 + tonumber(b)) or nil
 end
 
 -- "Make a bug report" for both games at once (v0.24): ours asks theirs to make one too.
@@ -379,6 +392,15 @@ function coop_talk_on_event(text)
     if fv then
         if fv ~= talk.friend_ver then log("friend's version: " .. fv) end
         talk.friend_ver = fv
+        -- Once per version heard (v0.49): the status line can be switched off, and a mismatch breaks a lot.
+        local mine = kv().version
+        if mine and fv ~= mine and talk.ver_told ~= fv then
+            talk.ver_told = fv
+            local f, m = ver_num(fv), ver_num(mine)
+            local who = (f and m and f > m) and "You need to update" or ((f and m and f < m) and "Your friend needs to update" or "Update")
+            show_msg(string.format("Your friend has Molded Together v%s, you have v%s. %s: things won't match until you're on the same version.",
+                fv, mine, who), 0xFF7FE6FF)
+        end
         return true
     end
     if text == "report_req" then

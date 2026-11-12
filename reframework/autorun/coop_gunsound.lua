@@ -108,11 +108,29 @@ local function safe(f, ...)
     return nil
 end
 
+-- A managed array's items (v0.49): get_elements, or item by item when the game hands back an array
+-- without it (about one read in 50, and every read on the title screen). A failed read used to be taken
+-- for an empty list: an enemy's AI looked missing for good, a joint list came back empty.
+local function arr_items(arr)
+    if arr == nil then return {} end
+    local ok, l = pcall(function() return arr:get_elements() end)
+    if ok and l then return l end
+    local out = {}
+    local okn, n = pcall(arr.call, arr, "get_Count")
+    if okn and type(n) == "number" then
+        for i = 0, n - 1 do
+            local oki, it = pcall(arr.call, arr, "get_Item", i)
+            if oki and it then out[#out + 1] = it end
+        end
+    end
+    return out
+end
+
 -- "Weapon/wp1210_Handgun/wp1210_Handgun ..." -> "wp1210"
 local function weapon_key(w) return w and tostring(w):match("(wp%d%d%d%d)") or nil end
 
 local function container_of(go)
-    for _, c in ipairs(safe(function() return go:call("get_Components"):get_elements() end) or {}) do
+    for _, c in ipairs(arr_items(safe(go.call, go, "get_Components"))) do
         if c:get_type_definition():is_a("via.wwise.WwiseContainer") then return c end
     end
     return nil
@@ -747,7 +765,7 @@ local function own_light()
     local ctl = safe(go.call, go, "getComponent(System.Type)", sdk.typeof("app.HandLightController"))
     local light = ctl and safe(ctl.get_field, ctl, "Light")
     if light == nil then
-        for _, c in ipairs(safe(function() return go:call("get_Components"):get_elements() end) or {}) do
+        for _, c in ipairs(arr_items(safe(go.call, go, "get_Components"))) do
             local n = tostring(safe(function() return c:get_type_definition():get_full_name() end) or "")
             if n:find("^via%.render%.") and n:find("Light") then light = c break end
         end
@@ -860,7 +878,7 @@ local function head_pos(g)
         h = false
         local tr = g:call("get_Transform")
         local arr = safe(tr.call, tr, "get_Joints")
-        for _, j in ipairs((arr and safe(arr.get_elements, arr)) or {}) do
+        for _, j in ipairs(arr_items(arr)) do
             local n = tostring(safe(j.call, j, "get_Name") or ""):lower()
             if n:find("head") and not n:find("end") then h = j break end
         end

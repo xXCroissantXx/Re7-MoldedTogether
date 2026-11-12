@@ -1,12 +1,13 @@
-# coop-re7: two-player session checklist
+# Molded Together: two-player session checklist
 
-Everything in coop-re7 has so far been tested on one PC against a simulated player (the bot). This list walks
-two real players through every shared feature once, so problems show up in a known order. It takes about
-45 minutes. Tick things off as you go and note anything odd (what you saw, roughly when).
+Before each release, two copies of RE7 play each other with bots through the whole test suite; two real
+sessions so far reached the Chapter 3 yard. This list walks real players through every shared feature once,
+so problems show up in a known order. It takes about 45 minutes; the newest sections (at the end) are the ones
+no real player has tried yet. Tick things off as you go and note anything odd (what you saw, roughly when).
 
 **Before you start (both players)**
 
-- [ ] Both installed the same coop-re7 release (the friend list warns if your versions differ).
+- [ ] Both installed the same Molded Together release (you're told on screen if your versions differ).
 - [ ] *Allow saving*: off by default (nothing kept). To keep your progress, both tick it before playing.
 - [ ] A player starting RE7 for the first time plays the opening alone first (joining during it leaves a black
       screen), then connects.
@@ -278,6 +279,19 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 - [ ] **Quick moves**: kick a body bag in the morgue fight: your friend sees you stay on screen.
 - [ ] **Mouse on the co-op screen during play**: point and click work.
 - [ ] **Stuck in a scene**: Teleport to your friend still works; Reload last save refuses and says why.
+
+## 21. New in v0.49
+
+- [ ] **Fresh settings**: one of you deletes `coop_settings.json` (co-op folder, `reframework\data`) before
+      starting: Options shows Share story, One game leads the story and Enemies chase both players **On**.
+- [ ] **Options for everyone**: one of you turns **One Molded for both** off: the other is told it's off for both
+      of you; turn it back on.
+- [ ] **Two Molded**: stand apart, each next to a different Molded: each fights its own player, and both screens
+      show both Molded in the same places.
+- [ ] **Walk away**: let a Molded go after you, then walk off while your friend stays by it: it turns on them.
+- [ ] **Down in a scene**: get knocked down while your friend is watching a cutscene: you go down (not a game
+      over), and they can get you up when it's over.
+- [ ] **Versions**: (if you can) connect with a friend on v0.48: you're told on screen who needs to update.
 
 ## Afterwards
 

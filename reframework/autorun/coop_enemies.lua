@@ -56,6 +56,24 @@ local function safe(f, ...)
     return nil
 end
 
+-- A managed array's items (v0.49): get_elements, or item by item when the game hands back an array
+-- without it (about one read in 50, and every read on the title screen). A failed read used to be taken
+-- for an empty list: an enemy's AI looked missing for good, a joint list came back empty.
+local function arr_items(arr)
+    if arr == nil then return {} end
+    local ok, l = pcall(function() return arr:get_elements() end)
+    if ok and l then return l end
+    local out = {}
+    local okn, n = pcall(arr.call, arr, "get_Count")
+    if okn and type(n) == "number" then
+        for i = 0, n - 1 do
+            local oki, it = pcall(arr.call, arr, "get_Item", i)
+            if oki and it then out[#out + 1] = it end
+        end
+    end
+    return out
+end
+
 local function chapter()
     local gm = sdk.get_managed_singleton("app.GameManager")
     return tonumber(gm and safe(gm.get_field, gm, "_CurrentChapter") or 0) or 0
@@ -222,6 +240,7 @@ end
 -- zone). The game refuses while the spot is in view, so it's asked again for 20 s. Each game still
 -- runs its own (see moves_shared); kills, hits and health go by the spawn point's id.
 es.spawn_want = es.spawn_want or {}
+es.dead_here = es.dead_here or {}   -- id -> chapter: died in this game (seen alive again: forgotten)
 local function spawn_requests(now)
     if next(es.spawn_want) == nil or now - (es.spawn_req_t or 0) < 2 then return end
     es.spawn_req_t = now
@@ -229,7 +248,13 @@ local function spawn_requests(now)
     local arr = sc and safe(sc.call, sc, "findComponents(System.Type)", sdk.typeof("app.EnemySpawnInfo"))
     local gm = sdk.get_managed_singleton("app.EnemyGeneratorManager")
     local byid = {}
-    for _, s in ipairs(arr and safe(arr.get_elements, arr) or {}) do
+    local list = arr and safe(arr.get_elements, arr)
+    if list == nil and arr then   -- the same unreadable list as in spawn_ids (v0.49)
+        list = {}
+        local n = safe(arr.call, arr, "get_Count")
+        for i = 0, (type(n) == "number" and n or 0) - 1 do local it = safe(arr.call, arr, "get_Item", i) if it then list[#list + 1] = it end end
+    end
+    for _, s in ipairs(list or {}) do
         local g = safe(s.get_field, s, "MyGUID")
         local t = g and safe(guid_text, g)
         if t then byid[t] = s end
@@ -239,7 +264,18 @@ local function spawn_requests(now)
         if now > w.until_t or w.ch ~= chapter() then
             es.spawn_want[t] = nil
         elseif s and gm then
-            if safe(s.get_field, s, "IsSpawned") == true or safe(s.get_field, s, "EnemyInstance") ~= nil then
+            local inst = safe(s.get_field, s, "EnemyInstance")
+            local spawned = safe(s.get_field, s, "IsSpawned") == true
+            if spawned and inst == nil and not w.reset and es.dead_here["s:" .. t] ~= chapter() then
+                -- Marked spawned with no Molded (v0.49): it came out here once and the game took its body back
+                -- to the pool, and a spawn point marked spawned is never asked again, so the friend's awake
+                -- Molded never came out here (bot test: two out in one game, one in the other). Not if it died
+                -- here. The mark is cleared and the spawn asked for once more.
+                w.reset, w.asked = true, true
+                pcall(s.set_field, s, "IsSpawned", false)
+                pcall(gm.call, gm, "requestSpawn(app.EnemySpawnInfo, System.Int32)", s, 0)
+                log("spawn " .. t .. ": marked spawned with no Molded here, asked again")
+            elseif spawned or inst ~= nil then
                 if w.asked then log("spawn " .. t .. ": out here too") end
                 es.spawn_want[t] = nil   -- already out (or was, and is dead or asleep by the game's own doing)
             else
@@ -252,7 +288,7 @@ end
 
 local function damage_controller(go)
     local comps = safe(go.call, go, "get_Components")
-    for _, c in ipairs(comps and safe(comps.get_elements, comps) or {}) do
+    for _, c in ipairs(arr_items(comps)) do
         local td = c:get_type_definition()
         if td:is_a("app.DamageController") then return c end
     end
@@ -370,6 +406,9 @@ local function scan()
                         log(string.format("%s is now %s (was %s)", e.name, sid, e.id))
                         if coop_enemy_orphan then pcall(coop_enemy_orphan, e, false) end   -- a copy of what it was
                         e.id, e.hp, e.dup = sid, nil, false
+                        -- A new body for a Molded the friend's game runs (v0.49): a copy at once (see settled);
+                        -- left to its own AI until it had walked 1 m, it stood 3 m from the friend's (bot test).
+                        if em_move and em_move.own and type(em_move.own[sid]) == "number" then e.replaced = true end
                         e.dead = e.dc:call("get_isDead") == true
                     elseif sid == nil and e.id:sub(1, 2) == "s:" and body[e.id] and body[e.id] ~= addr then
                         -- Its spawn point has another body now: this one is left over (two bodies
@@ -395,10 +434,12 @@ local function scan()
                     if e.pool and coop_enemy_repool then pcall(coop_enemy_repool, e) end
                 end
                 local dead = e.dc:call("get_isDead") == true
+                if not dead and active and es.dead_here[e.id] then es.dead_here[e.id] = nil end   -- alive again (a load)
                 if e.dup then
                     -- Its id is shared with another enemy here: nothing is sent or applied for it.
                 elseif dead and not e.dead then
                     -- Died here. Tell the friend, unless we did it on their word.
+                    if e.id:sub(1, 2) == "s:" then es.dead_here[e.id] = chapter() end   -- never spawned again for them (v0.49)
                     if es.applying[e.id] and os.clock() - es.applying[e.id] < 5 then
                         es.applying[e.id] = nil
                     elseif scripted_now() and not is_regular(e.name) then
@@ -477,7 +518,7 @@ end
 local RESIST_DAMAGED, RESIST_SMALL, RESIST_MIDDLE, PART_CHEST = 1, 0, 1, 0
 function flinch(e, amount)
     if e.ac == nil then
-        for _, c in ipairs(e.go:call("get_Components"):get_elements()) do
+        for _, c in ipairs(arr_items(e.go:call("get_Components"))) do
             if c:get_type_definition():is_a("app.EnemyActionController") then e.ac = c break end
         end
     end
@@ -528,8 +569,19 @@ local function on_damage(id, ch, amount, name)
     log(string.format("friend hit %s for %.0f: %.0f -> %.0f", name, amount, hp, e.hp))
 end
 
+-- Which friend's game has which Molded awake (v0.49): their health check-ins ("ehp", every 3 s) list
+-- them. A hand-over held back after a "took back" (mv.no_handoff, for a game that hasn't got it) goes
+-- ahead when the friend's game clearly has it: the bot test had a Molded kept 18 m from its runner's
+-- player for a minute, next to the friend.
+es.friend_has = es.friend_has or {}
+function coop_friend_has(id)
+    local t = es.friend_has[id]
+    return t ~= nil and os.clock() - t < 7
+end
+
 local function on_ehp(id, ch, v, name)
     if ch ~= chapter() or not is_regular(name) then return end
+    es.friend_has[id] = os.clock()
     local e = find_tracked(id)
     if e == nil or e.dead or safe(e.go.call, e.go, "get_Update") ~= true then return end
     local hp = e.dc:call("get_health") or 0
@@ -801,6 +853,7 @@ local function friend_owned(id) return type(mv.own[id]) == "number" end
 EMERGE_S = 4
 local function settled(e, now)
     if not is_regular(e.name) then return true end   -- Jack and the like: as before
+    if e.replaced then return true end               -- a new body for a Molded already out (v0.49, scan)
     return e.out == true and e.active_t ~= nil and now - e.active_t >= EMERGE_S
 end
 -- Friend slot k's SteamID is lower than ours (they win a tie).
@@ -1080,7 +1133,7 @@ end
 local function order_of(e)
     if e.order == nil then
         local comps = safe(e.go.call, e.go, "get_Components")
-        for _, c in ipairs(comps and safe(comps.get_elements, comps) or {}) do
+        for _, c in ipairs(arr_items(comps)) do
             if c:get_type_definition():is_a("app.EnemyOrder") then e.order = c break end
         end
     end
@@ -1218,7 +1271,11 @@ end
 
 local function drive(e, h, now)
     if now - (e.vis_t or 0) > 1 then e.vis_t = now pcall(force_visible, e) pcall(unpool, e) end
-    if is_regular(e.name) and wake(e) and not e.wake_logged then
+    -- Woken only while its spawn point still has this body (v0.49): once the game has given the spawn point
+    -- a new one, waking the old one left two bodies with one id, and the copy jumped between them.
+    local _, body = spawn_ids(now)
+    local current = body == nil or body[e.id] == nil or body[e.id] == e.go:get_address()
+    if is_regular(e.name) and current and wake(e) and not e.wake_logged then
         e.wake_logged = true
         log(string.format("%s %s: the game put the copy to sleep, woken again", e.name, e.id))
     end
@@ -1328,7 +1385,7 @@ function check_handoffs(now)
     if #friends == 0 or player == nil then return end
     local p = player:call("get_Transform"):call("get_Position")
     for _, e in pairs(es.tracked) do
-        local cooling = mv.no_handoff and (mv.no_handoff[e.id] or 0) > now
+        local cooling = mv.no_handoff and (mv.no_handoff[e.id] or 0) > now and not coop_friend_has(e.id)
         if moves_shared(e.name) and not e.dup and settled(e, now) and not (BOSS_FOLLOW[e.name] and not BOSS_HANDOFF[e.name]) and not seq_hold(e.name) and not friend_owned(e.id) and not cooling and not e.dead and not mv.puppets[e.id] and safe(e.go.call, e.go, "get_Update") == true then
             local ep = e.go:call("get_Transform"):call("get_Position")
             local best, bd = nil, nil
@@ -1344,7 +1401,7 @@ function check_handoffs(now)
             local dm = math.sqrt(dist2(ep, p))
             -- One Molded for both (v0.48): it goes to whoever is clearly nearer, like a boss, so it turns
             -- on the player next to it in the game that runs it, with its own AI, and can hurt them.
-            local eager = (settings ~= nil and settings.enemy_chase_both == true) or BOSS_HANDOFF[e.name] == true or is_regular(e.name)
+            local eager = (settings ~= nil and settings.enemy_chase_both ~= false) or BOSS_HANDOFF[e.name] == true or is_regular(e.name)
             -- Our player is down (v0.48): the boss goes to a friend who's still standing, within 30 m, the way
             -- he'd turn on the one left in the single-player fight (he stood idle over the downed player).
             local we_down = revive ~= nil and revive.downed == true
@@ -1371,8 +1428,11 @@ local function friend_ghost(k)
     return ghost_fn and ghost_fn() or nil
 end
 local function think_of(e)
+    -- Not found: looked for again after 2 s (v0.49; it was "none" for good after one bad read).
+    if e.think == false and os.clock() - (e.think_t or 0) > 2 then e.think = nil end
     if e.think == nil then
-        for _, c in ipairs(safe(function() return e.go:call("get_Components"):get_elements() end) or {}) do
+        e.think_t = os.clock()
+        for _, c in ipairs(arr_items(safe(e.go.call, e.go, "get_Components"))) do
             if c:get_type_definition():is_a("app.EnemyThinkBase") then e.think = c break end
         end
         e.think = e.think or false
