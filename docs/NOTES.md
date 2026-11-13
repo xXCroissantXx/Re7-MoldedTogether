@@ -1932,3 +1932,20 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
 - Credit: README "Credits" and the models section, the installer's step line, and the lobby text name AfroJackX.
   The mod page's own description credits further people (cheezeit/goldedtoad's third-person script, alphaZomega and
   ZombieAli's Ethan with Head, Poppyadams for a DX11 face texture); the README points to that page.
+
+## Bigger co-op menu text (v0.52; stand-in game only)
+
+- The menu drew its text at a fixed 34 / 22 / 18 px (headings, rows, small print) whatever the screen: small to read
+  on a normal screen and tiny on a 1440p or 4K one, while the sheets themselves are fractions of the screen.
+- Now (`coop_menu.lua`, "Fonts"): the sizes are the old ones times a **Menu text size** factor (Options page: Normal
+  1.0, Large 1.3 = the default, Extra large 1.6; `menu_text` in coop_settings.json) times the screen's height / 1080
+  (kept to 0.8 to 2.2 and in steps of 0.1). At 1080p: Normal 34 / 22 / 18 (exactly v0.51), Large 44 / 29 / 23, Extra
+  large 54 / 35 / 29; at 4K Large is 88 / 57 / 45. Row heights, the number of rows per page, the hit boxes for the mouse and the
+  sheets' headings all come from the same line heights, so the layout follows; a page with more rows than fit already
+  scrolls ("more below"). Large shows about a quarter fewer rows of a long page at once (Options scrolls sooner).
+- Fonts are loaded once per size (REFramework builds them on a later frame): after changing the size the old fonts
+  are drawn for 1.5 s and then the new ones, and at most 8 sets are ever loaded, so dragging a window's edge can't
+  load one per pixel. The on-screen status lines (coop_dummy `hud_lines`) share the menu's "small" font, so they grow too.
+- Not checked in the game: how the sheets look at Extra large on a 16:9 1080p screen (the form's header row at the top
+  of each sheet is the tightest; its Mono / Stereo boxes are skipped when they don't fit, as before) and on a small
+  window. The menu scenarios cover the sizes, the option and the screen factor, not the look.
