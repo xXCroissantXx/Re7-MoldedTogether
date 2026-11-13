@@ -647,45 +647,79 @@ local function kick(id)
 end
 
 -- Fonts -------------------------------------------------------------------------------------
--- The default font at two sizes, loaded once; used after a second (REFramework builds fonts on
--- a later frame). Without them the menu uses the default size.
+-- The default font at three sizes, loaded once per text size (REFramework builds fonts on a later
+-- frame, so a set is used after 1.5 s; until then the menu keeps the last set, or the default font).
+-- v0.52: the text was a fixed 34 / 22 / 18 px, small on a big screen and small to read on a normal
+-- one. The sizes now follow the screen's height (the sheets already do: they are fractions of the
+-- screen) and a "Menu text size" option (Normal / Large / Extra large, Large by default).
+local TEXT_SIZES = { { key = "normal", name = "Normal", k = 1.0 }, { key = "large", name = "Large", k = 1.3 },
+    { key = "huge", name = "Extra large", k = 1.6 } }
+local BASE = { big = 34, body = 22, small = 18 }   -- px at Normal on a 1080-pixel-high screen
+local function text_size_index()
+    local key = settings and settings.menu_text or "large"
+    for i, t in ipairs(TEXT_SIZES) do if t.key == key then return i end end
+    return 2
+end
+-- Normal is what v0.51 drew at 1080p; the screen factor is kept to 0.8 to 2.2 and in steps of 0.1, so
+-- dragging a window's edge can't load a new set of fonts for every pixel.
+local function text_scale()
+    local h = 1080
+    local ok, size = pcall(imgui.get_display_size)
+    if ok and size and size.y and size.y > 0 then h = size.y end
+    local k = TEXT_SIZES[text_size_index()].k * math.max(0.8, math.min(2.2, h / 1080))
+    return math.floor(k * 10 + 0.5) / 10
+end
+local MAX_FONT_SETS = 8
 local function fonts_ready()
     if M.fonts == false then return false end
-    if M.fonts == nil then
-        if not (imgui and imgui.load_font and imgui.push_font and imgui.pop_font) then M.fonts = false return false end
-        local ok1, big = pcall(imgui.load_font, nil, 34)
-        local ok2, body = pcall(imgui.load_font, nil, 22)
-        local ok3, small = pcall(imgui.load_font, nil, 18)
+    if not (imgui and imgui.load_font and imgui.push_font and imgui.pop_font) then M.fonts = false return false end
+    M.fonts = M.fonts or {}
+    local sc = text_scale()
+    local set = M.fonts[sc]
+    if set == nil and M.nfonts ~= MAX_FONT_SETS then
+        local sizes = {}
+        for k, v in pairs(BASE) do sizes[k] = math.floor(v * sc + 0.5) end
+        local ok1, big = pcall(imgui.load_font, nil, sizes.big)
+        local ok2, body = pcall(imgui.load_font, nil, sizes.body)
+        local ok3, small = pcall(imgui.load_font, nil, sizes.small)
         local function good(f) return f ~= nil and f ~= false end
-        if not (ok1 and ok2 and ok3) or not (good(big) and good(body) and good(small)) then M.fonts = false return false end
-        M.fonts = { big = big, body = body, small = small }
-        M.font_t = os.clock()
-        return false
+        if not (ok1 and ok2 and ok3) or not (good(big) and good(body) and good(small)) then
+            if M.cur == nil then M.fonts = false end
+            return M.cur ~= nil
+        end
+        set = { big = big, body = body, small = small, sizes = sizes, t = os.clock() }
+        M.fonts[sc] = set
+        M.nfonts = (M.nfonts or 0) + 1
+        M.font_t = set.t
     end
-    return os.clock() - (M.font_t or 0) > 1.5
+    if set and os.clock() - set.t > 1.5 then M.cur = set end
+    return M.cur ~= nil
 end
-local SIZES = { big = 34, body = 22, small = 18 }
+local function px(size) return (M.cur and M.cur.sizes[size]) or BASE[size] end
 local function text(s, x, y, color, size)
     size = size or "body"
-    local f = fonts_ready() and M.fonts[size] or nil
+    local f = fonts_ready() and M.cur[size] or nil
     if f then pcall(imgui.push_font, f) end
     pcall(draw.text, s, x, y, color or 0xFFE6E6E6)
     if f then pcall(imgui.pop_font) end
 end
 local function text_w(s, size)
     size = size or "body"
-    local f = fonts_ready() and M.fonts[size] or nil
+    local f = fonts_ready() and M.cur[size] or nil
     if f and imgui.calc_text_size then
         pcall(imgui.push_font, f)
         local ok, v = pcall(imgui.calc_text_size, s)
         pcall(imgui.pop_font)
         if ok and v and v.x then return v.x end
     end
-    local px = f and SIZES[size] or 13
-    return #s * px * 0.52
+    local p = f and px(size) or 13
+    return #s * p * 0.52
 end
 local function line_h(size)
-    if fonts_ready() then return SIZES[size or "body"] + 10 end
+    if fonts_ready() then
+        size = size or "body"
+        return math.floor(px(size) + 10 * px(size) / BASE[size] + 0.5)
+    end
     return 20
 end
 local function fit(s, w, size)
@@ -1287,6 +1321,16 @@ function PAGES.options()
     items[#items + 1] = setting_toggle("Enemies chase both players", "enemy_chase_both", true, true,
         "Up close, an enemy turns on whichever of you is nearer (its game changes to that player's); the same for everyone.")
     items[#items + 1] = setting_toggle("On-screen status", "hud", true, false)
+    do
+        local cur = text_size_index()
+        local function pick(d)
+            local ni = ((cur - 1 + d) % #TEXT_SIZES) + 1
+            if settings then settings.menu_text = TEXT_SIZES[ni].key if save_settings then pcall(save_settings) end end
+        end
+        items[#items + 1] = { text = "Menu text size", value = TEXT_SIZES[cur].name, left = function() pick(-1) end,
+            right = function() pick(1) end, on = function() pick(1) end,
+            hint = "How big this menu's text and the on-screen status lines are. It also follows your screen's size." }
+    end
     do
         local cur = 1
         for i, k in ipairs(MENU_KEYS) do if k.vk == menu_key().vk then cur = i end end

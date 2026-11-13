@@ -281,6 +281,7 @@ changes them.
 | Black screen but you can move, on a brand-new game | Start a **New Game** alone, play the opening until you can walk, then connect |
 | "Create save data?" keeps coming back | F9 > **Options** > **Allow saving**, then Yes |
 | An extra mouse pointer on screen | The REFramework menu is open: close it with Insert (or your menu key, see *No Insert key*) |
+| The co-op menu's text is too small (or too big) | Options > **Menu text size**: Normal, Large (the default) or Extra large. It also follows your screen's size, and the on-screen status lines use it too |
 | F9 opens REFramework's menu too | F9 is your REFramework menu key: pick another for the co-op menu (Options > **Key for this menu**) |
 | The lobby's Start says "waiting" | It names who it waits for: everyone **Ready**, and for a chapter start everyone in the game (not the title screen) |
 | Pause menu won't open | Wait 5 seconds out of any cutscene (the mod clears a stuck video flag), or restart |

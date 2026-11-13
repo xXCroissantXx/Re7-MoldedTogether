@@ -333,8 +333,10 @@ check(coop_menu.open, "a click with CO-OP highlighted opens the co-op menu")
 coop_menu_set_open(false) frames(0.1)
 ''')
 
-# 21. v0.43: the mouse on the co-op screen.
+# 21. v0.43: the mouse on the co-op screen. (With the Normal text size: Large shows fewer rows of Options at a
+# time, and this scenario looks for one row on screen.)
 B.execute('''
+settings.menu_text = "normal" coop_menu_set_open(true) frames(2)   -- (the new fonts are used 1.5 s after they load)
 MX, MY = 3, 3 frames(0.1)
 coop_menu_set_open(true) frames(0.1)
 local hit = coop_menu.hit
@@ -377,6 +379,51 @@ check(not coop_menu.open, "and then closes the co-op screen")
 settings.menu_key = 0x79
 check(coop_menu_key_name() == "F10", "the chosen menu key's name is there for the status line")
 settings.menu_key = nil
+''')
+
+# 23. v0.52: the menu's text is bigger, follows the screen, and its size can be picked.
+B.execute('''
+local real_load, real_size = imgui.load_font, imgui.get_display_size
+LOADED = {}
+imgui.load_font = function(p, sz) LOADED[#LOADED + 1] = sz return real_load(p, sz) end
+settings.menu_text = nil frames(2)                                  -- not chosen yet: Large
+coop_menu_set_open(true) frames(2)
+local cur = coop_menu.cur
+check(cur and cur.sizes.big == 44 and cur.sizes.body == 29 and cur.sizes.small == 23, "default: Large text (v0.51 drew 34 / 22 / 18 px; now 44 / 29 / 23 at 1080p)")
+local h_large = coop_menu_line_h and coop_menu_line_h("body")
+-- The option, on the Options page, cycles Normal > Large > Extra large and keeps the choice.
+coop_menu.page, coop_menu.focus = "options", "B"
+local function size_item()
+    local _, items = coop_menu_debug_items()
+    for _, it in ipairs(items) do if it.text == "Menu text size" then return it end end
+end
+local it = size_item()
+check(it ~= nil and it.value == "Large", "Options: Menu text size says Large")
+it.right() frames(0.1)
+check(settings.menu_text == "huge" and size_item().value == "Extra large", "right: Extra large, remembered in the settings")
+frames(2)
+check(coop_menu.cur.sizes.body == 35 and coop_menu.cur.sizes.big == 54, "and its fonts are used after they have loaded (54 / 35 / 29)")
+size_item().right() frames(0.1)
+check(settings.menu_text == "normal" and size_item().value == "Normal", "right again wraps to Normal")
+frames(2)
+check(coop_menu.cur.sizes.body == 22 and coop_menu.cur.sizes.big == 34 and coop_menu.cur.sizes.small == 18, "Normal is exactly what v0.51 drew")
+size_item().left() frames(0.1)
+check(settings.menu_text == "huge", "left from Normal goes to Extra large")
+settings.menu_text = "large" frames(2)
+-- A bigger screen gets bigger text (the sheets are fractions of the screen, so the text follows).
+imgui.get_display_size = function() return { x = 3840, y = 2160 } end
+frames(2)
+check(coop_menu.cur.sizes.body == 57, "a 4K screen doubles the text (body 29 -> 57)")
+-- A small window can't make it unreadably small, and a window being dragged doesn't load a font set per pixel.
+local before = #LOADED
+for h = 1000, 1010 do imgui.get_display_size = function() return { x = 1920, y = h } end frames(0.05) end
+check(#LOADED - before <= 3, "resizing the window a few pixels loads at most one new set of fonts")
+imgui.get_display_size = function() return { x = 640, y = 360 } end
+frames(2)
+check(coop_menu.cur.sizes.body >= 22 * 1.3 * 0.8 - 1, "a tiny window keeps the text readable (floor 0.8 x)")
+imgui.get_display_size, imgui.load_font = real_size, real_load
+settings.menu_text = nil frames(2)
+coop_menu_set_open(false) frames(0.1)
 ''')
 
 fails = int(A.eval('T.fails')) + int(B.eval('T.fails')) + int(C.eval('T.fails')) + int(D.eval('T.fails')) + fails_extra
