@@ -1819,3 +1819,88 @@ and each can pick up their own; (2) discard a key item or weapon: nothing happen
 (3) walk 40 m apart and discard: a note says the friend is too far away; (4) switch "Drop discarded items for your
 friend" off on either side: it changes on both; (5) check that the discard menu still closes and redraws as before.
 The line `discard drop: app.InventoryMenu.discardItem hooked` in coop_world_log.txt says the hook was found.
+
+## Ping, link steadiness, head lean and log volume (v0.52; built and tested in the stand-in game only)
+
+Three changes asked for together. None has been measured in RE7 yet: the first thing to read after a session
+is the new `link:` line in `coop_dummy_log.txt` (below).
+
+### Head leaned too far to the side (coop_dummy.lua, `coop_look_turn`)
+- Cause (found by reading the code and checked numerically in `tests/harness/look_test.py`): the friend's look turn
+  was split between the neck (40 %) and the head (60 %) by scaling the yaw and the pitch angle separately, and
+  the two pieces were multiplied in that order. The neck turns the head's frame, so the head's pitch then happens
+  about a different axis than the one it was worked out for: the two joints did not add up to the intended turn,
+  they added up to the intended turn plus a roll. Worst case over the look range (yaw up to 70 degrees, pitch up
+  to 40): **10.5 degrees of sideways lean**, growing with yaw x pitch. Looking straight ahead, or only sideways, or
+  only up or down, had none, which is why it showed only when the friend looked to a side and up or down.
+- Fix: the whole turn is made once (yaw about up, then pitch about the right axis the yaw left), and each joint
+  gets its share of that one turn by scaling its angle about its own axis. The neck's and head's shares then
+  commute and add up exactly: the composition now equals the intended turn with 0.0000 degrees of roll (all 24
+  yaw/pitch pairs in the test). Clamps (70 and 40 degrees), shares (40/60), the `getCalculatedLocalRotation` base
+  and the write at pre-PrepareRendering are unchanged. The v1 writer (`apply_look`) and the v2 writer
+  (`apply_look_motion`, `UpdateMotion` hook) were dead code with the same maths: removed (their history is above).
+- Not covered by the test: the joint writes themselves (they need the real Motion API). If the head still leans
+  in the game, the next suspects are the animated pose underneath (a clip that already tilts the head) and a
+  `look_pitch` of the wrong sign (NOTES above: "The pitch sign is unverified").
+
+### Ping: where the delay was, and what changed
+The path of one position sample, before v0.52, and the longest it could wait at each step:
+1. Lua writes `coopnet_out.txt` at most every 1/30 s (33 ms, and a 60 Hz frame sometimes made it 50 ms).
+2. The plugin's IO loop looked at that file once per 1/sendHz = 33 ms: up to 33 ms.
+3. Steam delivers. The receiving plugin took the packet out of Steam's queue only at its next loop: up to 33 ms.
+4. It wrote `coopnet_in.txt` (same loop pass), and Lua read it at most every 33 ms: up to 33 ms.
+5. The ghost is drawn `net.delay` = a fixed 150 ms behind.
+Steps 2 to 4 are waiting that has nothing to do with the network: up to 99 ms per trip, about 50 ms on average.
+
+Changes:
+- **CoopNet.cs, fast pass:** between the 30 Hz full passes the IO thread now looks every 2 ms (`FastStepMs`) at what
+  must not wait: our sample out, the Steam queue in, the files for Lua, events. The full pass (bot, status, party,
+  friends) still runs at `sendHz`. `timeBeginPeriod(1)` is requested at plugin start (and released at unload) so
+  `Sleep(2)` means 2 ms, not Windows' 15 ms step.
+- **CoopNet.cs, no needless opens:** the three files Lua writes (out, events, enemy snapshots) are opened only when
+  their time stamp or size changed since the last look (`Touched`), plus a safety look every 250 ms. A read that
+  caught a half-written file asks for another look at once (`Retry`) instead of waiting for the next change.
+- **CoopNet.cs, reliable events** go out with Steam's NoNagle flag as well (`Reliable | NoNagle`), so an event is
+  not held back to batch with the next one (a few ms).
+- **coop_dummy.lua, `net_io`:** the friend's file is looked at 60 times a second (gates a few ms short of the
+  period, so a frame that comes a little early doesn't cost a whole frame) but parsed only when its text changed.
+  Our own sample still goes out 30 times a second: each one costs a dozen game calls (`local_action_clip`
+  alone reads up to 8 layers), so doubling the rate would double the most expensive part for a few ms.
+- **coop_dummy.lua, delay that follows the link (`net.update_delay`, `net.slew_delay`):** the ghost's delay is
+  one send gap (33 ms, the next sample to interpolate to) + 20 ms margin + the 95th percentile of how late recent
+  samples arrived compared with the fastest one (100 samples, about 3 s), within 80 to 300 ms. It rises at up to
+  0.15 s per second (an underrun is a stutter) and falls at 0.02 s per second (the friend is drawn 2 % faster or
+  slower while it moves: not visible). On a clean link it settles at 80 ms instead of 150 ms; on a jittery link it
+  grows to cover the jitter, which is the "stabilise" part. The three debug buttons in the old window now say
+  "fixed" and a "Follow the link" button switches it back on.
+- Known limit: a sample that arrives out of order is ignored (`seq <= last_in_seq`), as before. Steam delivers one
+  channel in order, so a hold-up shows as a burst, which the tail measure covers.
+
+One line every 30 s in `coop_dummy_log.txt` tells a slow link from a slow game:
+`link: round trip 54 ms, friend drawn 83 ms back (wanted 80), late 95% 12 ms, 29 samples/s in`.
+"Round trip" is `net.ping`: the echo of our own send time, so it includes both Lua gates and both plugins, not
+only the network. To see how much of it the new pass removed, compare it with a v0.51 log of the same two PCs.
+
+To check in the game (two players): (1) the `link:` line appears every 30 s and `samples/s in` is about 30;
+(2) the delay in it falls to about 80 ms in the first 10 s on a good link; (3) the friend still walks smoothly,
+stops and starts without a jump; (4) hold the other player's game still for a second (alt-tab): the delay rises
+for a while and then comes back; (5) REFramework's log shows `[CoopNet] started` and `coopnet_status.txt` keeps
+changing (the C# was only syntax-checked outside the game: REFramework compiles it when RE7 starts).
+
+### Log volume (coop_dummy.lua `coop_log_gate` / `coop_log_flush`, used by every script's `log()`)
+- v0.51 already kept each file's tail in memory and wrote every 3 s. What was left: a line logged on every frame
+  (or a failing call logged on every try: the 2026-11-10 session had about 250 a second) filled the file, pushed
+  everything useful out of it, and each flush rewrote the whole file.
+- `coop_log_gate(who, text)`: the first 5 lines of one kind (the line with its numbers taken out) per 10 s are
+  written, the rest counted; at most 150 lines per script per 10 s. One line then says what was left out:
+  `(left out: 995 more like "net ERR attempt 1 failed" in 10 s)` (top 4 kinds, plus `N other lines`). Scripts are
+  limited separately, so one flood doesn't silence another script.
+- `coop_log_flush(who, file, buf, t)`: a file is cut to its newest 60 KB (at a line start) when it reaches 120 KB
+  (was 100 to 200 KB cut to half), and is written every 1 s when small up to every 5 s at 120 KB, since the whole
+  file is rewritten each time. coop_dummy's own log goes through it too (it used to hold 3000 lines and rewrite all
+  of them); the session starts a fresh file, the last one is kept as `_prev`.
+- Both are looked up at call time and guarded (`coop_log_gate and ...`): a script still logs by itself if
+  coop_dummy.lua is missing or loads later.
+- Trade-off: after a crash the newest lines can be up to 5 s old at most when the file is big (3 s before). The
+  gate keeps the first 5 of every kind, so a new failure is always visible once.
+- `verbose_log` (v0.51) still switches the per-clip animation lines on; the gate applies to those too.

@@ -49,6 +49,85 @@ do
 end
 function coop_busy() return coop_busy_state.busy == true end
 
+-- Shared log limits (v0.52). Every co-op script keeps its own log() and its own file, and calls these at
+-- call time, so it doesn't matter which script loads first and a script still logs without them.
+--  * coop_log_gate(who, text): false when this kind of line has already been written LOG_SAME_MAX times in
+--    the last LOG_WINDOW seconds, or the script has written LOG_TOTAL_MAX lines in that time. A kind is
+--    the line with its numbers taken out ("kill 12 c01 Molded" = "kill 13 c01 Molded"). A line that is
+--    logged on every frame, or a failing call logged on every try (the 2026-11-10 session had ~250 a
+--    second), used to fill the file, push everything useful out of it and cost a rewrite of the whole
+--    file; now the first few are kept and one line says how many were left out.
+--  * coop_log_flush(who, file, buf, t): the writing. The file is read once (its tail is kept here, not
+--    read again on every flush), cut to its newest 60 KB when it reaches 120 KB (was 100-200 KB cut to half
+--    of that, and the whole file read and written again each second), and written less often the bigger
+--    it is (1 s when small, up to 5 s at 120 KB): the whole file is rewritten each time, so the cost of a
+--    flush grows with its size.
+LOG_WINDOW, LOG_SAME_MAX, LOG_TOTAL_MAX, LOG_FILE_MAX, LOG_FILE_KEEP, LOG_BUF_MAX = 10, 5, 150, 120000, 60000, 2000
+local LOGQ, LOGF = {}, {}
+local function log_roll(q, now)
+    if now - q.t0 < LOG_WINDOW then return end
+    local cut = {}
+    for key, k in pairs(q.keys) do
+        if k.cut > 0 then cut[#cut + 1] = k end
+    end
+    table.sort(cut, function(a, b) return a.cut > b.cut end)
+    for i, k in ipairs(cut) do
+        if i <= 4 then
+            q.pending[#q.pending + 1] = string.format('(left out: %d more like "%s" in %d s)', k.cut, k.first:sub(1, 70), LOG_WINDOW)
+        end
+    end
+    local rest = q.other
+    for i = 5, #cut do rest = rest + cut[i].cut end
+    if rest > 0 then q.pending[#q.pending + 1] = string.format("(left out: %d other lines in %d s)", rest, LOG_WINDOW) end
+    q.keys, q.total, q.other, q.t0 = {}, 0, 0, now
+end
+function coop_log_gate(who, s)
+    local now = os.clock()
+    local q = LOGQ[who]
+    if q == nil then q = { keys = {}, total = 0, other = 0, t0 = now, pending = {} } LOGQ[who] = q end
+    log_roll(q, now)
+    s = tostring(s)
+    local key = (s:gsub("0x%x+", "#"):gsub("%d+%.?%d*", "#")):sub(1, 60)
+    local k = q.keys[key]
+    if q.total >= LOG_TOTAL_MAX then
+        if k then k.cut = k.cut + 1 else q.other = q.other + 1 end
+        return false
+    end
+    if k == nil then k = { n = 0, cut = 0, first = s } q.keys[key] = k end
+    k.n = k.n + 1
+    if k.n > LOG_SAME_MAX then k.cut = k.cut + 1 return false end
+    q.total = q.total + 1
+    return true
+end
+function coop_log_flush(who, file, buf, t)
+    local now = os.clock()
+    local q = LOGQ[who]
+    if q then
+        log_roll(q, now)
+        for _, l in ipairs(q.pending) do buf[#buf + 1] = os.date("%H:%M:%S ") .. l end
+        q.pending = {}
+    end
+    if #buf == 0 then return buf, t end
+    if #buf > LOG_BUF_MAX then
+        local keep = {}
+        for i = #buf - LOG_BUF_MAX + 1, #buf do keep[#keep + 1] = buf[i] end
+        buf = keep
+    end
+    local st = LOGF[file]
+    if st == nil then st = { tail = nil, due = 0 } LOGF[file] = st end
+    if now < st.due then return buf, t end
+    local f = (st.tail or fs.read(file) or "") .. table.concat(buf, "\n") .. "\n"
+    if #f > LOG_FILE_MAX then
+        f = f:sub(-LOG_FILE_KEEP)
+        local nl = f:find("\n", 1, true)
+        if nl then f = f:sub(nl + 1) end
+    end
+    st.tail = f
+    fs.write(file, f)
+    st.due = now + math.min(5, 1 + #f / 32000)
+    return {}, now
+end
+
 -- v0.48: this script's frame work waits while the game loads or swaps the player (coop_busy, coop_dummy.lua).
 local re = setmetatable({ on_frame = function(f)
     return _G.re.on_frame(function() if coop_busy and coop_busy() then return end return f() end)
@@ -68,19 +147,19 @@ end
 
 -- Lines are collected and written once a second (writing the whole log on every line,
 -- twice, cost a 300 KB+ write per line late in a session).
-local lines, log_dirty, log_t = {}, false, 0
+-- v0.52: written by coop_log_flush like every other script's log (the file's tail is kept in memory, the
+-- file is cut to its newest 60 KB at 120 KB, written less often as it grows), and repeated lines are limited
+-- by coop_log_gate. This session starts a fresh file; the last one is kept as _prev.
+local log_buf, log_t = {}, 0
+local LOG_WHO, LOG_FILE = "dummy" .. SLOT_SUFFIX, "coop_dummy_log" .. SLOT_SUFFIX .. ".txt"
 do
-    local prev = fs.read("coop_dummy_log" .. SLOT_SUFFIX .. ".txt")
+    local prev = fs.read(LOG_FILE)
     if prev and prev ~= "" then fs.write("coop_dummy_log" .. SLOT_SUFFIX .. "_prev.txt", prev) end
+    fs.write(LOG_FILE, "")
 end
 local function log(s)
-    lines[#lines + 1] = os.date("%H:%M:%S ") .. tostring(s)
-    if #lines > 3000 then
-        local keep = {}
-        for i = #lines - 1999, #lines do keep[#keep + 1] = lines[i] end
-        lines = keep
-    end
-    log_dirty = true
+    if not coop_log_gate(LOG_WHO, s) then return end
+    log_buf[#log_buf + 1] = os.date("%H:%M:%S ") .. tostring(s)
 end
 -- v0.51: the moment-to-moment animation lines (each clip the friend's character plays, its checks) only with
 -- "verbose_log": true in coop_settings.json. They were most of this log, rewritten whole (up to 6000 lines)
@@ -89,9 +168,7 @@ local function vlog(s)
     if settings and settings.verbose_log == true then log(s) end
 end
 re.on_frame(function()
-    if not log_dirty or os.clock() - log_t < 3 then return end
-    log_t, log_dirty = os.clock(), false
-    fs.write("coop_dummy_log" .. SLOT_SUFFIX .. ".txt", table.concat(lines, "\n") .. "\n")
+    log_buf, log_t = coop_log_flush(LOG_WHO, LOG_FILE, log_buf, log_t)
 end)
 
 local function safe(f, ...)
@@ -421,37 +498,27 @@ local function axis_q(ax, ay, az, ang)
     return { x = ax * s, y = ay * s, z = az * s, w = math.cos(ang / 2) }
 end
 
-local function find_look_joints(tr)
-    local arr = safe(tr.call, tr, "get_Joints")
-    local elems = arr_items(arr)
-    local names, neck, head = {}, nil, nil
-    for _, j in ipairs(elems) do
-        local n = tostring(safe(j.call, j, "get_Name"))
-        names[#names + 1] = n
-        local ln = n:lower()
-        if neck == nil and ln:find("neck") then neck = j end
-        if head == nil and ln:find("head") and not ln:find("end") then head = j end
-    end
-    fs.write("coop_joints.txt", table.concat(names, "\n"))
-    log(string.format("look: %d joints; neck=%s head=%s", #names,
-        neck and tostring(neck:call("get_Name")) or "none", head and tostring(head:call("get_Name")) or "none"))
-    return { { neck, 0.4 }, { head, 0.6 } }
+-- A quaternion turned by a fraction of itself about its own axis (shortest way round).
+local function q_part(q, share)
+    if q.w < 0 then q = { x = -q.x, y = -q.y, z = -q.z, w = -q.w } end
+    local vl = math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z)
+    if vl < 1e-9 then return { x = 0, y = 0, z = 0, w = 1 } end
+    return axis_q(q.x / vl, q.y / vl, q.z / vl, 2 * math.atan(vl, q.w) * share)
 end
 
-function apply_look(body_tr, body_q)
-    if look.joints == nil then look.joints = find_look_joints(body_tr) end
-    local yaw = math.max(-1.2, math.min(1.2, look.yaw))       -- about 70 degrees
-    local pitch = math.max(-0.7, math.min(0.7, look.pitch))   -- about 40 degrees
-    local rx, ry, rz = qrot_v(body_q, 1, 0, 0)                -- body's right axis
-    for _, e in ipairs(look.joints) do
-        local j, share = e[1], e[2]
-        if j then
-            local r = j:call("get_Rotation")
-            local d = qmul_l(axis_q(0, 1, 0, yaw * share), axis_q(rx, ry, rz, -pitch * share))
-            local n = qmul_l(d, { x = r.x, y = r.y, z = r.z, w = r.w })
-            j:call("set_Rotation", Quaternion.new(n.w, n.x, n.y, n.z))
-        end
-    end
+-- The turn (world space) one look joint adds for the friend's look. v0.52: the whole look turn is made
+-- once, "yaw about up, then pitch about the right axis the yaw left", and each joint gets its share of
+-- that one turn. Until v0.51 the yaw and the pitch were each split between neck (40 %) and head (60 %)
+-- and the pieces were multiplied in the wrong order: neck and head turn about the same axes only when
+-- the head looks straight ahead, so the sum of the two joints was not the intended turn but the intended
+-- turn plus a sideways tilt (roll) that grew with yaw x pitch: about 10 degrees at the clamps, and the
+-- owner saw the head lean too far to the side. One turn split by angle about its own axis adds up
+-- exactly (the neck's share and the head's share commute). bq: the body's rotation; clamps as before.
+function coop_look_turn(bq, yaw, pitch, share)
+    yaw = math.max(-1.2, math.min(1.2, yaw))       -- about 70 degrees
+    pitch = math.max(-0.7, math.min(0.7, pitch))   -- about 40 degrees
+    local rx, ry, rz = qrot_v(bq, 1, 0, 0)         -- body's right axis
+    return q_part(qmul_l(axis_q(0, 1, 0, yaw), axis_q(rx, ry, rz, -pitch)), share)
 end
 
 -- Network bridge -------------------------------------------------------------
@@ -468,6 +535,44 @@ local net = {
     history = {},
     stats = "no status yet",
 }
+
+-- Playback delay that follows the link (v0.52). The friend is drawn net.delay seconds in the past so there
+-- is always a newer sample to move toward; it was a fixed 0.15 s, more than a good link needs and less than a
+-- bad one does. Needed: one send gap (the next sample to interpolate to), a frame of margin, and the upper
+-- tail (95th percentile) of how late samples arrive compared with the fastest one. It rises quickly (an
+-- underrun shows as a stutter) and falls slowly (the friend is drawn a little faster or slower while it
+-- moves: 2 % is not visible). The debug buttons that set net.delay by hand switch this off.
+net.adaptive = true
+net.DELAY_MIN, net.DELAY_MAX, net.SEND_GAP, net.MARGIN = 0.08, 0.30, 1 / 30, 0.02
+net.RISE_PER_S, net.FALL_PER_S = 0.15, 0.02
+net.delay_target = net.delay
+function net.update_delay(now)
+    local l = net.lates
+    if not net.adaptive or l == nil or #l < 30 then return end
+    local s = {}
+    for i = 1, #l do s[i] = l[i] end
+    table.sort(s)
+    net.jitter = s[math.max(1, math.ceil(#s * 0.95))]
+    net.delay_target = math.max(net.DELAY_MIN, math.min(net.DELAY_MAX, net.SEND_GAP + net.MARGIN + net.jitter))
+    -- One line per 30 s with what a bug report needs to tell a slow link from a slow game.
+    if now - (net.q_log_t or 0) >= 30 then
+        local since = net.q_log_t or net.loaded_t or now
+        net.q_log_t = now
+        local rate = (net.rx_count or 0) / math.max(now - since, 1)
+        net.rx_count = 0
+        log(string.format("link: round trip %s, friend drawn %.0f ms back (wanted %.0f), late 95%% %.0f ms, %.0f samples/s in",
+            net.ping and string.format("%.0f ms", net.ping * 1000) or "unknown", net.delay * 1000, net.delay_target * 1000,
+            net.jitter * 1000, rate))
+    end
+end
+function net.slew_delay(now)
+    local dt = math.min(now - (net.slew_t or now), 0.25)
+    net.slew_t = now
+    if not net.adaptive or net.delay_target == nil or dt <= 0 then return end
+    local d = net.delay_target - net.delay
+    if d > 0 then net.delay = net.delay + math.min(d, net.RISE_PER_S * dt)
+    else net.delay = net.delay - math.min(-d, net.FALL_PER_S * dt) end
+end
 
 -- Read-only access for diagnostics (the console helper, testing).
 function coop_net_state() return net end
@@ -640,10 +745,16 @@ end
 local function net_io()
     if not net.enabled then return end
     local now = os.clock()
-    if now - net.last_io < 1 / 30 then return end
-    net.last_io = now
+    -- v0.52 (ping): the friend's samples are looked for 60 times a second (was 30: a sample could sit
+    -- in the file up to 33 ms before the game saw it), ours still go out 30 times a second (each one
+    -- costs a dozen game calls). The gates are a few ms short of the period so a frame that comes a
+    -- little early doesn't push the next look a whole frame later.
+    if now - (net.last_rd or 0) < 1 / 60 - 0.004 then return end
+    net.last_rd = now
+    local do_write = now - net.last_io >= 1 / 30 - 0.004
+    if do_write then net.last_io = now end
 
-    local player = SLOT == 1 and get_player() or nil   -- friends 2-3: read only
+    local player = (do_write and SLOT == 1) and get_player() or nil   -- friends 2-3: read only
     if player then
         local tr = player:call("get_Transform")
         local p, q = tr:call("get_Position"), tr:call("get_Rotation")
@@ -663,8 +774,11 @@ local function net_io()
         return
     end
     local text = fs.read("coopnet_in" .. SLOT_SUFFIX .. ".txt")
+    -- v0.52: the file is read 60 times a second but only parsed when it changed (a new packet rewrites it).
+    local fresh_text = text and text ~= net.last_in_text
+    if fresh_text then net.last_in_text, net.parses = text, (net.parses or 0) + 1 end
     if text then
-        for line in text:gmatch("[^\r\n]+") do
+        for line in (fresh_text and text or ""):gmatch("[^\r\n]+") do
             local v = {}
             for num in line:gmatch("%S+") do v[#v + 1] = tonumber(num) end
             if #v >= 14 then
@@ -676,7 +790,14 @@ local function net_io()
                     -- Smallest offset seen = the least-delayed sample. If samples suddenly
                     -- look 5 s+ older, the sender's clock restarted (their game or plugin
                     -- restarted): start over, or every new sample counts as stale forever.
+                    if net.offset == nil or off > net.offset + 5 then net.lates = {} end
                     if net.offset == nil or off < net.offset or off > net.offset + 5 then net.offset = off end
+                    -- v0.52: how much later than the fastest sample this one reached us (link jitter plus our
+                    -- own read gap): the playback delay follows its upper tail (net.update_delay).
+                    net.lates = net.lates or {}
+                    net.lates[#net.lates + 1] = off - net.offset
+                    if #net.lates > 100 then table.remove(net.lates, 1) end
+                    net.rx_count = (net.rx_count or 0) + 1
                     net.history[#net.history + 1] = { t = t + net.offset,
                         pos = Vector3f.new(v[3], v[4], v[5]), rot = Quaternion.new(v[9], v[6], v[7], v[8]),
                         flags = math.floor(v[10]), look_yaw = v[13], look_pitch = v[14] }
@@ -700,9 +821,11 @@ local function net_io()
         end
         while #net.history > 0 and net.history[1].t < now - KEEP do table.remove(net.history, 1) end
     end
+    net.slew_delay(now)
 
     if now - net.last_status > 1 then
         net.last_status = now
+        net.update_delay(now)
         local st = fs.read("coopnet_status.txt")
         -- The network plugin rewrites its status several times a second (v0.49): a file that stays the same for
         -- 12 s, or none at all, means it isn't running (no link, no bot). On 2026-11-12 Windows' Smart App
@@ -3269,11 +3392,14 @@ on_draw_ui_1(function()
             log("net.enabled = " .. tostring(nv))
         end
         if net.enabled then
-            if imgui.button("Delay 3 s (echo test)") then net.delay = 3.0 log("net.delay = 3.0") end
+            if imgui.button("Delay 3 s (echo test)") then net.adaptive, net.delay = false, 3.0 log("net.delay = 3.0 (fixed)") end
             imgui.same_line()
-            if imgui.button("Delay 0.15 s (live)") then net.delay = 0.15 log("net.delay = 0.15") end
-            imgui.text(string.format("net: delay %.2f s, %d samples, last seq %d, offset %s",
-                net.delay, #net.history, net.last_in_seq, net.offset and string.format("%.3f", net.offset) or "-"))
+            if imgui.button("Delay 0.15 s (fixed)") then net.adaptive, net.delay = false, 0.15 log("net.delay = 0.15 (fixed)") end
+            imgui.same_line()
+            if imgui.button("Follow the link (default)") then net.adaptive = true log("net.delay follows the link") end
+            imgui.text(string.format("net: delay %.2f s%s, late 95%% %.0f ms, %d samples, last seq %d, offset %s",
+                net.delay, net.adaptive and " (follows the link)" or " (fixed)", (net.jitter or 0) * 1000, #net.history, net.last_in_seq,
+                net.offset and string.format("%.3f", net.offset) or "-"))
             imgui.text("CoopNet: " .. net.stats)
             local lchanged, lv = imgui.checkbox("Head look v3 (turns off by itself if the walk freezes)", look.enabled)
             if lchanged then look.enabled = lv log("look.enabled = " .. tostring(lv)) end
@@ -3826,34 +3952,8 @@ local function look2_joints(m)
     return list
 end
 
-local function apply_look_motion()
-    local m = anim.motion
-    if m == nil then return end
-    if look2.list == nil then look2.list = look2_joints(m) end
-    local root_q = m:call("get_GameObject"):call("get_Transform"):call("get_Rotation")
-    local bq = { x = root_q.x, y = root_q.y, z = root_q.z, w = root_q.w }
-    local yaw = math.max(-1.2, math.min(1.2, look.yaw))
-    local pitch = math.max(-0.7, math.min(0.7, look.pitch))
-    local rx, ry, rz = qrot_v(bq, 1, 0, 0)
-    for _, e in ipairs(look2.list) do
-        if e.idx and e.idx >= 0 then
-            local pidx = m:call("getParentJointIndex", e.idx)
-            local pw = m:call("getWorldRotation", pidx)
-            local al = m:call("getCalculatedLocalRotation", e.idx)
-            local P = { x = pw.x, y = pw.y, z = pw.z, w = pw.w }
-            local A = { x = al.x, y = al.y, z = al.z, w = al.w }
-            local D = qmul_l(axis_q(0, 1, 0, yaw * e.share), axis_q(rx, ry, rz, -pitch * e.share))
-            -- new_local = conj(P) * D * P * A  (world-space turn D, expressed in parent space)
-            local n = qmul_l(qmul_l(qmul_l({ x = -P.x, y = -P.y, z = -P.z, w = P.w }, D), P), A)
-            m:call("setLocalRotation", e.idx, Quaternion.new(n.w, n.x, n.y, n.z))
-            if e.name:lower():find("head") then
-                local rb = m:call("getLocalRotation", e.idx)
-                look2.last = string.format("yaw %.2f pitch %.2f | anim %.3f %.3f %.3f %.3f | set %.3f %.3f %.3f %.3f | readback %.3f %.3f %.3f %.3f",
-                    look.yaw, look.pitch, A.x, A.y, A.z, A.w, n.x, n.y, n.z, n.w, rb.x, rb.y, rb.z, rb.w)
-            end
-        end
-    end
-end
+-- (The v2 writer, Motion.setLocalRotation from the UpdateMotion hook, was removed in v0.52: Motion overwrote
+-- it before drawing; v3 below is the one that works. See NOTES.md, "Head look v2".)
 
 -- What the Head joint holds once drawing starts (after our v3 write).
 re.on_application_entry("PrepareRendering", function()
@@ -3892,9 +3992,6 @@ local function apply_look_render()
     end
     local rq = tr:call("get_Rotation")
     local bq = { x = rq.x, y = rq.y, z = rq.z, w = rq.w }
-    local yaw = math.max(-1.2, math.min(1.2, look.yaw))
-    local pitch = math.max(-0.7, math.min(0.7, look.pitch))
-    local rx, ry, rz = qrot_v(bq, 1, 0, 0)
     for _, e in ipairs(look2.list) do
         local j = look2.jobj[e.idx]
         if j and e.idx >= 0 then
@@ -3903,7 +4000,7 @@ local function apply_look_render()
             local al = m:call("getCalculatedLocalRotation", e.idx)
             local P = { x = pw.x, y = pw.y, z = pw.z, w = pw.w }
             local A = { x = al.x, y = al.y, z = al.z, w = al.w }
-            local D = qmul_l(axis_q(0, 1, 0, yaw * e.share), axis_q(rx, ry, rz, -pitch * e.share))
+            local D = coop_look_turn(bq, look.yaw, look.pitch, e.share)   -- v0.52: this joint's share of ONE turn
             local n = qmul_l(qmul_l(qmul_l({ x = -P.x, y = -P.y, z = -P.z, w = P.w }, D), P), A)
             j:call("set_LocalRotation", Quaternion.new(n.w, n.x, n.y, n.z))
             if e.name:lower():find("head") then
