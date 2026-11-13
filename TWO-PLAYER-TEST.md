@@ -310,7 +310,11 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 ## 24. New in v0.51
 
 - [ ] **Install**: unzip, double-click **Install.cmd**, press Play in Steam: the mod loads (status line at the top
-      left). Without .NET 10, the installer offers to install it.
+      left). Without .NET 10, the installer offers to install it. It offers the full character models too: the
+      Lobby then says "Full character models: installed".
+- [ ] **Drop for your friend**: discard a supply in the inventory: it lands in front of you, and your friend sees
+      it there and can pick it up.
+- [ ] **Look**: your friend looks up or down while turning: their head doesn't lean sideways.
 - [ ] **Frame rate**: play 15 minutes with saving off, then look at `reframework\data` in RE7's Steam folder:
       `coop_saveguard_log.txt` stays small (repeats counted as "x123"), and `re2_framework_log.txt` has no
       stream of "Internal game exception ... get_GameObject" lines.

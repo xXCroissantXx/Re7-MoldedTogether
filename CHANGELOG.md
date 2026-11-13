@@ -1,7 +1,18 @@
 # Changelog
 
 ## v0.51 (2026-11-12)
-One-click Steam install, smoother frame rate, and Mia's fights fixed after a Chapter 1 playtest.
+One-click Steam install, smoother frame rate and lower ping, items you drop for your friend, and Mia's fights fixed
+after a Chapter 1 playtest. By xXCroissantXx and Kingkiller1195 (now credited as Molded Together's developers).
+
+- **Full character models from the installer** (Kingkiller1195). Install.cmd now sets up "Third Person Full Model
+  Placeholders RT (2022)" by AfroJackX itself: it opens the Nexus page, waits while you click Manual download and
+  carries on when the zip is in Downloads (or goes straight ahead if it's already there). "Use full models.cmd" is
+  gone. The installer also no longer stops when the download was unzipped inside RE7's folder.
+- **Discard to drop for your friend** (Kingkiller1195). A supply you discard in the inventory lands on the ground in
+  front of you in both games, so your friend can pick it up (Options: "Drop discarded items for your friend").
+- **Lower ping, steadier link** (Kingkiller1195). The network plugin sends each message at once instead of batching
+  it, and hands what arrives to the game within 2 ms instead of up to 33 ms. The friend's head no longer leans
+  sideways when they look up or down while turning, and the logs are kept smaller.
 
 - **One installer, straight into Steam.** **Install.cmd** now puts the mod into RE7's own Steam folder: press
   **Play** in Steam and it loads. No second copy of the game and no shortcut any more. If the .NET 10 runtime is

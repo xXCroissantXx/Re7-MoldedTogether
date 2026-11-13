@@ -7,7 +7,7 @@
 #  3. Downloads REFramework and its C# add-on from the official release and checks each file's SHA-256.
 #  4. Installs the co-op files from this kit, keeping your co-op settings and friends.
 #  5. Full character models: sets up "Third Person Full Model Placeholders RT (2022)" by AfroJackX (Nexus RE7 mod
-#     86) from the zip you downloaded (see below). Before v0.52 this was a separate "Use full models.cmd".
+#     86) from the zip you downloaded (see below). Before v0.51 this was a separate "Use full models.cmd".
 #  6. Backs up your RE7 saves.
 #
 # Run it with Install.cmd (double-click). "Normal RE7 (mod off).cmd" runs it with -Disable: that switches the

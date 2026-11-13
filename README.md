@@ -321,6 +321,7 @@ write-up `games/resident-evil-7`.
 
 ## Credits
 
+- **xXCroissantXx** and **Kingkiller1195**: Molded Together's developers.
 - **AfroJackX**: [Third Person Full Model Placeholders](https://www.nexusmods.com/residentevil7/mods/86) (Nexus RE7
   mod 86), the complete character models that **Install.cmd** sets up for the Lobby (the **RT (2022)** file). Not
   included in this download: each player gets it from Nexus. The mod's page credits the people its own work builds
