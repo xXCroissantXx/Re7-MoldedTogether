@@ -1770,3 +1770,52 @@ end
   -Disable for 'Normal RE7 (mod off).cmd'; -SteamFolder still accepted. Offers winget Microsoft.DotNet.Runtime.10;
   self-elevates (-Elevated) when the folder isn't writable; tells old-copy users they can delete RE7-coop.
   'Install into Steam.cmd' removed from the kit and the repo. use-full-models.ps1 prefers the Steam folder.
+
+## Discard drops the item for your friend (v0.51; built and tested in the stand-in game only)
+
+What it does: an item one player discards in the inventory menu is put on the ground in front of them, and on the
+other player's ground at the same spot, for each to pick up with the game's own pickup. Code: the last section
+before `coop_world_on_event` in coop_world.lua; option `drop_on_discard` (shared, on by default; coop_talk
+`SHARED_OPTS`, the co-op screen's Options page and the old window); scenarios in `tests/harness/drop_test.py`.
+
+Messages (reliable events): `drop <token> <item> <n> <x> <y> <z> <chapter>` (ours: n were put down here),
+`dropok <token>` and `dropno <token> <why>` (theirs). `why` is one of switched_off, other_chapter, not_shared,
+not_playing, too_far (more than 30 m), no_player, no_drop_call, no_object, not_drawn. A `drop` that arrives during
+our cutscene is held like `took` and applied 1 s after it; one that waited more than 120 s while we loaded is
+dropped. The receiver checks everything itself: item name `[%w_]+`, count 1 to 999, three numbers, our own chapter,
+a supply (not a weapon, key item, file, map or coin), within 30 m of us.
+
+Game calls (all inside pcall; hooks only watch):
+- Hook `app.InventoryMenu.discardItem(app.Item)`: pre reads the item's `ItemDataID` and `ItemStackNum` (fields
+  only), post reads the Boolean (`to_int64(ret) & 0xFF ~= 0` = the discard went through). Nothing else is done
+  inside the game's call: 0.2 s later a frame handler does the work.
+- `app.ItemManager.createDropItemInstance(via.GameObject, String, Int32)` (static): owner = the player's own
+  GameObject, name as a Lua string first and then as a managed string. The new object may be the player's child at
+  the player's position: `set_Parent(nil)`, then `set_Position`, then `set_DrawSelf(true)` and `set_UpdateSelf(true)`;
+  an object with `get_Draw` false afterwards counts as a failure. Our own copy lands 0.8 m in front of our feet,
+  0.1 m up.
+- Not a trigger: `app.Item.reduceNum` (the item box, crafting and using call it too).
+
+Evidence: from an earlier co-op mod's real sessions (its notes, 2026-11-13). Drops of Herb, HandgunBullet and
+ShotgunBullet made this way appeared on the floor, were still alive seconds later, and could be picked up by the
+other player. That mod also learnt, the hard way:
+- `createItemInstance` followed by `Inventory.addItem` crashed the game every time it produced an object. Nothing
+  is created for an inventory in the drop code. NOTE: coop_world's give flow (`give_one`, v0.42) does exactly this
+  (createItemInstance + addItem, and a merge through setStackNum); this repo has not had that crash reported, but
+  the earlier mod's sessions say it is the likeliest place to look if giving crashes.
+- `Inventory.reduceItem(id, n, true)` on a whole inventory entry (the last unit of a kind or the whole stack)
+  crashed four times; `false` (as crafting calls it) worked, and a partial removal from a stack never crashed. The
+  give flow's `on_give_reply` uses `false` already.
+- An item's own object as the owner of a created item was a suspected crash.
+- A gift of a kind the receiver already holds can safely grow the held stack (`setStackNum`, read back to check).
+
+Pickups: a dropped item is an ordinary world item. This does not touch the pickup sync (`took` / `got`), which
+matches items by SaveGUID. Probably (not checked) a drop made here has no SaveGUID, so it is not tracked by that
+sync: each player's copy is theirs alone, whatever "Share supplies" says.
+
+NOT yet seen in this mod's real sessions: everything above. To check in the game, both players near each other:
+(1) discard a Herb in the inventory: it should lie in front of you and in front of your friend at the same spot,
+and each can pick up their own; (2) discard a key item or weapon: nothing happens beyond the game's discard;
+(3) walk 40 m apart and discard: a note says the friend is too far away; (4) switch "Drop discarded items for your
+friend" off on either side: it changes on both; (5) check that the discard menu still closes and redraws as before.
+The line `discard drop: app.InventoryMenu.discardItem hooked` in coop_world_log.txt says the hook was found.

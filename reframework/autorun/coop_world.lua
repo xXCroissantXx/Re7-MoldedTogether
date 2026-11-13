@@ -2215,7 +2215,227 @@ re.on_frame(function()
     end
 end)
 
+-- Discarding an item drops it for your friend too (v0.51) -----------------------------------------
+-- Discard an item in the inventory menu (app.InventoryMenu.discardItem) and it is gone from your
+-- inventory. Now it also lands on the ground in front of you, and on your friend's ground at the same
+-- spot, where each of you picks up your own copy with the game's own pickup:
+--   drop <token> <item> <n> <x> <y> <z> <chapter>   ours: n of <item> were put down here
+--   dropok <token>                                   theirs: it is on the ground here too
+--   dropno <token> <why>                             theirs: it couldn't be put down (why)
+-- Evidence (an earlier co-op mod's real sessions, v0.51 port): drops of Herb, HandgunBullet and
+-- ShotgunBullet made with ItemManager.createDropItemInstance(player, id, n) appeared on the floor, stayed
+-- alive and could be picked up. The same mod crashed the game every time it made an item for an
+-- inventory (createItemInstance + addItem) and when it took a whole entry out with reduceItem, so this
+-- never does either: the hook only watches (the game itself removed the discarded item), nothing is
+-- created in or taken out of anyone's inventory, and every call is inside pcall. App.Item.reduceNum is
+-- no trigger: moving to the item box, crafting and using call it too. Only supplies are dropped: key
+-- items, weapons, files and coins are each player's own (a weapon pickup can start a scene).
+-- Not seen in this mod's own real sessions yet: say so in the pull request.
+do
+    local DROP_RANGE = 30.0                       -- metres: farther than this the other area isn't loaded here
+    local DROP_FORWARD, DROP_UP = 0.8, 0.1        -- where our own copy lands, from our feet
+    ws.drop_pre, ws.drop_q, ws.drop_out, ws.drop_seen, ws.drop_last = nil, {}, {}, {}, {}
+    ws.drops = { sent = 0, shown = 0, failed = 0, refused = 0 }
+
+    local function drop_on() return not (settings and settings.drop_on_discard == false) end
+
+    -- A friend (or the test bot) is really there: alone, a discard stays the game's own discard.
+    local function friend_linked()
+        local st = coop_net_state and coop_net_state()
+        local k = st and st.kv
+        if not (k and coop_link_any and coop_link_any(k)) then return false end
+        if k.mode == "bot" then return true end
+        return k.peer ~= nil and k.peer ~= "-" and k.peer ~= "steam:0"
+    end
+
+    local function droppable(id)
+        local cat = item_category(id)
+        return cat ~= nil and not KEYISH[cat]
+    end
+
+    local function item_text(id) return (coop_item_name and safe(coop_item_name, id)) or id end
+
+    local function player_pose()
+        local om = sdk.get_managed_singleton("app.ObjectManager")
+        local go = om and safe(om.get_field, om, "PlayerObj")
+        local tr = go and safe(go.call, go, "get_Transform")
+        local p = tr and safe(tr.call, tr, "get_Position")
+        if p == nil then return nil end
+        return go, p, safe(tr.call, tr, "get_Rotation")
+    end
+
+    -- Makes the world item (the game's own call for what drawers and boxes drop) and puts it at x y z, or
+    -- in front of our feet when there is no position. Returns true and where it ended up, or nil and why.
+    local function spawn_world_item(id, n, x, y, z)
+        local go, p, q = player_pose()
+        if go == nil then return nil, "no_player" end
+        if x == nil then
+            local fx, fz = 0, 1
+            if q and q.x and q.y and q.z and q.w then
+                fx, fz = 2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y)
+            end
+            local len = math.sqrt(fx * fx + fz * fz)
+            if len < 1e-6 then fx, fz, len = 0, 1, 1 end
+            x, y, z = p.x + fx / len * DROP_FORWARD, p.y + DROP_UP, p.z + fz / len * DROP_FORWARD
+        end
+        local td = sdk.find_type_definition("app.ItemManager")
+        local m = td and td:get_method("createDropItemInstance(via.GameObject, System.String, System.Int32)")
+        if m == nil then return nil, "no_drop_call" end
+        -- The owner is always the player's own GameObject, never an item's object (a suspected crash).
+        -- The name as a plain string first, then as a managed one.
+        local obj = safe(m.call, m, nil, go, id, n)
+        if obj == nil then
+            local ms = sdk.create_managed_string and safe(sdk.create_managed_string, id)
+            obj = ms and safe(m.call, m, nil, go, ms, n) or nil
+        end
+        if obj == nil then return nil, "no_object" end
+        -- Made as the player's child, at the player's position: let go of the player, then move it
+        -- (set_Position doesn't stick while parented: the box drops in coop_world did the same).
+        local tr = safe(obj.call, obj, "get_Transform")
+        if tr then
+            pcall(tr.call, tr, "set_Parent", nil)
+            pcall(tr.call, tr, "set_Position", Vector3f.new(x, y, z))
+        end
+        pcall(obj.call, obj, "set_DrawSelf", true)
+        pcall(obj.call, obj, "set_UpdateSelf", true)
+        -- An item nobody can see counts as a failure.
+        if safe(obj.call, obj, "get_Draw") ~= true then return nil, "not_drawn" end
+        return true, x, y, z
+    end
+
+    -- The discard hook: it only watches. Pre reads the item's name and count (fields only: nothing is
+    -- called in the middle of the game's own discard); post reads whether it went through.
+    local function queue_drop(id, n)
+        if not (drop_on() and friend_linked()) then return end
+        n = math.max(1, math.min(999, math.floor(tonumber(n) or 1)))
+        local key, now = id .. ":" .. n, os.clock()
+        if ws.drop_last[key] and now - ws.drop_last[key] < 3 then return end   -- the same discard seen twice
+        ws.drop_last[key] = now
+        ws.drop_q[#ws.drop_q + 1] = { id = id, n = n, t = now }
+    end
+    do
+        local td = sdk.find_type_definition("app.InventoryMenu")
+        local m = td and td:get_method("discardItem(app.Item)")
+        if m then
+            pcall(sdk.hook, m, function(args)
+                ws.drop_pre = nil
+                pcall(function()
+                    local it = sdk.to_managed_object(args[3])
+                    local id = it and tostring(safe(it.get_field, it, "ItemDataID") or "")
+                    if id and id:match("^[%w_]+$") then
+                        ws.drop_pre = { id = id, n = tonumber(safe(it.get_field, it, "ItemStackNum")) or 1 }
+                    end
+                end)
+            end, function(r)
+                pcall(function()
+                    local d = ws.drop_pre
+                    ws.drop_pre = nil
+                    if d and (sdk.to_int64(r) & 0xFF) ~= 0 then queue_drop(d.id, d.n) end
+                end)
+                return r
+            end)
+        end
+        log("discard drop: app.InventoryMenu.discardItem " .. (m and "hooked" or "not found (discards stay the game's own)"))
+    end
+
+    -- Ours: 0.2 s after the discard (not inside the game's own call), put it down here, then tell them.
+    local function do_drop(d, now)
+        if not droppable(d.id) then
+            log("discard of " .. d.id .. " not dropped: key items, weapons and files are each player's own")
+            return
+        end
+        local ok, x, y, z = spawn_world_item(d.id, d.n)
+        if not ok then
+            ws.drops.failed = ws.drops.failed + 1
+            log(string.format("discard of %s x%d: couldn't put it on the ground here (%s); it is gone as in the normal game", d.id, d.n, tostring(x)))
+            return
+        end
+        local token = string.format("%x%04x", os.time() % 0x10000000, math.random(0, 0xFFFF))
+        ws.drop_out[token] = { id = d.id, n = d.n, t = now }
+        ws.drops.sent = ws.drops.sent + 1
+        send(string.format("drop %s %s %d %.2f %.2f %.2f %d", token, d.id, d.n, x, y, z, chapter()))
+    end
+
+    re.on_frame(function()
+        if #ws.drop_q == 0 and next(ws.drop_out) == nil then return end
+        local now = os.clock()
+        local i = 1
+        while i <= #ws.drop_q do
+            local d = ws.drop_q[i]
+            if now - d.t >= 0.2 then
+                table.remove(ws.drop_q, i)
+                local ok, err = pcall(do_drop, d, now)
+                if not ok then log("discard drop ERR " .. tostring(err)) end
+            else
+                i = i + 1
+            end
+        end
+        for token, o in pairs(ws.drop_out) do
+            if now - o.t > 10 then
+                ws.drop_out[token] = nil
+                note(string.format("your friend's game didn't answer: they may not see the %s you dropped", item_text(o.id)))
+            end
+        end
+    end)
+
+    -- Theirs: only a well-formed message does anything, and every check is ours (an older or changed
+    -- copy of the script may skip its own).
+    local function on_drop(token, id, n, x, y, z, ch)
+        if ws.drop_seen[token] then return end
+        ws.drop_seen[token] = true
+        if n < 1 or n > 999 then return end
+        local function no(why)
+            ws.drops.refused = ws.drops.refused + 1
+            log(string.format("friend's drop of %s x%d not put down: %s", id, n, why))
+            send("dropno " .. token .. " " .. why)
+        end
+        if not drop_on() then return no("switched_off") end
+        if ch ~= chapter() then return no("other_chapter") end
+        if not droppable(id) then return no("not_shared") end
+        local _, p = player_pose()
+        if p == nil then return no("not_playing") end
+        local dx, dy, dz = p.x - x, p.y - y, p.z - z
+        if dx * dx + dy * dy + dz * dz > DROP_RANGE * DROP_RANGE then return no("too_far") end
+        local ok, why = spawn_world_item(id, n, x, y, z)
+        if not ok then
+            ws.drops.failed = ws.drops.failed + 1
+            return no(tostring(why))
+        end
+        ws.drops.shown = ws.drops.shown + 1
+        log(string.format("friend's drop: %s x%d put down at %.1f %.1f %.1f", id, n, x, y, z))
+        send("dropok " .. token)
+        note(string.format("%s dropped %s x%d: it is on the ground here too",
+            coop_event_slot and coop_event_slot > 1 and ("Friend " .. coop_event_slot) or "Your friend", item_text(id), n))
+    end
+
+    local function on_drop_reply(token, ok, why)
+        local o = ws.drop_out[token]
+        if o == nil then return end   -- not ours, or answered already
+        ws.drop_out[token] = nil
+        if ok then return end
+        local text = tostring(why or "?"):gsub("_", " ")
+        local reasons = { ["too far"] = "is too far away to see it", ["other chapter"] = "is in another part of the game",
+            ["switched off"] = "has dropping discarded items switched off", ["not shared"] = "can't share that kind of item" }
+        note(string.format("your friend %s: the %s you dropped is only on your ground", reasons[text] or ("couldn't see it (" .. text .. ")"), item_text(o.id)))
+    end
+
+    -- Called from coop_world_on_event: true when the text is one of ours (even a malformed one).
+    function coop_drop_event(text)
+        local tok, id, n, x, y, z, ch = text:match("^drop (%x+) ([%w_]+) (%d+) (%-?[%d%.]+) (%-?[%d%.]+) (%-?[%d%.]+) (%-?%d+)$")
+        if tok then
+            pcall(on_drop, tok, id, tonumber(n), tonumber(x), tonumber(y), tonumber(z), tonumber(ch))
+            return true
+        end
+        local okt = text:match("^dropok (%x+)$")
+        if okt then pcall(on_drop_reply, okt, true) return true end
+        local not_, why = text:match("^dropno (%x+) (%S+)$")
+        if not_ then pcall(on_drop_reply, not_, false, why) return true end
+        return text:find("^drop ") ~= nil or text:find("^dropok ") ~= nil or text:find("^dropno ") ~= nil
+    end
+end
+
 function coop_world_on_event(text)
+    if text:find("^drop") and coop_drop_event(text) then return true end
     local gt, gto, gid, gn = text:match("^give (%x+) (%d+) (%S+) (%d+)$")
     if gt then pcall(on_give, gt, gto, gid, tonumber(gn)) return true end
     local okt, okn = text:match("^give_ok (%x+) (%d+)$")

@@ -2342,6 +2342,10 @@ local function draw_options()
     -- for both players (coop_talk.lua keeps the two games matched).
     local sc, sv = imgui.checkbox("Share story (cutscenes and progress; same for both)", settings.share_story ~= false)
     if sc then if coop_set_shared_option then coop_set_shared_option("share_story", sv) else settings.share_story = sv save_settings() end end
+    do   -- v0.51 (in a block: this window function has many locals)
+        local drc, drv = imgui.checkbox("Drop discarded items for your friend (same for both)", settings.drop_on_discard ~= false)
+        if drc then if coop_set_shared_option then coop_set_shared_option("drop_on_discard", drv) else settings.drop_on_discard = drv save_settings() end end
+    end
     local wc, wv = imgui.checkbox("Show your friend's weapon (experimental)", settings.show_weapon ~= false)
     if wc then settings.show_weapon = wv save_settings() pcall(show_friend_weapon_again) end
     local hc, hv = imgui.checkbox("Heal my friend (use a healing item next to them: it heals them, not you; experimental)",

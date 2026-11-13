@@ -296,6 +296,9 @@ local SHARED_OPTS = {
     -- v0.49: on by default (every bot test and real session ran with it on: "you all share one game").
     { key = "share_story", label = "Share story", on = true },
     { key = "share_supplies", label = "Share supplies", on = false },
+    -- v0.51: an item one of you discards in the inventory also lands on the other's ground. Both games must agree:
+    -- one that doesn't send or doesn't put it down would leave the other with an item that isn't there.
+    { key = "drop_on_discard", label = "Drop discarded items for your friend", on = true },
     { key = "share_phones", label = "Share phone calls", on = true },
     { key = "share_interactions", label = "Share interactions", on = true },
     { key = "share_physics", label = "Share pushed objects", on = true },
