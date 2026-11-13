@@ -372,6 +372,7 @@ public class CoopNet
         const string Dll = "steam_api64";
         const int IdentitySize = 136;        // SteamNetworkingIdentity
         const int SendUnreliableNoNagle = 1; // k_nSteamNetworkingSend_UnreliableNoNagle
+        const int SendNoNagle = 1;           // same bit as above: send now, don't wait for more data to batch
         const int SendFlagReliable = 8;      // k_nSteamNetworkingSend_Reliable
         const int SendAutoRestart = 32;      // k_nSteamNetworkingSend_AutoRestartBrokenSession
 
@@ -535,7 +536,7 @@ public class CoopNet
         {
             foreach (var ident in s_ids.Values)
                 LastSendResult = SteamAPI_ISteamNetworkingMessages_SendMessageToUser(
-                    s_msgs, ident, pkt, (uint)pkt.Length, SendFlagReliable | SendAutoRestart, s_channel);
+                    s_msgs, ident, pkt, (uint)pkt.Length, SendFlagReliable | SendNoNagle | SendAutoRestart, s_channel);   // v0.52: NoNagle, so an event isn't held back to batch with the next one
         }
 
         // Non-blocking: drains whatever arrived since the last call.
@@ -636,6 +637,7 @@ public class CoopNet
                 s_recvThread.Start();
             }
 
+            try { s_timerRaised = timeBeginPeriod(1) == 0; } catch (Exception) { }   // v0.52: Sleep(2) means 2 ms, not 15
             s_ioThread = new Thread(IoLoop) { IsBackground = true, Name = "CoopNet.IO" };
             s_ioThread.Start();
             API.LogInfo($"[CoopNet] started mode={s_cfg.mode} peer={PeerText} sendHz={s_cfg.sendHz}");
@@ -655,6 +657,7 @@ public class CoopNet
         try { s_sock?.Close(); } catch { }
         s_recvThread?.Join(1000);
         s_ioThread?.Join(1000);
+        try { if (s_timerRaised) timeEndPeriod(1); } catch (Exception) { }
         if (s_steamReady) { Steam.SetPresence("coop_re7", ""); Steam.SetPresence("coop_re7_to", ""); Steam.SetPresence("coop_re7_lobby", ""); }
         if (IsSteam) Steam.Shutdown();
         API.LogInfo("[CoopNet] stopped");
@@ -942,6 +945,7 @@ public class CoopNet
 
     static void PumpEventsOut(string path)
     {
+        if (!Touched(path, s_wEv)) return;   // v0.52: not written since the last look
         string[] lines;
         try
         {
@@ -952,13 +956,13 @@ public class CoopNet
             // the write (v0.39). Only lines ended by '\n' are whole: a cut-off last line went
             // out cut off before (and its id was marked sent, so the rest was never sent).
             var end = all.LastIndexOf('\n');
-            if (end < all.Length - 1) s_evPartial++;
+            if (end < all.Length - 1) { s_evPartial++; s_wEv.Retry = true; }
             if (end < 0) return;
             lines = all.Substring(0, end).Split('\n');
         }
         catch (FileNotFoundException) { if (s_evOutLast < 0) s_evOutLast = 0; return; }   // nothing sent yet
-        catch (IOException) { return; }
-        catch (UnauthorizedAccessException) { return; }
+        catch (IOException) { s_wEv.Retry = true; return; }
+        catch (UnauthorizedAccessException) { s_wEv.Retry = true; return; }
         // First look after a (re)start: what's already in the file was sent before.
         bool first = s_evOutLast < 0;
         foreach (var line in lines)
@@ -1010,6 +1014,7 @@ public class CoopNet
 
     static void PumpSnapshotOut(string path)
     {
+        if (!Touched(path, s_wEs)) return;   // v0.52: not written since the last look
         string text;
         try
         {
@@ -1017,8 +1022,9 @@ public class CoopNet
             using var sr = new StreamReader(fs);
             text = sr.ReadToEnd();
         }
-        catch (IOException) { return; }
-        catch (UnauthorizedAccessException) { return; }
+        catch (FileNotFoundException) { return; }
+        catch (IOException) { s_wEs.Retry = true; return; }
+        catch (UnauthorizedAccessException) { s_wEs.Retry = true; return; }
         // Lua's fs.write ends lines with "\r\n" on Windows, so the "\nend\n" check below never
         // matched: from v0.39 to v0.46 every snapshot was counted as cut off and none went out,
         // and each game ran its own enemies (found by the bot test, 2026-11-10; v0.47).
@@ -1027,7 +1033,7 @@ public class CoopNet
         if (nl <= 0 || !text.StartsWith("seq ")) return;
         // Whole snapshots only (v0.39): Lua ends each with an "end" line. One read halfway
         // through a write would send a cut-off list (an enemy missing, a number cut short).
-        if (!text.EndsWith("\nend\n")) { s_snapPartial++; return; }
+        if (!text.EndsWith("\nend\n")) { s_snapPartial++; s_wEs.Retry = true; return; }
         var seq = text.Substring(0, nl);
         if (seq == s_snapOutSeq) return;
         s_snapOutSeq = seq;
@@ -1275,6 +1281,71 @@ public class CoopNet
 
     // IO thread: Lua out-file -> socket, received samples -> Lua in-file ---------
 
+    // v0.52 (ping): the IO loop used to look at everything once per 1/sendHz (33 ms): our sample sat in
+    // coopnet_out.txt, and the friend's packet in Steam's queue, until the next look, and the file for Lua
+    // was written after that. That is up to 66 ms of waiting on every trip that has nothing to do with the
+    // network. Now a short pass every FastStepMs does only what must not wait (our sample out, the socket
+    // in, the files for Lua, events), and a file is opened only when it was written to since the last
+    // look (a stat is far cheaper than an open + read, and this runs 500 times a second). The full pass
+    // (bot, status, party, friends) still runs at sendHz.
+    const int FastStepMs = 2;
+    [DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint ms);
+    [DllImport("winmm.dll")] static extern uint timeEndPeriod(uint ms);
+    static bool s_timerRaised;   // Windows sleeps in 15 ms steps unless a process asks for 1 ms ones
+
+    sealed class Watch
+    {
+        public long Ticks = -1, Len = -1;
+        public bool Retry;        // the last read caught the file half-written: look again at once
+        public readonly Stopwatch Since = Stopwatch.StartNew();
+    }
+    static readonly Watch s_wOut = new Watch(), s_wEv = new Watch(), s_wEs = new Watch();
+
+    // True when the file changed since the last true (or on its first look, or every 250 ms as a safety
+    // net against a write that left the same time stamp and size).
+    static bool Touched(string path, Watch w)
+    {
+        try
+        {
+            var fi = new FileInfo(path);
+            bool there = fi.Exists;
+            long t = there ? fi.LastWriteTimeUtc.Ticks : 0, n = there ? fi.Length : 0;
+            if (w.Retry && there) { w.Retry = false; w.Ticks = t; w.Len = n; w.Since.Restart(); return true; }
+            if (t != w.Ticks || n != w.Len || w.Since.ElapsedMilliseconds >= 250)
+            {
+                w.Ticks = t; w.Len = n; w.Since.Restart();
+                return true;
+            }
+            return false;
+        }
+        catch (Exception) { return true; }
+    }
+
+    // Our newest sample (Lua's coopnet_out.txt) to the friend, or to the bot.
+    static void SendLocalSample(string outPath)
+    {
+        if (!Touched(outPath, s_wOut)) return;
+        if (!TryReadOut(outPath, out var s)) { s_wOut.Retry = true; return; }
+        if (s.Seq == s_lastSentSeq) return;
+        s_lastSentSeq = s.Seq;
+        var pkt = Encode(s);
+        if (IsSteam)
+        {
+            if (Steam.HasPeers) { Steam.Send(pkt); s_sent++; }
+        }
+        else if (s_cfg.mode == "bot")
+        {
+            Bot.SetCenter(s);   // circle mode: the bot circles where we first stood
+            Bot.Record(s);      // follow mode: our path is the bot's trail
+            Bot.LastLocal = s;
+        }
+        else
+        {
+            s_sock.Send(pkt, pkt.Length, s_peer);
+            s_sent++;
+        }
+    }
+
     static void IoLoop()
     {
         var outPath = Path.Combine(s_dataDir, "coopnet_out.txt");
@@ -1294,41 +1365,32 @@ public class CoopNet
             try { File.Delete(Path.Combine(s_dataDir, SlotFile("coopnet_es_in", k))); } catch (IOException) { }
             try { File.Delete(Path.Combine(s_dataDir, SlotFile("coopnet_in", k))); } catch (IOException) { }
         }
+        // The per-friend file names, built once (the fast pass runs 500 times a second).
+        var inPaths = new string[MaxSlots + 1];
+        var esInPaths = new string[MaxSlots + 1];
+        for (int k = 1; k <= MaxSlots; k++)
+        {
+            inPaths[k] = Path.Combine(s_dataDir, SlotFile("coopnet_in", k));
+            esInPaths[k] = Path.Combine(s_dataDir, SlotFile("coopnet_es_in", k));
+        }
+        var fastStep = TimeSpan.FromMilliseconds(FastStepMs);
+        Action<byte[], ulong> onSteam = (data, from) => OnPacket(data, "steam:" + from, SlotOf(from));
 
         while (s_running)
         {
             var started = Stopwatch.StartNew();
             try
             {
-                if (TryReadOut(outPath, out var s) && s.Seq != s_lastSentSeq)
-                {
-                    s_lastSentSeq = s.Seq;
-                    var pkt = Encode(s);
-                    if (IsSteam)
-                    {
-                        if (Steam.HasPeers) { Steam.Send(pkt); s_sent++; }
-                    }
-                    else if (s_cfg.mode == "bot")
-                    {
-                        Bot.SetCenter(s);   // circle mode: the bot circles where we first stood
-                        Bot.Record(s);      // follow mode: our path is the bot's trail
-                        Bot.LastLocal = s;
-                    }
-                    else
-                    {
-                        s_sock.Send(pkt, pkt.Length, s_peer);
-                        s_sent++;
-                    }
-                }
+                SendLocalSample(outPath);
                 PollCommand();
-                if (IsSteam) Steam.Poll((data, from) => OnPacket(data, "steam:" + from, SlotOf(from)));
+                if (IsSteam) Steam.Poll(onSteam);
                 if (s_cfg.mode == "bot") { Bot.Tick(s_cfg, DeliverBot); s_sent++; }
                 PumpEventsOut(evOutPath);
                 PumpSnapshotOut(esOutPath);
                 for (int k = 1; k <= MaxSlots; k++)
                 {
-                    WriteSnapshotInIfNew(Path.Combine(s_dataDir, SlotFile("coopnet_es_in", k)), k);
-                    WriteInFileIfDirty(Path.Combine(s_dataDir, SlotFile("coopnet_in", k)), k);
+                    WriteSnapshotInIfNew(esInPaths[k], k);
+                    WriteInFileIfDirty(inPaths[k], k);
                 }
                 WriteEventsInIfDirty(evInPath);
                 if (lastParty.ElapsedMilliseconds > 3000) { lastParty.Restart(); SendParty(); }
@@ -1346,8 +1408,28 @@ public class CoopNet
             catch (ObjectDisposedException) { return; }
             catch (Exception e) { WriteStatusSafe("io error: " + e.Message); }
 
-            var left = period - started.Elapsed;
-            if (left > TimeSpan.Zero) Thread.Sleep(left);
+            // Until the next full pass, look every FastStepMs at what must not wait (see FastStepMs).
+            while (s_running)
+            {
+                var left = period - started.Elapsed;
+                if (left <= TimeSpan.Zero) break;
+                Thread.Sleep(left < fastStep ? left : fastStep);
+                try
+                {
+                    SendLocalSample(outPath);
+                    if (IsSteam) Steam.Poll(onSteam);
+                    PumpEventsOut(evOutPath);
+                    PumpSnapshotOut(esOutPath);
+                    for (int k = 1; k <= MaxSlots; k++)
+                    {
+                        WriteSnapshotInIfNew(esInPaths[k], k);
+                        WriteInFileIfDirty(inPaths[k], k);
+                    }
+                    WriteEventsInIfDirty(evInPath);
+                }
+                catch (ObjectDisposedException) { return; }
+                catch (Exception e) { WriteStatusSafe("io error: " + e.Message); break; }   // once per pass, not 500 times a second
+            }
         }
     }
 

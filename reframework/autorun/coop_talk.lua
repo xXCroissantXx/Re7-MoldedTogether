@@ -46,9 +46,14 @@ local MSG_SECONDS, MARK_SECONDS = 6, 25
 local LIST_FILE = "coop_catchup.txt"
 
 local log_buf, log_t, log_tail = {}, 0, nil
-local function log(s) log_buf[#log_buf + 1] = os.date("%H:%M:%S ") .. tostring(s) end
+-- v0.52: repeated lines are limited and the file written by coop_dummy.lua's coop_log_gate / coop_log_flush.
+local function log(s)
+    if coop_log_gate and not coop_log_gate("talk", s) then return end
+    log_buf[#log_buf + 1] = os.date("%H:%M:%S ") .. tostring(s)
+end
 re.on_frame(function()
-    -- v0.51: every 3 s, and the file is read only once (its tail is kept here) instead of every write.
+    if coop_log_flush then log_buf, log_t = coop_log_flush("talk", "coop_talk_log.txt", log_buf, log_t) return end
+    -- without coop_dummy.lua: the v0.51 writer
     if #log_buf == 0 or os.clock() - log_t < 3 then return end
     log_t = os.clock()
     local f = (log_tail or fs.read("coop_talk_log.txt") or "") .. table.concat(log_buf, "\n") .. "\n"
