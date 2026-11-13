@@ -333,12 +333,22 @@ $src = Join-Path $Kit "reframework"
 if (-not (Test-Path $src)) { Fail "this download's reframework folder is missing (unzip the whole download, then run Install.cmd from it)" }
 $config = Join-Path $Game "reframework\data\coopnet_config.json"
 $keepConfig = Test-Path $config
+$copied = 0
+$inPlace = 0
 Get-ChildItem $src -Recurse -File | ForEach-Object {
     $rel = $_.FullName.Substring($src.Length + 1)
     $to = Join-Path (Join-Path $Game "reframework") $rel
     if ($keepConfig -and $rel -eq "data\coopnet_config.json") { return }   # keep the friend ID already set
+    # This download unzipped into RE7's own folder (the Steam folder) is its own destination: Copy-Item refuses to
+    # copy a file onto itself ("Cannot overwrite the item ... with itself") and the install stopped there. Such a
+    # file is already where it belongs.
+    if ([string]::Equals([IO.Path]::GetFullPath($_.FullName), [IO.Path]::GetFullPath($to), [StringComparison]::OrdinalIgnoreCase)) { $script:inPlace++; return }
     New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
     Copy-Item $_.FullName $to -Force
+    $script:copied++
+}
+if ($inPlace -gt 0 -and $copied -eq 0) {
+    Warn "this download was unzipped inside RE7's own folder, so its co-op files are already in place."
 }
 # coop_aggro.lua was dropped in v0.47: an old install's copy goes.
 $old = Join-Path $Game "reframework\autorun\coop_aggro.lua"
