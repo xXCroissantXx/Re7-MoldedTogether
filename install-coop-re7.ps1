@@ -14,13 +14,19 @@
 #   -GameSource <folder>    RE7 folder to copy from (default: found in Steam)
 #   -NoGameCopy             only (re)install the mod files into an existing co-op folder
 #   -BackupDir <folder>     where save backups go (default: next to the co-op folder)
+#   -SteamFolder            install into RE7's own Steam folder instead of a copy, so pressing Play in
+#                           Steam starts the mod (Install into Steam.cmd). No copy, no launcher.
+#   -SteamFolder -Disable   switch the mod off in the Steam folder for normal play (Normal RE7 (mod off).cmd):
+#                           renames REFramework's dinput8.dll; installing again switches it back on.
 
 param(
     [string]$Destination = "",
     [string]$GameSource = "",
     [switch]$NoGameCopy,
     [string]$BackupDir = "",
-    [switch]$NoShortcut
+    [switch]$NoShortcut,
+    [switch]$SteamFolder,
+    [switch]$Disable
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,7 +57,7 @@ function Warn($text) { Write-Host "      !!  $text" -ForegroundColor Yellow }
 function Fail($text) { Write-Host ""; Write-Host "FAILED: $text" -ForegroundColor Red; exit 1 }
 
 Write-Host "Molded Together installer" -ForegroundColor White
-Write-Host "Co-op folder: $Destination"
+if (-not $SteamFolder) { Write-Host "Co-op folder: $Destination" }
 
 # ---------------------------------------------------------------- 1. checks
 Step 1 "Checking your PC"
@@ -91,6 +97,43 @@ function Find-RE7 {
     return @{ Game = $null; Steam = $steam; Lib = $null }
 }
 $found = Find-RE7
+
+# Into RE7's own Steam folder (v0.50): Steam's Play button starts the mod. Steam's updates and "Verify
+# integrity" only restore Steam's own files, so the mod's extra files (dinput8.dll, reframework\) stay.
+if ($SteamFolder) {
+    if (-not $found.Game) { Fail "Couldn't find Resident Evil 7 in your Steam libraries. Install it from Steam first." }
+    $Destination = $found.Game
+    $NoGameCopy = $true
+    Write-Host "Steam game folder: $Destination"
+    if (Get-Process re7 -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($Destination) }) {
+        Fail "RE7 is running from that folder: close the game first, then run this again."
+    }
+    $dll = Join-Path $Destination "dinput8.dll"
+    $off = Join-Path $Destination "dinput8.dll.off"
+    if ($Disable) {
+        if (Test-Path $dll) {
+            Move-Item -Force $dll $off
+            Write-Host ""
+            Write-Host "Molded Together is switched OFF in your Steam folder: RE7 starts normally from Steam." -ForegroundColor Green
+            Write-Host "To switch it back on, double-click 'Install into Steam.cmd' again."
+        } else {
+            Write-Host ""
+            Write-Host "Molded Together isn't switched on in your Steam folder (nothing to do)." -ForegroundColor Green
+        }
+        exit 0
+    }
+    # Steam's folder must be writable (it usually is: Steam lets its users write there).
+    try {
+        $probe = Join-Path $Destination ("coop-write-test-" + [guid]::NewGuid().ToString("N").Substring(0, 6) + ".tmp")
+        Set-Content -Path $probe -Value "x" -ErrorAction Stop
+        Remove-Item $probe -Force
+    } catch {
+        Fail "Can't write to $Destination. Right-click 'Install into Steam.cmd' and choose 'Run as administrator'."
+    }
+    if (Test-Path $off) { Remove-Item -Force $off }   # it was switched off: this install switches it on again
+    Ok "installing into the Steam folder (nothing is copied)"
+}
+if ($Disable) { Fail "-Disable only works with -SteamFolder" }
 if (-not $GameSource) { $GameSource = $found.Game }
 if (-not $NoGameCopy) {
     if (-not $GameSource -or -not (Test-Path (Join-Path $GameSource "re7.exe"))) {
@@ -111,7 +154,8 @@ if ($found.Lib) {
 }
 
 # ---------------------------------------------------------------- 2. game copy
-Step 2 "Copying the game to the co-op folder (your normal install is not changed)"
+if ($SteamFolder) { Step 2 "Using your Steam game folder (no copy)" }
+else { Step 2 "Copying the game to the co-op folder (your normal install is not changed)" }
 if ($NoGameCopy) {
     if (-not (Test-Path (Join-Path $Destination "re7.exe"))) { Fail "-NoGameCopy was given but $Destination has no re7.exe" }
     Ok "using the existing copy in $Destination"
@@ -126,8 +170,10 @@ if ($NoGameCopy) {
     if ($LASTEXITCODE -ge 8) { Fail "copying the game failed (robocopy exit $LASTEXITCODE)" }
     Ok "game copied"
 }
-Set-Content -Path (Join-Path $Destination "steam_appid.txt") -Value $AppId -Encoding Ascii
-Ok "steam_appid.txt written (lets the copy start outside Steam's library)"
+if (-not $SteamFolder) {
+    Set-Content -Path (Join-Path $Destination "steam_appid.txt") -Value $AppId -Encoding Ascii
+    Ok "steam_appid.txt written (lets the copy start outside Steam's library)"
+}
 
 # ---------------------------------------------------------------- 3. REFramework
 Step 3 "Downloading REFramework (official release, hash-checked)"
@@ -187,6 +233,17 @@ if (Test-Path $userdata) {
 if ($any) { Ok "saves backed up to $BackupDir\$stamp" } else { Warn "no RE7 saves found yet (fine if you haven't played)" }
 
 # ---------------------------------------------------------------- 6. launcher
+if ($SteamFolder) {
+    Step 6 "Done: no launcher needed"
+    Write-Host ""
+    Write-Host "All done." -ForegroundColor Green
+    Write-Host "1. Start RE7 from Steam as usual (Play). Molded Together loads with it."
+    Write-Host "2. Saving is OFF until you switch on 'Allow saving' in the co-op menu (F9 > Options)."
+    Write-Host "   Your saves were backed up first."
+    Write-Host "3. To play RE7 without the mod, double-click 'Normal RE7 (mod off).cmd'."
+    Write-Host "   'Install into Steam.cmd' switches it back on."
+    exit 0
+}
 Step 6 "Creating the launcher"
 $launcher = Join-Path $Destination "Start Molded Together.cmd"
 Set-Content -Path $launcher -Encoding Ascii -Value "@echo off`r`ncd /d `"%~dp0`"`r`nstart `"`" `"%~dp0re7.exe`""

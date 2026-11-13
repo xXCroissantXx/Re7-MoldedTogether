@@ -1736,3 +1736,11 @@ end
   Plugin not running: coop_dummy net.plugin_dead (coopnet_status.txt unchanged 12 s, after 25 s): red HUD line,
   coop_menu command()/party line; installer reads CI\Policy VerifiedAndReputablePolicyState (Smart App Control
   blocked REFCoreDeps.dll on the owner's PC: 0x800711C7, CodeIntegrity 3033/3077). harness plugin_test.py.
+- v0.50.1 (2026-11-12, installer only; CoopNet.cs Version stays 0.50 so 0.50 and 0.50.1 play together). The
+  contributor launched RE7 with Steam's Play button and got 'network plugin isn't running': the Steam folder had
+  the scripts but not REFramework's C# add-on. install-coop-re7.ps1 -SteamFolder installs into $found.Game (no
+  copy, no steam_appid.txt, no launcher; checks the folder is writable and RE7 isn't running from it);
+  -SteamFolder -Disable renames dinput8.dll to dinput8.dll.off (installing again removes the .off). Wrappers:
+  'Install into Steam.cmd', 'Normal RE7 (mod off).cmd'. use-full-models.ps1 falls back to the Steam folder
+  when it has reframework\autorun\coop_dummy.lua. Tested against a fake Steam folder (install, off, on again
+  keeping coopnet_config.json, off twice); not run on a real Steam install here.

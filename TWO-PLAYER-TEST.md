@@ -300,6 +300,13 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 - [ ] **No plugin**: (only if it happens) a red "network plugin isn't running" line at the top left, and the
       README's Troubleshooting explains Smart App Control.
 
+## 23. New in v0.50.1
+
+- [ ] **Play from Steam**: run **Install into Steam.cmd**, then press Play in Steam: the co-op status shows at the
+      top left (no red "network plugin isn't running" line) and you can connect.
+- [ ] **Mod off**: run **Normal RE7 (mod off).cmd**, press Play: RE7 starts without the mod. Run **Install into
+      Steam.cmd** again: it's back, with your co-op settings.
+
 ## Afterwards
 
 Each player clicks **Make a bug report** (Molded Together window, *Help*) and sends the zip

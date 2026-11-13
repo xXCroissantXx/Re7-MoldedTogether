@@ -22,6 +22,21 @@ if ($GameDir -eq "") {
     $cands = @((Join-Path $env:SystemDrive "RE7-coop"), (Join-Path $docs "RE7-coop"))
     foreach ($c in $cands) { if (Test-Path (Join-Path $c "re7.exe")) { $GameDir = $c; break } }
 }
+# No co-op copy: the mod may be installed in RE7's Steam folder ("Install into Steam.cmd", v0.50).
+if ($GameDir -eq "") {
+    $steam = $null
+    try { $steam = (Get-ItemProperty "HKCU:\Software\Valve\Steam" -ErrorAction Stop).SteamPath } catch { }
+    if (-not $steam) { $steam = "${env:ProgramFiles(x86)}\Steam" }
+    $libs = @($steam)
+    $vdf = Join-Path $steam "steamapps\libraryfolders.vdf"
+    if (Test-Path $vdf) {
+        foreach ($m in [regex]::Matches((Get-Content $vdf -Raw), '"path"\s+"([^"]+)"')) { $libs += $m.Groups[1].Value -replace '\\\\', '\' }
+    }
+    foreach ($lib in ($libs | Select-Object -Unique)) {
+        $p = Join-Path $lib "steamapps\common\RESIDENT EVIL 7 biohazard"
+        if (Test-Path (Join-Path $p "reframework\autorun\coop_dummy.lua")) { $GameDir = $p; break }
+    }
+}
 if ($GameDir -eq "" -or -not (Test-Path (Join-Path $GameDir "re7.exe"))) {
     Write-Host "Couldn't find your co-op game folder. Run: powershell -File use-full-models.ps1 -GameDir <folder>" -ForegroundColor Red
     exit 1

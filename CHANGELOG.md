@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.50.1 (2026-11-12)
+Installer update: play from Steam. The mod itself is the same as v0.50, so v0.50 and v0.50.1 play together.
+
+- **Play from Steam without a copy of the game.** Double-click **Install into Steam.cmd** (instead of
+  Install.cmd) and REFramework and Molded Together go straight into RE7's own Steam folder: start RE7 with
+  Steam's Play button and the mod loads with it. Nothing is copied, so it needs no extra disk space.
+- **Normal RE7 (mod off).cmd** switches the mod off in the Steam folder, so RE7 starts normally from Steam
+  (your co-op settings stay); **Install into Steam.cmd** switches it back on.
+- **Use full models.cmd** also finds a Steam-folder install.
+- The README's install and troubleshooting sections explain both ways ("network plugin isn't running" when RE7
+  was started from Steam's Play button without the Steam install was the first report).
+
 ## v0.50 (2026-11-12)
 Fixes found by bots playing the story together, chapter by chapter, plus a warning for PCs where the co-op
 plugin can't start. Everyone needs v0.50.
