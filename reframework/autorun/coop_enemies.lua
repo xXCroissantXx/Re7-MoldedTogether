@@ -37,16 +37,18 @@ enemy_sync = {
 local es = enemy_sync
 
 -- Lines are collected and appended once a second (was a full read + rewrite per line).
-local log_buf, log_t = {}, 0
+local log_buf, log_t, log_tail = {}, 0, nil
 local function log(s)
     log_buf[#log_buf + 1] = os.date("%H:%M:%S ") .. tostring(s)
 end
 re.on_frame(function()
-    if #log_buf == 0 or os.clock() - log_t < 1 then return end
+    -- v0.51: every 3 s, and the file is read only once (its tail is kept here) instead of every write.
+    if #log_buf == 0 or os.clock() - log_t < 3 then return end
     log_t = os.clock()
-    local f = fs.read("coop_enemies_log.txt") or ""
+    local f = (log_tail or fs.read("coop_enemies_log.txt") or "") .. table.concat(log_buf, "\n") .. "\n"
     if #f > 200000 then f = f:sub(-100000) end
-    fs.write("coop_enemies_log.txt", f .. table.concat(log_buf, "\n") .. "\n")
+    log_tail = f
+    fs.write("coop_enemies_log.txt", f)
     log_buf = {}
 end)
 
@@ -628,6 +630,23 @@ local function on_event(text)
         if enemy_move_on_own then enemy_move_on_own(oid, tonumber(och), oname, otarget ~= "" and otarget or nil) end
         return
     end
+    -- v0.51: a friend's copy asks for one of our enemy's animation banks / we get one for ours.
+    local rid, rch, rbank = text:match("^ebankreq (%S+) (%-?%d+) (%d+)$")
+    if rid then
+        if coop_enemy_bank_req then pcall(coop_enemy_bank_req, rid, tonumber(rch), tonumber(rbank)) end
+        return
+    end
+    local bid, bch, bbank, bow, bpath = text:match("^ebank (%S+) (%-?%d+) (%d+) ([01]) (%S+)$")
+    if bid then
+        if coop_enemy_bank then pcall(coop_enemy_bank, bid, tonumber(bch), tonumber(bbank), tonumber(bow), bpath) end
+        return
+    end
+    -- v0.51: the friend's game was handed an enemy it can't run (and why): ours again at once.
+    local kid, kch, kname, kwhy = text:match("^eskip (%S+) (%-?%d+) (%S+) (.+)$")
+    if kid then
+        if coop_enemy_skip then pcall(coop_enemy_skip, kid, tonumber(kch), kname, kwhy) end
+        return
+    end
     local fch, flist = text:match("^mtgt (%-?%d+) ?(.*)$")
     if fch then
         if coop_enemies_on_fight then pcall(coop_enemies_on_fight, tonumber(fch), flist) end
@@ -914,15 +933,28 @@ local function weapon_id(name)
     return weapon_ids[name]
 end
 
+-- v0.51: read at most once a second per enemy, and a weapon whose object is gone is never asked again. The
+-- game keeps destroyed weapons in ManagedWeapons (Mia's dropped knife), and asking one for its GameObject
+-- throws inside the game: 28 a second in the 2026-11-12 playtest (twice per snapshot), 120 a second in
+-- Chapter 3, each one also written to REFramework's log.
+-- Forgotten once a minute: a new weapon could reuse a dead one's address (one failed call a minute is nothing).
+local dead_weapon_addr, dead_weapon_t = {}, 0
 local function weapons_of(e)
+    local now = os.clock()
+    if now - dead_weapon_t > 60 then dead_weapon_addr, dead_weapon_t = {}, now end
+    if e.wpn_list and now - (e.wpn_t or 0) < 1 then return e.wpn_list end
     local eq = equip_of(e)
     local list = eq and safe(eq.get_field, eq, "ManagedWeapons")
     local out = {}
     for i = 0, (list and list:call("get_Count") or 0) - 1 do
         local w = list:call("get_Item", i)
-        local go = w and safe(w.call, w, "get_GameObject")
-        if go then out[#out + 1] = go end
+        local a = w and w:get_address()
+        if a and not dead_weapon_addr[a] then
+            local go = safe(w.call, w, "get_GameObject")
+            if go then out[#out + 1] = go else dead_weapon_addr[a] = true end
+        end
     end
+    e.wpn_list, e.wpn_t = out, now
     return out
 end
 
@@ -1055,6 +1087,33 @@ local function write_snapshot(now)
     mv.sent = mv.sent + 1
 end
 
+-- An enemy right next to our player may have hold of us (v0.51). Mia grabbing Ethan, her chainsaw locked
+-- against his blade: Ethan's body is tied to hers for the move. The 2026-11-12 playtest had her handed to
+-- the friend's game, taken back 3 s later and made a copy there in the middle of a grab: the copy, with
+-- its own brain off and moved from the other game, dragged the friend's Ethan up and out of the map
+-- again and again until he loaded a save. So within HOLD_R m of our player an enemy that is ours stays
+-- ours: no copy is made of it and it isn't handed over until it lets go (both games run it meanwhile).
+HOLD_R = 2.0
+local function near_my_player(e, r)
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local player = om and safe(om.get_field, om, "PlayerObj")
+    if player == nil or e == nil then return false end
+    local ep = safe(function() return e.go:call("get_Transform"):call("get_Position") end)
+    local pp = safe(function() return player:call("get_Transform"):call("get_Position") end)
+    if ep == nil or pp == nil then return false end
+    local d = r or HOLD_R
+    return (ep.x - pp.x) ^ 2 + (ep.y - pp.y) ^ 2 + (ep.z - pp.z) ^ 2 < d * d
+end
+local function awake_near_me(e)
+    return e ~= nil and not e.dead and safe(e.go.call, e.go, "get_Update") == true and near_my_player(e)
+end
+local function hold_note(e)
+    mv.hold_logged = mv.hold_logged or {}
+    if mv.hold_logged[e.id] then return end
+    mv.hold_logged[e.id] = true
+    log(string.format("%s %s is right next to you: it stays yours until it moves off (no copy mid-grab)", e.name, e.id:sub(1, 12)))
+end
+
 -- Friend k is in a cutscene: their samples carry the cutscene flag (coop_dummy keeps it as
 -- friend_cutscene, per friend).
 local function friend_in_cutscene(k)
@@ -1062,6 +1121,17 @@ local function friend_in_cutscene(k)
     local v = rawget(env, "friend_cutscene")
     if v == nil and (k or 1) == 1 then v = rawget(_G, "friend_cutscene") end
     return v == true
+end
+
+-- How long a game that handed an enemy over waits for the friend's data before taking it back (v0.51):
+-- 3 s as before; a boss 6 s (in the 2026-11-12 playtest Mia came back after 3 s twice, mid-fight, with the
+-- friend's ping high); up to 30 s while the friend is in a cutscene (their game sends nothing then). A
+-- friend's game that says it can't run it ("eskip") gives it back at once.
+local function quiet_limit(e, k)
+    if mv.skip_why and mv.skip_why[e.id] then return 0 end
+    if type(k) == "number" and friend_in_cutscene(k) then return 30 end
+    if BOSS_FOLLOW[e.name] or BOSS_HANDOFF[e.name] then return 6 end
+    return 3
 end
 
 -- Guest: take a received snapshot into the per-enemy timelines.
@@ -1096,10 +1166,13 @@ local function read_snapshot(now, k)
                 -- One boss for both (v0.48): ours until handed to us; when both games run him, the host's.
                 if own == k then
                     take = true
+                elseif awake_near_me(te) then
+                    hold_note(te)   -- ours has hold of our player (v0.51): ours until it lets go
                 -- Or ours is asleep while theirs is awake (v0.48): at Chapter 1's step 1300 Mia moved to the
                 -- attic in one game while the host's slept where she'd been, and the host kept "running" her.
                 elseif own == nil or (own == "me" and mv.role == "guest" and now - (mv.own_t[id] or 0) >= 1)
                     or (own == "me" and safe(te.go.call, te.go, "get_Update") ~= true) then
+                    if own == "me" then log(string.format("%s: both games ran it, the host's is the one now", te.name)) end
                     mv.own[id], mv.own_t[id], take = k, now, true
                 end
             elseif te and BOSS_FOLLOW[te.name] and mv.role == "guest" then
@@ -1116,7 +1189,7 @@ local function read_snapshot(now, k)
                 if lower_than_me(k) or not here then mv.own[id], mv.own_t[id], take = k, now, true end
             elseif own == "me" then
                 -- Just handed to us: a snapshot they sent a moment before still has it.
-                if now - (mv.own_t[id] or 0) >= 1 and lower_than_me(k) then
+                if now - (mv.own_t[id] or 0) >= 1 and lower_than_me(k) and not awake_near_me(te) then
                     mv.own[id], mv.own_t[id], take = k, now, true
                 end
             elseif type(own) == "number" and now - (mv.own_t[id] or 0) >= 1 then
@@ -1269,6 +1342,104 @@ local function lerp_angle(a, b, k)
     return a + d * k
 end
 
+-- Animation banks a copy lacks (v0.51). A copy plays the owner's clip by bank and number, but its brain is
+-- off, so the banks the game loads for a fight move never load on it: Mia T-posed on the friend's screen
+-- in every grab and when Ethan blocked her chainsaw (2026-11-12 playtest). A clip the copy doesn't have
+-- isn't played (it keeps its last move rather than T-posing); the copy asks the owner's game for that bank
+-- ("ebankreq"), which answers with the bank's motion list ("ebank"), and the copy adds it, as the friend's
+-- character does with a player's added banks (coop_dummy's add_ghost_banks).
+local eb = { info = nil, res = {}, asked = {}, added = {} }
+local function motion_of(e)
+    if e.mot == nil then e.mot = safe(e.go.call, e.go, "getComponent(System.Type)", sdk.typeof("via.motion.Motion")) or false end
+    return e.mot or nil
+end
+local function copy_has_clip(e, bank, mid)
+    local m = motion_of(e)
+    if m == nil then return true end
+    if eb.info == nil then
+        eb.info = safe(sdk.create_instance, "via.motion.MotionInfo") or false
+        if eb.info then safe(eb.info.add_ref, eb.info) end
+    end
+    if not eb.info then return true end
+    local ok, r = pcall(m.call, m, "getMotionInfo(System.UInt32, System.UInt32, via.motion.MotionInfo)", bank, mid, eb.info)
+    if not ok then return true end   -- can't tell: play it, as before
+    return r == true
+end
+local function ask_bank(e, bank, now)
+    local key = e.id .. "#" .. bank
+    local a = eb.asked[key]
+    if a == nil then a = { n = 0, t = -100 } eb.asked[key] = a end
+    if a.n >= 4 or now - a.t < 2 then return end
+    a.n, a.t = a.n + 1, now
+    send_event(string.format("ebankreq %s %d %d", e.id, chapter(), bank))
+    if a.n == 1 then log(string.format("%s copy: the owner's clip is in bank %d, which isn't here: asked for it", e.name, bank)) end
+end
+-- Owner: the motion list of one of our enemy's banks (loaded or added), for a friend's copy.
+local function bank_path(e, bank)
+    local m = motion_of(e)
+    if m == nil then return nil end
+    local nd = tonumber(safe(m.call, m, "getDynamicMotionBankCount") or 0) or 0
+    for i = 0, math.min(nd, 32) - 1 do
+        local db = safe(m.call, m, "getDynamicMotionBank", i)
+        local hd = db and safe(db.call, db, "get_MotionList")
+        local p = hd and safe(hd.call, hd, "get_ResourcePath")
+        if p and tonumber(safe(db.call, db, "get_BankID")) == bank then
+            return tostring(p), safe(db.call, db, "get_OverwriteBankID") and 1 or 0
+        end
+    end
+    local na = tonumber(safe(m.call, m, "getActiveMotionBankCount") or 0) or 0
+    for i = 0, math.min(na, 64) - 1 do
+        local ab = safe(m.call, m, "getActiveMotionBank", i)
+        local hd = ab and safe(ab.call, ab, "get_MotionList")
+        local p = hd and safe(hd.call, hd, "get_ResourcePath")
+        if p and tonumber(safe(ab.call, ab, "get_BankID")) == bank then return tostring(p), 1 end
+    end
+    return nil
+end
+function coop_enemy_bank_req(id, ch, bank)
+    if ch ~= chapter() then return end
+    local e = find_tracked(id)
+    if e == nil then return end
+    local p, ow = bank_path(e, bank)
+    if p and p:match("^%S+$") then
+        send_event(string.format("ebank %s %d %d %d %s", id, ch, bank, ow, p))
+        log(string.format("%s: friend's copy asked for bank %d: sent %s", e.name, bank, p))
+    else
+        log(string.format("%s: friend's copy asked for bank %d: not found here", e.name, bank))
+    end
+end
+function coop_enemy_bank(id, ch, bank, ow, path)
+    if ch ~= chapter() then return end
+    local e = find_tracked(id)
+    local m = e and motion_of(e)
+    if m == nil then return end
+    local key = id .. "#" .. bank .. "#" .. path
+    if eb.added[key] == m:get_address() then return end
+    local ok, err = pcall(function()
+        local hd = eb.res[path]
+        if hd == nil then
+            local r = sdk.create_resource("via.motion.MotionListResource", path)
+            r:add_ref()
+            hd = r:create_holder("via.motion.MotionListResourceHolder")
+            hd:add_ref()
+            eb.res[path] = hd
+        end
+        local db = sdk.create_instance("via.motion.DynamicMotionBank")
+        db:add_ref()
+        db:call(".ctor")
+        db:call("set_MotionList", hd)
+        db:call("set_OverwriteBankID", ow == 1)
+        db:call("set_BankID", bank)
+        local n = tonumber(m:call("getDynamicMotionBankCount") or 0) or 0
+        m:call("setDynamicMotionBankCount", n + 1)
+        m:call("setDynamicMotionBank", n, db)
+        m:call("setupMotionBank")
+    end)
+    eb.added[key] = ok and m:get_address() or nil
+    e.cur_bank, e.cur_mid = nil, nil   -- play the owner's clip again, now that it can
+    log(string.format("%s copy: bank %d (%s) %s", e.name, bank, path, ok and "added" or ("ERR " .. tostring(err))))
+end
+
 local function drive(e, h, now)
     if now - (e.vis_t or 0) > 1 then e.vis_t = now pcall(force_visible, e) pcall(unpool, e) end
     -- Woken only while its spawn point still has this body (v0.49): once the game has given the spawn point
@@ -1296,6 +1467,15 @@ local function drive(e, h, now)
     local L = layer0(e)
     if L == nil then return end
     if e.cur_bank ~= s.bank or e.cur_mid ~= s.mid then
+        -- Not a clip this copy has (v0.51): keep the last move, ask for the bank (checked twice a second).
+        local ms = e.missing
+        if ms and ms.bank == s.bank and ms.mid == s.mid and now - ms.t < 0.5 then return end
+        if not copy_has_clip(e, s.bank, s.mid) then
+            e.missing = { bank = s.bank, mid = s.mid, t = now }
+            ask_bank(e, s.bank, now)
+            return
+        end
+        e.missing = nil
         local m = e.change_motion
         if m == nil then
             for _, mm in ipairs(L:get_type_definition():get_methods()) do
@@ -1405,6 +1585,11 @@ function check_handoffs(now)
             -- Our player is down (v0.48): the boss goes to a friend who's still standing, within 30 m, the way
             -- he'd turn on the one left in the single-player fight (he stood idle over the downed player).
             local we_down = revive ~= nil and revive.downed == true
+            -- Not while it's right on top of us (v0.51, see HOLD_R): a grab would drag our Ethan with the copy.
+            if dm < HOLD_R and not we_down then best = nil end
+            -- A boss stays at least 5 s with the game that got it (v0.51): with both players close, the bot test
+            -- had Mia change games every 3 s, each change a jolt on both screens.
+            if (BOSS_FOLLOW[e.name] or BOSS_HANDOFF[e.name]) and not we_down and now - (mv.own_t[e.id] or -100) < 5 then best = nil end
             if best and ((we_down and (BOSS_HANDOFF[e.name] or is_regular(e.name)) and bd < 30) or bd + 3 < dm or (eager and bd < dm * 0.7 and dm - bd > 1)) then hand_off(e, now, best) end
         end
     end
@@ -1568,6 +1753,43 @@ function coop_enemies_on_fight(ch, list)
     for id in list:gmatch("%S+") do es.friend_fight[id] = { t = now, k = coop_event_slot or 1 } end
 end
 
+-- Handed an enemy our game can't run (v0.51). In the 2026-11-12 playtest Mia went to the friend's game
+-- twice and came back 3 s later each time for want of data, and nothing said why. Now the game that got it
+-- says why it isn't sending it ("eskip"), the other takes it back at once and logs the reason.
+local function why_not_sent(e)
+    if e.dead then return "it's dead here" end
+    if not moves_shared(e.name) then
+        return (local_cutscene and local_cutscene()) and "a cutscene is playing here" or "sharing is off here"
+    end
+    if e.dup then return "it's a second body here" end
+    if seq_hold(e.name) then return "a story sequence is playing out here" end
+    if safe(e.go.call, e.go, "get_Update") ~= true then return "it isn't awake here" end
+    return nil
+end
+function coop_enemy_check_skips(now)
+    if mv.got_t == nil or now - (mv.skip_t or 0) < 1 then return end
+    mv.skip_t = now
+    for id, t in pairs(mv.got_t) do
+        if now - t > 60 or mv.own[id] ~= "me" then
+            mv.got_t[id] = nil
+        elseif now - t > 0.5 and not mv.puppets[id] then
+            local e = find_tracked(id)
+            local why = e and why_not_sent(e)
+            if why then
+                mv.got_t[id] = nil
+                send_event(string.format("eskip %s %d %s %s", id, chapter(), e.name, why))
+                log(string.format("handed %s %s, but this game can't run it (%s): told your friend", e.name, id:sub(1, 12), why))
+            end
+        end
+    end
+end
+function coop_enemy_skip(id, ch, name, why)
+    if ch ~= chapter() or not friend_owned(id) then return end
+    mv.skip_why = mv.skip_why or {}
+    mv.skip_why[id] = why
+    log(string.format("your friend's game can't run %s %s: %s", name, id:sub(1, 12), why))
+end
+
 -- The friend handed us an enemy: run it ourselves from now on.
 function enemy_move_on_own(id, ch, name, target)
     if ch ~= chapter() then return end
@@ -1577,6 +1799,13 @@ function enemy_move_on_own(id, ch, name, target)
         if mv.puppets[id] then release(id) end
         mv.hist[id] = nil
         note("your friend handed " .. name .. " to you")
+        mv.got_t = mv.got_t or {}
+        mv.got_t[id] = os.clock()
+        if find_tracked(id) == nil then
+            -- Not in our game (v0.51): say so, so theirs takes it back now instead of freezing it for seconds.
+            send_event(string.format("eskip %s %d %s %s", id, chapter(), name, "it isn't in this game"))
+            log(string.format("handed %s %s, but it isn't in this game: told your friend", name, id:sub(1, 12)))
+        end
         -- One Molded for both (v0.48): it was handed to us because we're nearer (or the friend is down), so
         -- it comes for us. Left to itself it hadn't noticed us yet and sank back into the floor (bot test
         -- 2026-11-12), and the two games passed it back and forth.
@@ -1674,6 +1903,8 @@ local function update_movement(now)
         mv.snap_t = now
         local ok, err = pcall(write_snapshot, now)
         if not ok and not mv.snap_err then mv.snap_err = true log("snapshot ERR " .. tostring(err)) end
+        local ok2, err2 = pcall(coop_enemy_check_skips, now)
+        if not ok2 and not mv.skip_err then mv.skip_err = true log("skip check ERR " .. tostring(err2)) end
     end
     if not mv.replay and now - mv.in_t >= 1 / 30 then
         mv.in_t = now
@@ -1706,18 +1937,25 @@ local function update_movement(now)
             local fresh = h ~= nil and #h > 0 and now - h[#h].t <= 3
             if fresh then
                 -- Not while ours is still climbing out (see EMERGE_S): its own AI brings it out first.
-                if mv.puppets[id] == nil and (settled(e, now) or safe(e.go.call, e.go, "get_Update") ~= true) then puppetize(e) end
+                if mv.puppets[id] == nil and awake_near_me(e) then
+                    hold_note(e)   -- it may have hold of us (v0.51): a copy made now would drag us with it
+                elseif mv.puppets[id] == nil and (settled(e, now) or safe(e.go.call, e.go, "get_Update") ~= true) then
+                    puppetize(e)
+                end
                 mv.handed[id] = nil
                 if mv.puppets[id] then
                     local ok, err = pcall(drive, e, h, now)
                     if not ok and not mv.drive_err then mv.drive_err = true log("drive ERR " .. tostring(err)) end
                 end
-            elseif now - (mv.own_t[id] or 0) > 3 and (h == nil or #h == 0 or now - h[#h].t > 3) then
+            elseif now - (mv.own_t[id] or 0) > quiet_limit(e, mv.own[id]) and (h == nil or #h == 0 or now - h[#h].t > 3) then
+                local why = mv.skip_why and mv.skip_why[id]
                 mv.own[id], mv.own_t[id], mv.handed[id] = "me", now, nil
                 if mv.puppets[id] then release(id) end
                 mv.hist[id] = nil
                 mv.takebacks = mv.takebacks + 1
-                log("took back " .. e.name .. " " .. id .. " (no data from the friend for 3 s)")
+                if mv.skip_why then mv.skip_why[id] = nil end
+                log("took back " .. e.name .. " " .. id .. (why and (" (your friend's game can't run it: " .. why .. ")")
+                    or string.format(" (no data from the friend for %.0f s)", quiet_limit(e, 0))))
                 -- Their game couldn't run it (asleep or elsewhere in their story): handing it
                 -- straight back made Jack flicker between games every few seconds (2026-11-02).
                 mv.no_handoff = mv.no_handoff or {}

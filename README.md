@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.50.1; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.51; formerly coop-re7)
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
 bosses, which can go for any of you; the same story, doors, puzzles and key items. Each of you sees the others
@@ -37,34 +37,32 @@ Made with [coop-anything](https://github.com/cranebeaker/coop-anything). MIT lic
 
 ## Install (every player)
 
-1. Have **Resident Evil 7 biohazard on Steam**, fully updated.
-2. Download the latest release zip from the **Releases** page and unzip it anywhere.
-3. Double-click **Install.cmd**. It will:
-   - find RE7 in your Steam libraries and **copy it** to `Documents\RE7-coop` (or `C:\RE7-coop` when your
-     Documents folder is synced by OneDrive). Your normal install is not changed; the copy needs as much free
-     space as your RE7 install;
-   - download **REFramework** and its C# add-on from the official release and **check each file's SHA-256**;
-   - install the co-op files, back up your saves, and put a **Start Molded Together** shortcut on your desktop.
-4. If the installer says **.NET 10 runtime not found**, install ".NET Runtime 10" (Windows x64) from
-   https://dotnet.microsoft.com/download/dotnet/10.0 and run Install.cmd again.
+1. Have **Resident Evil 7 biohazard on Steam**, fully updated, and close the game.
+2. Download **molded-together-vX.zip** from the **Releases** page and unzip it anywhere.
+3. Double-click **Install.cmd**. That's it. It finds RE7 in your Steam libraries and puts **REFramework** (from
+   its official release, each file's SHA-256 checked) and Molded Together straight into RE7's own Steam folder.
+   Nothing is copied, and your saves are backed up first.
+   - No **.NET 10 runtime** yet? The installer offers to install it for you (press Enter). Without Windows'
+     package manager it gives you the download link instead: ".NET Runtime 10" (Windows x64) from
+     https://dotnet.microsoft.com/download/dotnet/10.0.
+   - If the Steam folder needs administrator rights, Windows asks you to allow it, and the install carries on
+     in a new window.
+4. Start RE7 from **Steam** as usual (**Play**): the mod loads with it. The very first start takes a few minutes
+   longer while REFramework sets itself up.
 
-### Or: play from Steam (no copy)
+Saving stays off until you switch on **Allow saving** (co-op menu > Options).
 
-If you'd rather press **Play in Steam** (or don't have room for a second copy of the game), double-click
-**Install into Steam.cmd** instead of Install.cmd. It installs REFramework and Molded Together straight into RE7's
-own Steam folder; nothing is copied and no shortcut is made. Then:
+**Playing RE7 without the mod:** double-click **Normal RE7 (mod off).cmd**. Your co-op settings stay; run
+**Install.cmd** again to switch it back on.
 
-- Start RE7 from Steam as usual: the mod loads with it. Saving stays off until you switch on **Allow saving**
-  (co-op menu > Options), as in the copy; your saves are backed up first.
-- To play RE7 **without** the mod, double-click **Normal RE7 (mod off).cmd**. It switches REFramework off (your
-  co-op settings stay); **Install into Steam.cmd** switches it back on, and updates the mod.
-- Steam's updates and "Verify integrity of game files" leave the mod's files alone. If an update ever stops the
-  mod loading, run **Install into Steam.cmd** again.
-- If it says it can't write to the Steam folder, right-click **Install into Steam.cmd** > **Run as administrator**.
+**Updating:** unzip the new version and run **Install.cmd** again. It keeps your settings and your friends and
+replaces only the mod files. **Everyone needs the same version**: the status line and the Friends list say when
+someone's is different. Steam's updates and "Verify integrity of game files" leave the mod's files alone; if an
+update ever stops the mod loading, run Install.cmd again.
 
-Updating: unzip the new version and run Install.cmd (or Install into Steam.cmd) again. It reuses your co-op folder, keeps your settings and
-your friends, and replaces only the mod files. **Everyone needs the same version**: the status line and the
-Friends list say when someone's is different.
+**Coming from v0.50 or older?** Those made a separate copy of the game in `Documents\RE7-coop` (or
+`C:\RE7-coop`). You don't need it any more: run the new Install.cmd, then delete that folder and its **Start
+Molded Together** desktop shortcut to get the space back (your saves aren't in it).
 
 ### Optional: full character models
 
@@ -80,7 +78,7 @@ The Lobby then says "Full character models: installed".
 
 ## Play
 
-1. Start Steam, then **Start Molded Together** (desktop shortcut). **Never played RE7?** Start a **New Game** and play
+1. Start RE7 from Steam (**Play**). **Never played RE7?** Start a **New Game** and play
    through the opening drive until you can walk around before connecting; joining from the very first screen
    (no save yet) leaves the screen black. If the game asks to create save data, switch on **Allow saving** first
    (co-op menu > Options), then answer Yes.
@@ -175,7 +173,7 @@ opens next to the REFramework menu. Its sections:
 
 **Saving.** **Allow saving** is off by default: nothing you do is saved. Turn it on to save normally. Your save folder is
 backed up automatically (at every launch and when you turn this on; the last 20 backups are kept in
-`reframework\data\save_backups`). The co-op copy shares Steam Cloud saves with your normal RE7. When one of you saves,
+`reframework\data\save_backups`). Co-op and normal RE7 use the same saves (Steam Cloud too). When one of you saves,
 the others see "Your friend saved" so you can all save at the same point.
 
 **Options** (co-op menu > Options). Options marked *same for everyone* change for the whole group when any of you
@@ -262,7 +260,7 @@ changes them.
 
 | What you see | Try |
 |---|---|
-| "Molded Together's network plugin isn't running" (red, top left), or **Test with bot** / **Invite** do nothing | REFramework's C# plugins didn't load. If you start RE7 with Steam's **Play** button, run **Install into Steam.cmd** first (Install.cmd installs into a separate copy, started with the "Start Molded Together" shortcut). Otherwise, the usual cause is Windows 11's **Smart App Control**, which blocks REFramework's unsigned files (REFramework's log, `re2_framework_log.txt` in your co-op folder, then says *"An Application Control policy has blocked this file"*; the installer warns when Smart App Control is on). It's a Windows security setting, so it's your call: Windows Security > App & browser control > Smart App Control settings. On many Windows versions it can't be switched back on afterwards without reinstalling Windows. Also check that the **.NET 10 runtime** is installed (see Install). |
+| "Molded Together's network plugin isn't running" (red, top left), or **Test with bot** / **Invite** do nothing | REFramework's C# plugins didn't load. Run **Install.cmd** again (with the game closed). If that doesn't help, the usual cause is Windows 11's **Smart App Control**, which blocks REFramework's unsigned files (REFramework's log, `re2_framework_log.txt` in RE7's Steam folder, then says *"An Application Control policy has blocked this file"*; the installer warns when Smart App Control is on). It's a Windows security setting, so it's your call: Windows Security > App & browser control > Smart App Control settings. On many Windows versions it can't be switched back on afterwards without reinstalling Windows. Also check that the **.NET 10 runtime** is installed (see Install). |
 | Your friend isn't in the list | They need Molded Together running and to be your Steam friend; or tick **Show all online friends** |
 | "Waiting for your friend" | They need to **Accept** in their co-op screen; if their game is closed, it clears by itself after 30 seconds |
 | "different version" or "Friend's packets don't match" | You're on different versions; everyone installs the same release |
@@ -280,7 +278,7 @@ changes them.
 | You see the inside of a head in first person | The full-model mod's files are in place but not set up: close the game and run **Use full models.cmd** |
 
 For a bug report, choose **Make a bug report** (co-op menu > Help and fixes, or the Molded Together window) and send the
-zip it puts on your desktop. The logs are in your co-op folder's `reframework\data`: `coop_dummy_log.txt`, `coop_menu_log.txt`,
+zip it puts on your desktop. The logs are in RE7's Steam folder (Steam > RE7 > Manage > Browse local files), in `reframework\data`: `coop_dummy_log.txt`, `coop_menu_log.txt`,
 `coop_enemies_log.txt`, `coop_world_log.txt`, `coop_story_log.txt`, `coop_revive_log.txt` and
 `coopnet_status.txt`. `coopnet_status.txt` contains your SteamID and Steam name; remove them before posting
 publicly (the bug-report zip does this for you).

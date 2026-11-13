@@ -1,6 +1,6 @@
 # use-full-models.ps1: set up "Third Person Full Model Placeholders" (Nexus RE7 mod 86) for
-# the co-op lobby only. Run it with "Use full models.cmd" after copying that mod's
-# "natives" folder into your co-op game folder.
+# the co-op lobby only. Run it with "Use full models.cmd" after downloading that mod (its zip in
+# Downloads is found by itself).
 #
 # The mod replaces the players' own body files, which also changes your first-person view
 # (you see the inside of the character's head). This moves its model files (*.mesh.*,
@@ -17,12 +17,7 @@ $ErrorActionPreference = "Stop"
 function Ok($t) { Write-Host "  OK  $t" -ForegroundColor Green }
 function Warn($t) { Write-Host "  !!  $t" -ForegroundColor Yellow }
 
-if ($GameDir -eq "") {
-    $docs = [Environment]::GetFolderPath("MyDocuments")
-    $cands = @((Join-Path $env:SystemDrive "RE7-coop"), (Join-Path $docs "RE7-coop"))
-    foreach ($c in $cands) { if (Test-Path (Join-Path $c "re7.exe")) { $GameDir = $c; break } }
-}
-# No co-op copy: the mod may be installed in RE7's Steam folder ("Install into Steam.cmd", v0.50).
+# RE7's own Steam folder with the mod in it (Install.cmd since v0.51) first; then an older version's co-op copy.
 if ($GameDir -eq "") {
     $steam = $null
     try { $steam = (Get-ItemProperty "HKCU:\Software\Valve\Steam" -ErrorAction Stop).SteamPath } catch { }
@@ -36,6 +31,11 @@ if ($GameDir -eq "") {
         $p = Join-Path $lib "steamapps\common\RESIDENT EVIL 7 biohazard"
         if (Test-Path (Join-Path $p "reframework\autorun\coop_dummy.lua")) { $GameDir = $p; break }
     }
+}
+if ($GameDir -eq "") {
+    $docs = [Environment]::GetFolderPath("MyDocuments")
+    $cands = @((Join-Path $env:SystemDrive "RE7-coop"), (Join-Path $docs "RE7-coop"))
+    foreach ($c in $cands) { if (Test-Path (Join-Path $c "re7.exe")) { $GameDir = $c; break } }
 }
 if ($GameDir -eq "" -or -not (Test-Path (Join-Path $GameDir "re7.exe"))) {
     Write-Host "Couldn't find your co-op game folder. Run: powershell -File use-full-models.ps1 -GameDir <folder>" -ForegroundColor Red

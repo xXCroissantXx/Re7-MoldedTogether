@@ -34,11 +34,30 @@ local INTERNAL = {
 }
 local WRITES = { "saveSingle()", "saveSingle(System.Int32)", "saveSlotDialog()" }
 
-local lines = {}
+-- v0.51: written at most every 2 s, the same line again only counted, the log kept to 2000 lines. It used to
+-- write the whole log on every line, and while saving is blocked the game retries its own save (dataSaveD)
+-- about 100 times a second: the 2026-11-12 playtest's log reached 650 KB, rewritten 100 times a second.
+local lines, log_dirty, log_t, rep = {}, false, 0, nil
 local function log_line(s)
-    lines[#lines + 1] = os.date("%H:%M:%S ") .. s
-    fs.write("coop_saveguard_log.txt", table.concat(lines, "\n"))
+    if rep and rep.s == s then
+        rep.n = rep.n + 1
+        lines[#lines] = rep.stamp .. s .. " (x" .. rep.n .. ", last " .. os.date("%H:%M:%S") .. ")"
+    else
+        rep = { s = s, n = 1, stamp = os.date("%H:%M:%S ") }
+        lines[#lines + 1] = rep.stamp .. s
+        if #lines > 2000 then
+            local keep = {}
+            for i = #lines - 1499, #lines do keep[#keep + 1] = lines[i] end
+            lines = keep
+        end
+    end
+    log_dirty = true
 end
+re.on_frame(function()
+    if not log_dirty or os.clock() - log_t < 2 then return end
+    log_t, log_dirty = os.clock(), false
+    fs.write("coop_saveguard_log.txt", table.concat(lines, "\n"))
+end)
 
 -- Re-read the shared settings now and then, so the menu switch applies live.
 -- Default is "strict": "write" mode let a chapter jump's save reach disk (21:22).

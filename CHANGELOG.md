@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.51 (2026-11-12)
+One-click Steam install, smoother frame rate, and Mia's fights fixed after a Chapter 1 playtest.
+
+- **One installer, straight into Steam.** **Install.cmd** now puts the mod into RE7's own Steam folder: press
+  **Play** in Steam and it loads. No second copy of the game and no shortcut any more. If the .NET 10 runtime is
+  missing it offers to install it for you, and if the Steam folder needs administrator rights it asks Windows
+  for them instead of failing. **Normal RE7 (mod off).cmd** still switches the mod off. Coming from an older
+  version: the separate copy in `Documents\RE7-coop` isn't needed any more (the installer tells you).
+- **Smoother frame rate, lower ping.** The playtest's low frame rate (and the ping that climbed to 800 ms with
+  it: the ping is measured through the game's frames) came from the mod's own housekeeping, not the network
+  (the two games only exchange a few kilobytes a second):
+  - the save guard rewrote its whole log, up to 650 KB, about 100 times a second while saving was off (the game
+    keeps retrying its save). It now writes every 2 s, counts repeats and stays small;
+  - every enemy snapshot (15 a second) asked weapons the game had already destroyed (Mia's dropped knife) for
+    their owner: 28 to 120 errors a second inside the game, each also written to REFramework's log. Dead
+    weapons are now skipped;
+  - the co-op logs were read back and rewritten every second; now they're written every 3 s from memory, and
+    the friend's character no longer logs every animation it plays (`"verbose_log": true` in
+    coop_settings.json brings those lines back).
+
+- **No more being thrown out of the map.** When Mia was passed from one game to the other in the middle of a
+  grab, the game that had her froze its Mia while she still held its player, and that player was flung up and
+  out of the map until they loaded a save. An enemy right next to your player now stays run by your game until
+  it moves off, and none is passed on while it's on top of anyone.
+- **Mia no longer T-poses on your friend's screen** in her grabs or when Ethan blocks her chainsaw. Her copy
+  fetches any animation set it's missing from the game that runs her, and a move it still can't play is skipped
+  (she keeps her last move) instead of showing a T-pose.
+- **Mia goes after both of you.** Passing her to the nearer player's game kept failing after 3 seconds (she
+  only ever attacked one player). The game that gets her now waits longer for the other game's data (6 s for a
+  boss, up to 30 s while that player is in a cutscene). A game that can't run her says why and gives her back
+  at once, and the reason goes in the log. A boss also stays at least 5 s with the game that got her, so she
+  doesn't flicker between games when you stand close together.
+- Tested with the bots in Chapter 1's attic fight: Mia fought and hurt both players, and her copy fetched the
+  sets it lacked.
+
 ## v0.50.1 (2026-11-12)
 Installer update: play from Steam. The mod itself is the same as v0.50, so v0.50 and v0.50.1 play together.
 

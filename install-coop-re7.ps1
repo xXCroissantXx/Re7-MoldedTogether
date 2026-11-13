@@ -1,47 +1,29 @@
-# install-coop-re7.ps1: one-click setup for the coop-re7 Resident Evil 7 co-op mod.
+# install-coop-re7.ps1: one-click setup for Molded Together, the Resident Evil 7 co-op mod.
 #
-#  1. Finds RE7 in your Steam libraries and copies it to a separate co-op folder
-#     (your normal install is never modified).
-#  2. Downloads REFramework and its C# add-on from the official release and checks
-#     each file's SHA-256 before using it.
-#  3. Installs the co-op files from this kit, keeping any friend ID you already set.
-#  4. Backs up your RE7 saves.
-#  5. Creates "Start Molded Together" (in the co-op folder and on your desktop).
+# Since v0.51 it installs into RE7's own Steam folder only: afterwards you start RE7 with Steam's Play button
+# and the mod loads with it. Nothing is copied.
+#  1. Checks your PC (.NET 10 runtime, which it offers to install; Windows' Smart App Control).
+#  2. Finds RE7 in your Steam libraries.
+#  3. Downloads REFramework and its C# add-on from the official release and checks each file's SHA-256.
+#  4. Installs the co-op files from this kit, keeping your co-op settings and friends.
+#  5. Backs up your RE7 saves.
 #
-# Run it with Install.cmd (double-click). Options for advanced use:
-#   -Destination <folder>   where the co-op copy goes (default: Documents\RE7-coop, or C:\RE7-coop
-#                           when Documents is synced by OneDrive)
-#   -GameSource <folder>    RE7 folder to copy from (default: found in Steam)
-#   -NoGameCopy             only (re)install the mod files into an existing co-op folder
-#   -BackupDir <folder>     where save backups go (default: next to the co-op folder)
-#   -SteamFolder            install into RE7's own Steam folder instead of a copy, so pressing Play in
-#                           Steam starts the mod (Install into Steam.cmd). No copy, no launcher.
-#   -SteamFolder -Disable   switch the mod off in the Steam folder for normal play (Normal RE7 (mod off).cmd):
-#                           renames REFramework's dinput8.dll; installing again switches it back on.
+# Run it with Install.cmd (double-click). "Normal RE7 (mod off).cmd" runs it with -Disable: that switches the
+# mod off (renames REFramework's dinput8.dll) so RE7 starts normally; Install.cmd switches it on again.
 
 param(
-    [string]$Destination = "",
-    [string]$GameSource = "",
-    [switch]$NoGameCopy,
+    [switch]$Disable,
+    [string]$GameDir = "",  # advanced: an RE7 folder to use instead of the one found in Steam
     [string]$BackupDir = "",
-    [switch]$NoShortcut,
-    [switch]$SteamFolder,
-    [switch]$Disable
+    [switch]$Elevated,      # set when the installer restarted itself as administrator
+    [switch]$SteamFolder    # accepted for older wrappers (v0.50.1's "Install into Steam.cmd"); always on now
 )
 
 $ErrorActionPreference = "Stop"
-
-# OneDrive moves big files online-only (or never finishes uploading them), which leaves the
-# game copy incomplete: it starts, but the world renders black. Keep it out of OneDrive.
+$Kit = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Base = [Environment]::GetFolderPath("MyDocuments")
 if ($Base -match "OneDrive") { $Base = $env:SystemDrive + "\" }
-if ($Destination -eq "") { $Destination = Join-Path $Base "RE7-coop" }
 if ($BackupDir -eq "") { $BackupDir = Join-Path $Base "RE7-coop-save-backups" }
-if ($Destination -match "OneDrive") {
-    Write-Host "FAILED: $Destination is inside OneDrive; pick a folder outside it with -Destination" -ForegroundColor Red
-    exit 1
-}
-$Kit = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # Pinned, verified REFramework nightly (supports the current RT build of RE7).
 $Release = "https://github.com/praydog/REFramework-nightly/releases/download/nightly-01433-d4611aef1d63effd3a736bdf9404ea702428017d"
@@ -51,35 +33,11 @@ $Downloads = @(
 )
 $AppId = "418370"
 
-function Step($n, $text) { Write-Host ""; Write-Host "[$n/6] $text" -ForegroundColor Cyan }
+function Step($n, $text) { Write-Host ""; Write-Host "[$n/5] $text" -ForegroundColor Cyan }
 function Ok($text) { Write-Host "      OK  $text" -ForegroundColor Green }
 function Warn($text) { Write-Host "      !!  $text" -ForegroundColor Yellow }
-function Fail($text) { Write-Host ""; Write-Host "FAILED: $text" -ForegroundColor Red; exit 1 }
-
-Write-Host "Molded Together installer" -ForegroundColor White
-if (-not $SteamFolder) { Write-Host "Co-op folder: $Destination" }
-
-# ---------------------------------------------------------------- 1. checks
-Step 1 "Checking your PC"
-$runtimes = ""
-try { $runtimes = (& dotnet --list-runtimes) -join "`n" } catch { }
-if ($runtimes -match "Microsoft\.NETCore\.App 10\.") { Ok ".NET 10 runtime found" }
-else {
-    Warn ".NET 10 runtime not found. The co-op network plugin needs it."
-    Warn "Install '.NET Runtime 10' (Windows x64) from https://dotnet.microsoft.com/download/dotnet/10.0"
-    Warn "and run this installer again. (Continuing; everything else will be set up.)"
-}
-# Smart App Control (Windows 11) blocks unsigned DLLs it doesn't know, REFramework's C# loader among them
-# (REFCoreDeps.dll): then the co-op network plugin never starts (no connection, no test bot). Only read here.
-$sac = $null
-try { $sac = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy" -ErrorAction Stop).VerifiedAndReputablePolicyState } catch { }
-if ($sac -eq 1) {
-    Warn "Windows' Smart App Control is ON. It can block REFramework's C# files, and then Molded Together"
-    Warn "can't connect (the game shows 'network plugin isn't running'). See the README's Troubleshooting."
-} elseif ($sac -eq 2) {
-    Warn "Windows' Smart App Control is in evaluation mode. If Windows switches it on later, it can block"
-    Warn "REFramework's C# files and Molded Together stops connecting. See the README's Troubleshooting."
-} else { Ok "Smart App Control is off" }
+function Done() { if ($Elevated) { Write-Host ""; Read-Host "Press Enter to close" | Out-Null } }
+function Fail($text) { Write-Host ""; Write-Host "FAILED: $text" -ForegroundColor Red; Done; exit 1 }
 
 function Find-RE7 {
     $steam = $null
@@ -96,84 +54,109 @@ function Find-RE7 {
     }
     return @{ Game = $null; Steam = $steam; Lib = $null }
 }
-$found = Find-RE7
 
-# Into RE7's own Steam folder (v0.50): Steam's Play button starts the mod. Steam's updates and "Verify
-# integrity" only restore Steam's own files, so the mod's extra files (dinput8.dll, reframework\) stay.
-if ($SteamFolder) {
-    if (-not $found.Game) { Fail "Couldn't find Resident Evil 7 in your Steam libraries. Install it from Steam first." }
-    $Destination = $found.Game
-    $NoGameCopy = $true
-    Write-Host "Steam game folder: $Destination"
-    if (Get-Process re7 -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($Destination) }) {
-        Fail "RE7 is running from that folder: close the game first, then run this again."
-    }
-    $dll = Join-Path $Destination "dinput8.dll"
-    $off = Join-Path $Destination "dinput8.dll.off"
-    if ($Disable) {
-        if (Test-Path $dll) {
-            Move-Item -Force $dll $off
-            Write-Host ""
-            Write-Host "Molded Together is switched OFF in your Steam folder: RE7 starts normally from Steam." -ForegroundColor Green
-            Write-Host "To switch it back on, double-click 'Install into Steam.cmd' again."
-        } else {
-            Write-Host ""
-            Write-Host "Molded Together isn't switched on in your Steam folder (nothing to do)." -ForegroundColor Green
-        }
-        exit 0
-    }
-    # Steam's folder must be writable (it usually is: Steam lets its users write there).
+function Test-Writable($dir) {
     try {
-        $probe = Join-Path $Destination ("coop-write-test-" + [guid]::NewGuid().ToString("N").Substring(0, 6) + ".tmp")
+        $probe = Join-Path $dir ("coop-write-test-" + [guid]::NewGuid().ToString("N").Substring(0, 6) + ".tmp")
         Set-Content -Path $probe -Value "x" -ErrorAction Stop
         Remove-Item $probe -Force
-    } catch {
-        Fail "Can't write to $Destination. Right-click 'Install into Steam.cmd' and choose 'Run as administrator'."
-    }
-    if (Test-Path $off) { Remove-Item -Force $off }   # it was switched off: this install switches it on again
-    Ok "installing into the Steam folder (nothing is copied)"
+        return $true
+    } catch { return $false }
 }
-if ($Disable) { Fail "-Disable only works with -SteamFolder" }
-if (-not $GameSource) { $GameSource = $found.Game }
-if (-not $NoGameCopy) {
-    if (-not $GameSource -or -not (Test-Path (Join-Path $GameSource "re7.exe"))) {
-        Fail "Couldn't find Resident Evil 7 in your Steam libraries. Install it from Steam first (or pass -GameSource)."
-    }
-    Ok "RE7 found: $GameSource"
+
+Write-Host "Molded Together installer" -ForegroundColor White
+$found = Find-RE7
+if ($GameDir -ne "") {
+    if (-not (Test-Path (Join-Path $GameDir "re7.exe"))) { Fail "$GameDir has no re7.exe" }
+    $found.Game, $found.Lib = $GameDir, $null
 }
-# RE7 has two Steam versions: the current ray-tracing (RT) build, and the older DX11 one
-# on the "dx11_non-rt" beta branch. REFramework detects either; coop-re7 is tested on RT.
+if (-not $found.Game) { Fail "Couldn't find Resident Evil 7 in your Steam libraries. Install it from Steam first." }
+$Game = $found.Game
+Write-Host "RE7 folder: $Game"
+if (Get-Process re7 -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($Game) }) {
+    Fail "RE7 is running: close the game first, then run this again."
+}
+
+# Steam's folder is usually writable for its user; when it isn't (installed under Program Files with tight
+# permissions), ask Windows for administrator rights once instead of failing.
+if (-not (Test-Writable $Game)) {
+    if ($Elevated) { Fail "Can't write to $Game even as administrator." }
+    Write-Host "The Steam folder needs administrator rights: Windows will ask you to allow it." -ForegroundColor Yellow
+    $argList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"", "-Elevated")
+    if ($Disable) { $argList += "-Disable" }
+    try { Start-Process powershell -Verb RunAs -ArgumentList $argList | Out-Null }
+    catch { Fail "Administrator rights weren't given. Right-click Install.cmd and choose 'Run as administrator'." }
+    Write-Host "Carrying on in the new window."
+    exit 0
+}
+
+$dll = Join-Path $Game "dinput8.dll"
+$off = Join-Path $Game "dinput8.dll.off"
+if ($Disable) {
+    if (Test-Path $dll) {
+        Move-Item -Force $dll $off
+        Write-Host ""
+        Write-Host "Molded Together is switched OFF: RE7 starts normally from Steam." -ForegroundColor Green
+        Write-Host "To switch it back on, double-click Install.cmd again (your co-op settings are kept)."
+    } else {
+        Write-Host ""
+        Write-Host "Molded Together isn't switched on (nothing to do)." -ForegroundColor Green
+    }
+    Done
+    exit 0
+}
+
+# ---------------------------------------------------------------- 1. checks
+Step 1 "Checking your PC"
+function Has-DotNet10 {
+    $r = ""
+    try { $r = (& dotnet --list-runtimes) -join "`n" } catch { }
+    return $r -match "Microsoft\.NETCore\.App 10\."
+}
+if (Has-DotNet10) { Ok ".NET 10 runtime found" }
+else {
+    Warn ".NET 10 runtime not found. Molded Together's network plugin needs it."
+    $wg = Get-Command winget -ErrorAction SilentlyContinue
+    $done = $false
+    if ($wg) {
+        $a = Read-Host "      Install it now with Windows' package manager (winget)? [Y/n]"
+        if ($a -notmatch '^[nN]') {
+            & winget install --id Microsoft.DotNet.Runtime.10 -e --source winget
+            $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
+            if (Has-DotNet10) { Ok ".NET 10 runtime installed"; $done = $true }
+        }
+    }
+    if (-not $done) {
+        Warn "Install '.NET Runtime 10' (Windows x64) from https://dotnet.microsoft.com/download/dotnet/10.0"
+        Warn "then start RE7. (Continuing; everything else will be set up.)"
+    }
+}
+# Smart App Control (Windows 11) blocks unsigned DLLs it doesn't know, REFramework's C# loader among them
+# (REFCoreDeps.dll): then the co-op network plugin never starts. Only read here, never changed.
+$sac = $null
+try { $sac = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy" -ErrorAction Stop).VerifiedAndReputablePolicyState } catch { }
+if ($sac -eq 1) {
+    Warn "Windows' Smart App Control is ON. It can block REFramework's C# files, and then Molded Together"
+    Warn "can't connect (the game shows 'network plugin isn't running'). See the README's Troubleshooting."
+} elseif ($sac -eq 2) {
+    Warn "Windows' Smart App Control is in evaluation mode. If Windows switches it on later, it can block"
+    Warn "REFramework's C# files and Molded Together stops connecting. See the README's Troubleshooting."
+} else { Ok "Smart App Control is off" }
+
+# ---------------------------------------------------------------- 2. the game
+Step 2 "Using RE7's own Steam folder (nothing is copied)"
+# RE7 has two Steam versions: the current ray-tracing (RT) build, and the older DX11 one on the
+# "dx11_non-rt" beta branch. REFramework detects either; Molded Together is tested on RT.
 if ($found.Lib) {
     $acf = Join-Path $found.Lib "steamapps\appmanifest_$AppId.acf"
     if ((Test-Path $acf) -and ((Get-Content $acf -Raw) -match '"BetaKey"\s+"([^"]+)"')) {
         Warn "Your RE7 is on the Steam beta branch '$($Matches[1])' (the older non-RT version)."
-        Warn "coop-re7 is tested on the current (RT) version. It should work, but if the other player"
-        Warn "doesn't appear, switch RE7 back to 'None' under Properties > Betas in Steam and reinstall."
-        Warn "Both players can be on different versions."
+        Warn "Molded Together is tested on the current (RT) version. If your friend doesn't appear, switch RE7"
+        Warn "back to 'None' under Properties > Betas in Steam and run Install.cmd again."
     }
 }
-
-# ---------------------------------------------------------------- 2. game copy
-if ($SteamFolder) { Step 2 "Using your Steam game folder (no copy)" }
-else { Step 2 "Copying the game to the co-op folder (your normal install is not changed)" }
-if ($NoGameCopy) {
-    if (-not (Test-Path (Join-Path $Destination "re7.exe"))) { Fail "-NoGameCopy was given but $Destination has no re7.exe" }
-    Ok "using the existing copy in $Destination"
-} else {
-    $size = (Get-ChildItem $GameSource -Recurse -File | Measure-Object Length -Sum).Sum
-    $drive = Get-PSDrive -Name ([IO.Path]::GetPathRoot((New-Item -ItemType Directory -Force $Destination).FullName).Substring(0, 1))
-    if ($drive.Free -lt ($size + 2GB)) {
-        Fail ("Not enough free space on {0}: need {1:N1} GB, have {2:N1} GB" -f $drive.Name, (($size + 2GB) / 1GB), ($drive.Free / 1GB))
-    }
-    Write-Host ("      copying {0:N1} GB, this can take a while..." -f ($size / 1GB))
-    robocopy $GameSource $Destination /E /COPY:DAT /R:1 /W:1 /NFL /NDL /NP /MT:8 | Out-Null
-    if ($LASTEXITCODE -ge 8) { Fail "copying the game failed (robocopy exit $LASTEXITCODE)" }
-    Ok "game copied"
-}
-if (-not $SteamFolder) {
-    Set-Content -Path (Join-Path $Destination "steam_appid.txt") -Value $AppId -Encoding Ascii
-    Ok "steam_appid.txt written (lets the copy start outside Steam's library)"
-}
+if (Test-Path $off) { Remove-Item -Force $off }   # it was switched off: installing switches it on again
+Ok "RE7 found"
 
 # ---------------------------------------------------------------- 3. REFramework
 Step 3 "Downloading REFramework (official release, hash-checked)"
@@ -183,7 +166,8 @@ New-Item -ItemType Directory -Force $tmp | Out-Null
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 foreach ($d in $Downloads) {
     $file = Join-Path $tmp $d.Name
-    Invoke-WebRequest -UseBasicParsing -Uri "$Release/$($d.Name)" -OutFile $file
+    try { Invoke-WebRequest -UseBasicParsing -Uri "$Release/$($d.Name)" -OutFile $file }
+    catch { Fail "couldn't download $($d.Name) (check your internet connection, then run Install.cmd again)" }
     $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
     if ($hash -ne $d.Sha) { Fail "$($d.Name) failed its integrity check (got $hash). Nothing was installed from it." }
     Ok "$($d.Name) verified"
@@ -193,26 +177,29 @@ $zip = [IO.Compression.ZipFile]::OpenRead((Join-Path $tmp "REFramework.zip"))
 try {
     $entry = $zip.Entries | Where-Object { $_.FullName -eq "dinput8.dll" }
     if (-not $entry) { Fail "dinput8.dll not found in REFramework.zip" }
-    [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, (Join-Path $Destination "dinput8.dll"), $true)
+    [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dll, $true)
 } finally { $zip.Dispose() }
-Expand-Archive -Path (Join-Path $tmp "csharp-api.zip") -DestinationPath $Destination -Force
+Expand-Archive -Path (Join-Path $tmp "csharp-api.zip") -DestinationPath $Game -Force
 Remove-Item $tmp -Recurse -Force
 Ok "REFramework + C# add-on installed"
 
 # ---------------------------------------------------------------- 4. mod files
-Step 4 "Installing the co-op files"
+Step 4 "Installing Molded Together"
 $src = Join-Path $Kit "reframework"
-if (-not (Test-Path $src)) { Fail "this kit's reframework folder is missing (run the installer from the unpacked kit)" }
-$config = Join-Path $Destination "reframework\data\coopnet_config.json"
+if (-not (Test-Path $src)) { Fail "this download's reframework folder is missing (unzip the whole download, then run Install.cmd from it)" }
+$config = Join-Path $Game "reframework\data\coopnet_config.json"
 $keepConfig = Test-Path $config
 Get-ChildItem $src -Recurse -File | ForEach-Object {
     $rel = $_.FullName.Substring($src.Length + 1)
-    $to = Join-Path (Join-Path $Destination "reframework") $rel
+    $to = Join-Path (Join-Path $Game "reframework") $rel
     if ($keepConfig -and $rel -eq "data\coopnet_config.json") { return }   # keep the friend ID already set
     New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
     Copy-Item $_.FullName $to -Force
 }
-Ok ("co-op scripts and network plugin installed" + $(if ($keepConfig) { " (kept your existing settings)" } else { "" }))
+# coop_aggro.lua was dropped in v0.47: an old install's copy goes.
+$old = Join-Path $Game "reframework\autorun\coop_aggro.lua"
+if (Test-Path $old) { Remove-Item -Force $old }
+Ok ("co-op scripts and network plugin installed" + $(if ($keepConfig) { " (kept your settings and friends)" } else { "" }))
 
 # ---------------------------------------------------------------- 5. saves
 Step 5 "Backing up your RE7 saves"
@@ -232,41 +219,21 @@ if (Test-Path $userdata) {
 }
 if ($any) { Ok "saves backed up to $BackupDir\$stamp" } else { Warn "no RE7 saves found yet (fine if you haven't played)" }
 
-# ---------------------------------------------------------------- 6. launcher
-if ($SteamFolder) {
-    Step 6 "Done: no launcher needed"
-    Write-Host ""
-    Write-Host "All done." -ForegroundColor Green
-    Write-Host "1. Start RE7 from Steam as usual (Play). Molded Together loads with it."
-    Write-Host "2. Saving is OFF until you switch on 'Allow saving' in the co-op menu (F9 > Options)."
-    Write-Host "   Your saves were backed up first."
-    Write-Host "3. To play RE7 without the mod, double-click 'Normal RE7 (mod off).cmd'."
-    Write-Host "   'Install into Steam.cmd' switches it back on."
-    exit 0
-}
-Step 6 "Creating the launcher"
-$launcher = Join-Path $Destination "Start Molded Together.cmd"
-Set-Content -Path $launcher -Encoding Ascii -Value "@echo off`r`ncd /d `"%~dp0`"`r`nstart `"`" `"%~dp0re7.exe`""
-Ok "Start Molded Together.cmd created"
-# Renamed in v0.43 (it was "RE7 Co-op"): the old launcher and desktop shortcut go.
-foreach ($old in @((Join-Path $Destination "Start RE7 Co-op.cmd"),
-                   (Join-Path ([Environment]::GetFolderPath("Desktop")) "Start RE7 Co-op.lnk"))) {
-    if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue }
-}
-if (-not $NoShortcut) {
-    try {
-        $lnk = Join-Path ([Environment]::GetFolderPath("Desktop")) "Start Molded Together.lnk"
-        $sh = New-Object -ComObject WScript.Shell
-        $s = $sh.CreateShortcut($lnk)
-        $s.TargetPath = Join-Path $Destination "re7.exe"
-        $s.WorkingDirectory = $Destination
-        $s.Save()
-        Ok "desktop shortcut created"
-    } catch { Warn "couldn't create the desktop shortcut; use Start Molded Together.cmd in $Destination" }
+# Older versions (before v0.51) made a separate copy of the game; it isn't needed any more.
+foreach ($c in @((Join-Path $env:SystemDrive "RE7-coop"), (Join-Path ([Environment]::GetFolderPath("MyDocuments")) "RE7-coop"))) {
+    if (Test-Path (Join-Path $c "re7.exe")) {
+        Write-Host ""
+        Warn "An older version's copy of the game is still in $c. You don't need it any more:"
+        Warn "delete that folder (and its 'Start Molded Together' desktop shortcut) to get the space back;"
+        Warn "your saves aren't in it."
+    }
 }
 
 Write-Host ""
 Write-Host "All done." -ForegroundColor Green
-Write-Host "1. Start Steam, then launch 'Start Molded Together' and load a save."
-Write-Host "2. Press Insert. In the Molded Together window, open 'Connect, saving and display'."
-Write-Host "3. Click Connect next to your friend's name; they click Accept."
+Write-Host "1. Start RE7 from Steam as usual (Play). Molded Together loads with it."
+Write-Host "   The very first start takes a few minutes longer (REFramework sets itself up once)."
+Write-Host "2. In the game, press F9 for the co-op menu: Friends > pick your friend > Invite; they press F9 and Accept."
+Write-Host "3. Saving is OFF until you switch on 'Allow saving' (F9 > Options). Your saves were backed up first."
+Write-Host "4. To play RE7 without the mod, double-click 'Normal RE7 (mod off).cmd'. Install.cmd switches it back on."
+Done

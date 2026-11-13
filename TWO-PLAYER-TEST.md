@@ -15,7 +15,7 @@ no real player has tried yet. Tick things off as you go and note anything odd (w
 
 ## 1. Connect (5 min)
 
-- [ ] Both start **Start Molded Together** and load any save.
+- [ ] Both start RE7 from Steam (**Play**) and load any save.
 - [ ] Each sees the other under *Your Steam friends in Molded Together*.
 - [ ] Player A clicks **Connect** next to Player B. Player B sees "*A* invited you to co-op" at the top left.
 - [ ] Player B presses Insert and clicks **Accept**.
@@ -302,10 +302,24 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 
 ## 23. New in v0.50.1
 
-- [ ] **Play from Steam**: run **Install into Steam.cmd**, then press Play in Steam: the co-op status shows at the
-      top left (no red "network plugin isn't running" line) and you can connect.
-- [ ] **Mod off**: run **Normal RE7 (mod off).cmd**, press Play: RE7 starts without the mod. Run **Install into
-      Steam.cmd** again: it's back, with your co-op settings.
+- [ ] **Play from Steam**: run **Install.cmd**, then press Play in Steam: the co-op status shows at the top left
+      (no red "network plugin isn't running" line) and you can connect.
+- [ ] **Mod off**: run **Normal RE7 (mod off).cmd**, press Play: RE7 starts without the mod. Run **Install.cmd**
+      again: it's back, with your co-op settings.
+
+## 24. New in v0.51
+
+- [ ] **Install**: unzip, double-click **Install.cmd**, press Play in Steam: the mod loads (status line at the top
+      left). Without .NET 10, the installer offers to install it.
+- [ ] **Frame rate**: play 15 minutes with saving off, then look at `reframework\data` in RE7's Steam folder:
+      `coop_saveguard_log.txt` stays small (repeats counted as "x123"), and `re2_framework_log.txt` has no
+      stream of "Internal game exception ... get_GameObject" lines.
+
+- [ ] **Mia's attic fight** (Chapter 1): she goes for whoever is nearer, on both screens; each of you takes hits.
+- [ ] **Her grabs and the chainsaw block**: watch her from a few metres away while she grabs your friend. She
+      plays the move (no T-pose) and neither of you is thrown out of the map.
+- [ ] If Mia only ever goes for one of you, make a bug report on both PCs: the enemy log now says why her other
+      game couldn't run her ("your friend's game can't run Em2000: ...").
 
 ## Afterwards
 

@@ -75,15 +75,21 @@ do
 end
 local function log(s)
     lines[#lines + 1] = os.date("%H:%M:%S ") .. tostring(s)
-    if #lines > 6000 then
+    if #lines > 3000 then
         local keep = {}
-        for i = #lines - 3999, #lines do keep[#keep + 1] = lines[i] end
+        for i = #lines - 1999, #lines do keep[#keep + 1] = lines[i] end
         lines = keep
     end
     log_dirty = true
 end
+-- v0.51: the moment-to-moment animation lines (each clip the friend's character plays, its checks) only with
+-- "verbose_log": true in coop_settings.json. They were most of this log, rewritten whole (up to 6000 lines)
+-- every second; it is now written every 3 s.
+local function vlog(s)
+    if settings and settings.verbose_log == true then log(s) end
+end
 re.on_frame(function()
-    if not log_dirty or os.clock() - log_t < 1 then return end
+    if not log_dirty or os.clock() - log_t < 3 then return end
     log_t, log_dirty = os.clock(), false
     fs.write("coop_dummy_log" .. SLOT_SUFFIX .. ".txt", table.concat(lines, "\n") .. "\n")
 end)
@@ -1072,7 +1078,8 @@ function play_clip(c)
     safe(anim.motion.call, anim.motion, "set_Enabled", true)
     anim.playing = c
     anim.verify_at = os.clock() + 1.0
-    log("play " .. c.name .. " [" .. tostring(c.bank) .. "/" .. tostring(c.id) .. "]: " .. (ok and "ok" or ("ERR " .. tostring(err))))
+    if ok then vlog("play " .. c.name .. " [" .. tostring(c.bank) .. "/" .. tostring(c.id) .. "]: ok")
+    else log("play " .. c.name .. " [" .. tostring(c.bank) .. "/" .. tostring(c.id) .. "]: ERR " .. tostring(err)) end
 end
 
 -- One second after a play, record what layer 0 is actually doing. If the clip
@@ -1124,11 +1131,13 @@ local function verify_playback()
         play_clip(was_idle and (anim.idle or bad) or bad)
         return
     end
-    log(string.format("verify: layer0 bank=%s motion=%s frame=%s speed=%s end=%s; Motion enabled=%s",
-        tostring(safe(layer.call, layer, "get_MotionBankID")), tostring(safe(layer.call, layer, "get_MotionID")),
-        tostring(safe(layer.call, layer, "get_Frame")), tostring(safe(layer.call, layer, "get_Speed")),
-        tostring(endf), tostring(safe(anim.motion.call, anim.motion, "get_Enabled"))))
-    if anim.counts then anim.counts("at verify") end
+    if settings and settings.verbose_log == true then
+        log(string.format("verify: layer0 bank=%s motion=%s frame=%s speed=%s end=%s; Motion enabled=%s",
+            tostring(safe(layer.call, layer, "get_MotionBankID")), tostring(safe(layer.call, layer, "get_MotionID")),
+            tostring(safe(layer.call, layer, "get_Frame")), tostring(safe(layer.call, layer, "get_Speed")),
+            tostring(endf), tostring(safe(anim.motion.call, anim.motion, "get_Enabled"))))
+        if anim.counts then anim.counts("at verify") end
+    end
     -- A fresh layer sometimes doesn't bind the first clip; retry a few times.
     if endf <= 0 and anim.playing and (anim.retries or 0) < 3 then
         anim.retries = (anim.retries or 0) + 1
@@ -1484,7 +1493,7 @@ local function run_slot(m, idx, key, want, src_layer, bank)
     anim[key .. "_retry"], anim[key .. "_retry2"] = (bank == 0) and (os.clock() + 0.15) or nil, nil
     safe(L.call, L, "set_Speed", 1.0)
     safe(L.call, L, "set_BlendRate", 1.0)
-    log(string.format("action: friend plays motion %d%s from layer %d on slot %d (mask %s, mode %s, set %s)", want,
+    vlog(string.format("action: friend plays motion %d%s from layer %d on slot %d (mask %s, mode %s, set %s)", want,
         bank ~= 0 and (" (added bank " .. bank .. ")") or "", src_layer, idx, tostring(mask), tostring(mode), tostring(anim.bank)))
 end
 

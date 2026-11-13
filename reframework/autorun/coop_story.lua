@@ -123,16 +123,18 @@ local NEAR = 12           -- m: a friend's cutscene pulls us in only this close
 local IN_STEP = 30        -- s after a shared cutscene during which their progress is copied
 
 -- Lines are collected and appended once a second (was a full read + rewrite per line).
-local log_buf, log_t = {}, 0
+local log_buf, log_t, log_tail = {}, 0, nil
 local function log(s)
     log_buf[#log_buf + 1] = os.date("%H:%M:%S ") .. tostring(s)
 end
 re.on_frame(function()
-    if #log_buf == 0 or os.clock() - log_t < 1 then return end
+    -- v0.51: every 3 s, and the file is read only once (its tail is kept here) instead of every write.
+    if #log_buf == 0 or os.clock() - log_t < 3 then return end
     log_t = os.clock()
-    local f = fs.read("coop_story_log.txt") or ""
+    local f = (log_tail or fs.read("coop_story_log.txt") or "") .. table.concat(log_buf, "\n") .. "\n"
     if #f > 200000 then f = f:sub(-100000) end
-    fs.write("coop_story_log.txt", f .. table.concat(log_buf, "\n") .. "\n")
+    log_tail = f
+    fs.write("coop_story_log.txt", f)
     log_buf = {}
 end)
 

@@ -45,14 +45,16 @@ local GAP_FOR_CATCHUP = 8    -- s without the friend's data before their return 
 local MSG_SECONDS, MARK_SECONDS = 6, 25
 local LIST_FILE = "coop_catchup.txt"
 
-local log_buf, log_t = {}, 0
+local log_buf, log_t, log_tail = {}, 0, nil
 local function log(s) log_buf[#log_buf + 1] = os.date("%H:%M:%S ") .. tostring(s) end
 re.on_frame(function()
-    if #log_buf == 0 or os.clock() - log_t < 1 then return end
+    -- v0.51: every 3 s, and the file is read only once (its tail is kept here) instead of every write.
+    if #log_buf == 0 or os.clock() - log_t < 3 then return end
     log_t = os.clock()
-    local f = fs.read("coop_talk_log.txt") or ""
+    local f = (log_tail or fs.read("coop_talk_log.txt") or "") .. table.concat(log_buf, "\n") .. "\n"
     if #f > 200000 then f = f:sub(-100000) end
-    fs.write("coop_talk_log.txt", f .. table.concat(log_buf, "\n") .. "\n")
+    log_tail = f
+    fs.write("coop_talk_log.txt", f)
     log_buf = {}
 end)
 

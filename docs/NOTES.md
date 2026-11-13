@@ -1744,3 +1744,29 @@ end
   'Install into Steam.cmd', 'Normal RE7 (mod off).cmd'. use-full-models.ps1 falls back to the Steam folder
   when it has reframework\autorun\coop_dummy.lua. Tested against a fake Steam folder (install, off, on again
   keeping coopnet_config.json, off twice); not run on a real Steam install here.
+- v0.51 (2026-11-12, Chapter 1 playtest): Mia (Em2000) handed to the guest was taken back after 3 s twice
+  ('no data from the friend'), and in between the guest's game made her a copy mid-grab: the guest was flung
+  out of the map repeatedly. Fixes in coop_enemies: HOLD_R (2 m) - an awake enemy of ours next to our player
+  is never made a copy / yielded / handed off; quiet_limit (3 s, bosses 6 s, 30 s while the friend is in a
+  cutscene, 0 after 'eskip'); 'eskip <id> <ch> <name> <why>' from the game that can't run what it was handed;
+  bosses stay 5 s with a new owner. Copy T-pose: drive() checks getMotionInfo(bank, mid) on the copy; missing
+  -> keep the last clip and 'ebankreq'; the owner answers 'ebank <id> <ch> <bank> <ow> <motlist>' from its
+  dynamic then active banks; the copy adds a DynamicMotionBank + setupMotionBank. Bot test (slot 10, c01 ->
+  1300, attic): her copy asked for bank 0 (em2000.motlist, missing while the copy had been asleep), added it;
+  bank 35 grab clips all present; bank 0 mid 40/20 still missing on the copy (skipped, no T-pose). Hand-overs
+  both ways, both bots hurt, no ERR. The friend's own logs from the playtest were not available: why his game
+  sent no data for Mia is still unknown (the new eskip log line will say).
+- v0.51 performance (same playtest: the friend had low fps and 800 ms ping). Traffic was ~15 msgs/s, a few KB/s:
+  not the cause; the ping is round-tripped through Lua's 30 Hz file writes, so low fps inflates it.
+  (1) coop_saveguard log_line rewrote the whole unbounded log per line; blocked dataSaveD fires ~100/s while
+  saving is off -> 650 KB x 100/s. Now buffered (2 s), repeats counted, 2000 lines max. (2) re2_framework_log had
+  73k 'Internal game exception ... via.Component.get_GameObject' (InvalidOperationException): 28/s = 2 per enemy
+  snapshot (15 Hz), 120/s in Ch3. Source: coop_enemies weapons_of() on ManagedWeapons entries the game destroyed
+  (Mia's knife). Now weapons_of caches 1 s per enemy and skips dead weapon addresses (forgotten each minute).
+  Not reproduced by a fresh load or a chapter jump in the bots; found from the steady 28/s rate. (3) the 7 buffered
+  logs re-read their file every second: now a kept tail, written every 3 s. coop_dummy: per-clip animation lines
+  only with settings.verbose_log; written every 3 s, 3000 lines max.
+- v0.51 install: Steam folder only. Install.cmd = install-coop-re7.ps1 (no copy, no launcher, no -Destination);
+  -Disable for 'Normal RE7 (mod off).cmd'; -SteamFolder still accepted. Offers winget Microsoft.DotNet.Runtime.10;
+  self-elevates (-Elevated) when the folder isn't writable; tells old-copy users they can delete RE7-coop.
+  'Install into Steam.cmd' removed from the kit and the repo. use-full-models.ps1 prefers the Steam folder.
