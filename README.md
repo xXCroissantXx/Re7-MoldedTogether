@@ -1,4 +1,5 @@
 # Molded Together: online co-op for Resident Evil 7 (v0.51; formerly coop-re7)
+Created by xXCroissantXx & Kingkiller1195
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
 bosses, which can go for any of you; the same story, doors, puzzles and key items. Each of you sees the others
