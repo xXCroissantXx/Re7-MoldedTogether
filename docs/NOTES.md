@@ -1904,3 +1904,31 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
 - Trade-off: after a crash the newest lines can be up to 5 s old at most when the file is big (3 s before). The
   gate keeps the first 5 of every kind, so a new failure is always visible once.
 - `verbose_log` (v0.51) still switches the per-clip animation lines on; the gate applies to those too.
+
+
+## Full models are part of Install.cmd; "Use full models.cmd" retired (v0.52; installer tested in a scratch folder only)
+
+- `install-coop-re7.ps1` has a new step 5 ("Full character models"); saves are step 6. It looks for the Nexus file
+  **Third Person Full Model Placeholders RT (2022)** (RE7 mod 86, by AfroJackX; the zip or an unzipped folder) in the
+  Downloads folder (the real one, from the shell), on the Desktop and next to / above the kit, copies its `natives`
+  folder into the game folder, moves `*.mesh.*` / `*.mdf2.*` to `natives\stm\coop` (the old `use-full-models.ps1`
+  logic, unchanged: left in place they replace the player's own first-person body) and turns on REFramework's Loose
+  File Loader. Running it again only moves what is left. `-ModelsOnly` runs just this step; `-NoPrompt` never asks or
+  waits; `-ModelsFrom <zip or folder>` names the download. `use-full-models.ps1` and `Use full models.cmd` are removed.
+- Why it is not fully automatic: the files belong to their author (the repo has never shipped them), the mod page's
+  permissions give no upload notes, and Nexus Mods only serves downloads to a signed-in account (the files tab says
+  "You have to be logged in to download files") and its terms don't allow scripts to do that. So when the zip isn't
+  found, an interactive run offers to open the page, then waits up to 10 minutes (Enter skips) for a finished zip
+  to appear in Downloads (a browser's half-written file doesn't open as a zip, so it is not taken early), and
+  carries on by itself. Without one it says how to add the models later and the install still succeeds.
+- Only the "(2022)" file is taken: that is the one the lobby's file check (`pl2001.mesh.220128762`) was worked out
+  with, and the page has newer files with other contents ("RT" main, "Main Game", "without Clancy") that this has not
+  been checked against. A different Third Person Full Model Placeholders file in Downloads is reported and left alone.
+  If the newer file is wanted later, check the probe file name in it first (installer `$ModelsProbe`, CoopNet.cs
+  `FullModels()` and `HealFullModels()`).
+- Tested with a made-up zip in a scratch game folder: copy, move (3 files), textures left in place, loader switched on,
+  second run idempotent, nothing found = a warning and exit 0, a zip next to the kit found by itself, a non-2022 file
+  ignored. Not tested: the page opening and waiting loop (interactive), the real Nexus zip's contents, a real game.
+- Credit: README "Credits" and the models section, the installer's step line, and the lobby text name AfroJackX.
+  The mod page's own description credits further people (cheezeit/goldedtoad's third-person script, alphaZomega and
+  ZombieAli's Ethan with Head, Poppyadams for a DX11 face texture); the README points to that page.

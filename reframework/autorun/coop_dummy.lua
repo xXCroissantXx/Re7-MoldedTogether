@@ -2718,7 +2718,7 @@ CHARACTERS = {
 }
 lobby = { friend_look = "default", sent_t = -100, sent_look = nil }
 
--- Files the full-model mod provides. "Use full models.cmd" moves them to natives\stm\coop\
+-- Files the full-model mod provides. Install.cmd (v0.52; before that "Use full models.cmd") moves them to natives\stm\coop\
 -- (so the player's own first-person body stays the game's: with the mod's, the camera sat
 -- inside Ethan's head), and its bodies already include the head (the game's shadow head
 -- on top showed black on Mia and off-place on Zoe).
@@ -3134,14 +3134,14 @@ local function draw_lobby()
         imgui.text("Full character models: installed (Third Person Full Model Placeholders)")
     elseif kv.fullModels == "off" then
         imgui.text("Full character models: copied in, but REFramework's Loose File Loader is off.")
-        imgui.text("  Close the game and double-click \"Use full models.cmd\" (in the Molded Together download).")
+        imgui.text("  Close the game and double-click Install.cmd (in the Molded Together download).")
     elseif kv.fullModels == "move" then
         imgui.text("Full character models: copied in but not set up (your own view may show the inside")
-        imgui.text("  of the head). Close the game and double-click \"Use full models.cmd\".")
+        imgui.text("  of the head). Close the game and double-click Install.cmd.")
     else
         imgui.text("Full character models: not installed. Without them characters other than Default")
-        imgui.text("  may lack a face. Both players can install the Nexus mod")
-        imgui.text("  \"Third Person Full Model Placeholders\" (RE7 mod 86) into their co-op folder.")
+        imgui.text("  may lack a face. Download the Nexus mod \"Third Person Full Model Placeholders RT (2022)\"")
+        imgui.text("  (RE7 mod 86, by AfroJackX) into Downloads, then double-click Install.cmd.")
     end
     local changed, v = imgui.combo("You appear to your friend as", idx, names)
     if changed and CHARACTERS[v] then

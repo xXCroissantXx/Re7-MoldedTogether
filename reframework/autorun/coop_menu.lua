@@ -962,10 +962,10 @@ function PAGES.you()
         items[#items + 1] = { info = true, text = "Full character models: installed." }
     elseif fm == "off" or fm == "move" then
         items[#items + 1] = { info = true, text = "Full character models: copied in but not set up." }
-        items[#items + 1] = { info = true, text = "Close the game and run Use full models.cmd." }
+        items[#items + 1] = { info = true, text = "Close the game and run Install.cmd." }
     else
         items[#items + 1] = { info = true, text = "Full character models: not installed: characters" }
-        items[#items + 1] = { info = true, text = "other than Default may lack a face (Nexus mod 86)." }
+        items[#items + 1] = { info = true, text = "other than Default may lack a face. See Install.cmd (Nexus mod 86)." }
     end
     return "Your character", items
 end

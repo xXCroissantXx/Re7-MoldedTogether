@@ -1496,7 +1496,7 @@ public class CoopNet
     // paths. REFramework only reads loose files with its Loose File Loader on, so:
     // "1" = files present and loader on, "off" = files present but loader off, "0" = none.
     // Re-checked every 10 s (players copy the files in while the game runs).
-    // Full-model files back in the game's own folders (v0.48). "Use full models.cmd" moves the
+    // Full-model files back in the game's own folders (v0.48). The installer (Install.cmd, step 5; before v0.52 "Use full models.cmd") moves the
     // mod's models to natives\stm\coop so only the friend's character uses them. In the
     // 2026-11-10 session they were in the game's own folders again (as well as under coop), and
     // the player saw their own character's face in first person. At every start, a model file
@@ -1545,7 +1545,7 @@ public class CoopNet
         try
         {
             var game = Path.GetFullPath(Path.Combine(s_dataDir, "..", ".."));
-            // "Use full models.cmd" moves the mod's models under natives\stm\coop (left in
+            // The installer moves the mod's models under natives\stm\coop (left in
             // place they also replace the player's own first-person body).
             var f = Path.Combine(game, "natives", "stm", "coop", "character", "player", "pl2000", "pl2001", "pl2001.mesh.220128762");
             var unmoved = Path.Combine(game, "natives", "stm", "character", "player", "pl2000", "pl2001", "pl2001.mesh.220128762");

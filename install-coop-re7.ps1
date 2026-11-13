@@ -6,17 +6,28 @@
 #  2. Finds RE7 in your Steam libraries.
 #  3. Downloads REFramework and its C# add-on from the official release and checks each file's SHA-256.
 #  4. Installs the co-op files from this kit, keeping your co-op settings and friends.
-#  5. Backs up your RE7 saves.
+#  5. Full character models: sets up "Third Person Full Model Placeholders RT (2022)" by AfroJackX (Nexus RE7 mod
+#     86) from the zip you downloaded (see below). Before v0.52 this was a separate "Use full models.cmd".
+#  6. Backs up your RE7 saves.
 #
 # Run it with Install.cmd (double-click). "Normal RE7 (mod off).cmd" runs it with -Disable: that switches the
 # mod off (renames REFramework's dinput8.dll) so RE7 starts normally; Install.cmd switches it on again.
+#
+# The models are the mod author's files, so this kit doesn't ship them and can't fetch them for you: Nexus Mods
+# only lets a signed-in account download (a free account is enough), and its terms don't allow scripts to do
+# it. So step 5 looks for the zip in Downloads (and on the Desktop and next to this kit), and if it isn't there
+# it opens the mod's page, waits for you to click "Manual download", and carries on by itself once the zip
+# is in Downloads. Skipping it is fine: the mod works without it, characters other than Ethan may lack a face.
 
 param(
     [switch]$Disable,
     [string]$GameDir = "",  # advanced: an RE7 folder to use instead of the one found in Steam
     [string]$BackupDir = "",
     [switch]$Elevated,      # set when the installer restarted itself as administrator
-    [switch]$SteamFolder    # accepted for older wrappers (v0.50.1's "Install into Steam.cmd"); always on now
+    [switch]$SteamFolder,   # accepted for older wrappers (v0.50.1's "Install into Steam.cmd"); always on now
+    [switch]$ModelsOnly,    # only step 5 (set the full models up now, e.g. after downloading them later)
+    [switch]$NoPrompt,      # never ask or wait (step 5 then only uses a download it finds at once)
+    [string]$ModelsFrom = "" # advanced: the models download (zip or unzipped folder) to use instead of searching
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,7 +44,7 @@ $Downloads = @(
 )
 $AppId = "418370"
 
-function Step($n, $text) { Write-Host ""; Write-Host "[$n/5] $text" -ForegroundColor Cyan }
+function Step($n, $text) { Write-Host ""; Write-Host "[$n/6] $text" -ForegroundColor Cyan }
 function Ok($text) { Write-Host "      OK  $text" -ForegroundColor Green }
 function Warn($text) { Write-Host "      !!  $text" -ForegroundColor Yellow }
 function Done() { if ($Elevated) { Write-Host ""; Read-Host "Press Enter to close" | Out-Null } }
@@ -64,6 +75,130 @@ function Test-Writable($dir) {
     } catch { return $false }
 }
 
+# ---------------------------------------------------------------- full character models (step 5)
+# RE7's own player models are incomplete (no real face). "Third Person Full Model Placeholders" by AfroJackX
+# (Nexus RE7 mod 86) replaces them with complete ones under the same paths. Left where it puts them they would
+# also replace your own first-person body (you'd see the inside of your character's head), so the model files
+# (*.mesh.*, *.mdf2.*) are moved to natives\stm\coop, which only the co-op lobby reads; textures stay where they
+# are. REFramework only reads loose files with its Loose File Loader on, so that is switched on too. CoopNet.cs
+# keeps the move right at every start. Running this again only moves what's left.
+$ModelsPage = "https://www.nexusmods.com/residentevil7/mods/86?tab=files"
+$ModelsFile = "Third Person Full Model Placeholders RT (2022)"   # the Nexus file this is set up and tested with
+$ModelsProbe = "character\player\pl2000\pl2001\pl2001.mesh.220128762"   # a file only that mod has (the lobby checks it too)
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+function Get-DownloadsFolder {
+    try {
+        $p = (New-Object -ComObject Shell.Application).Namespace("shell:Downloads").Self.Path
+        if ($p) { return $p }
+    } catch { }
+    return (Join-Path $env:USERPROFILE "Downloads")
+}
+
+# A zip that has finished downloading (a browser's half-written file doesn't open) and has a natives folder.
+function Test-ModelsZip($path) {
+    try {
+        $z = [IO.Compression.ZipFile]::OpenRead($path)
+        try { return [bool]($z.Entries | Where-Object { $_.FullName -match '(^|[\\/])natives[\\/]' } | Select-Object -First 1) }
+        finally { $z.Dispose() }
+    } catch { return $false }
+}
+
+# The download (zip, or an unzipped folder that still has its natives folder), newest first.
+function Find-ModelsDownload {
+    if ($ModelsFrom -ne "") { if (Test-Path $ModelsFrom) { return (Get-Item $ModelsFrom) } else { return $null } }
+    $places = @((Get-DownloadsFolder), [Environment]::GetFolderPath("Desktop"), $Kit, (Split-Path -Parent $Kit))
+    foreach ($p in $places) {
+        if (-not (Test-Path $p)) { continue }
+        foreach ($c in (Get-ChildItem $p -Filter "$ModelsFile*" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)) {
+            if ($c.PSIsContainer) {
+                if (Get-ChildItem $c.FullName -Directory -Recurse -Filter "natives" -ErrorAction SilentlyContinue | Select-Object -First 1) { return $c }
+            } elseif ($c.Extension -eq ".zip" -and (Test-ModelsZip $c.FullName)) { return $c }
+        }
+    }
+    return $null
+}
+
+function Install-FullModels {
+    $stm = Join-Path $Game "natives\stm"
+    $coopProbe = Join-Path $stm ("coop\" + $ModelsProbe)
+    $plainProbe = Join-Path $stm $ModelsProbe
+    Write-Host "      Models by AfroJackX: 'Third Person Full Model Placeholders' (Nexus RE7 mod 86). Thank you!"
+    if (-not ((Test-Path $coopProbe) -or (Test-Path $plainProbe))) {
+        $dl = Find-ModelsDownload
+        if (-not $dl -and -not $NoPrompt -and [Environment]::UserInteractive) {
+            Write-Host "      Not in your Downloads folder yet. They come from Nexus Mods, where downloading needs you to be"
+            Write-Host "      signed in (a free account is enough); a script can't do that for you."
+            $a = Read-Host "      Open the page now? Click 'Manual download' on '$ModelsFile' [Y/n]"
+            if ($a -notmatch '^[nN]') {
+                try { Start-Process $ModelsPage } catch { Warn "couldn't open a browser: go to $ModelsPage" }
+                Write-Host "      Waiting for the download to finish (up to 10 minutes). Press Enter to skip..."
+                $until = (Get-Date).AddMinutes(10)
+                while (-not $dl -and (Get-Date) -lt $until) {
+                    Start-Sleep -Seconds 2
+                    $dl = Find-ModelsDownload
+                    try { if (-not $dl -and [Console]::KeyAvailable) { [void][Console]::ReadKey($true); break } } catch { }
+                }
+            }
+        }
+        if (-not $dl) {
+            $other = Get-ChildItem (Get-DownloadsFolder) -Filter "Third Person Full Model Placeholders*" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -notlike "$ModelsFile*" } | Select-Object -First 1
+            if ($other) { Warn "found '$($other.Name)', but Molded Together is set up for the file named '$ModelsFile'." }
+            Warn "Full character models not installed (the mod works without them; characters other than Ethan may lack a face)."
+            Warn "To add them later: download '$ModelsFile' from $ModelsPage"
+            Warn "into your Downloads folder (no need to unzip it), then double-click Install.cmd again."
+            return
+        }
+        Write-Host "      Found the download: $($dl.Name)"
+        $from = $dl.FullName
+        $tmpx = $null
+        if (-not $dl.PSIsContainer) {
+            $tmpx = Join-Path ([IO.Path]::GetTempPath()) ("coop-re7-models-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+            Expand-Archive -Path $dl.FullName -DestinationPath $tmpx -Force
+            $from = $tmpx
+        }
+        $natives = Get-ChildItem $from -Directory -Recurse -Filter "natives" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($natives) {
+            Copy-Item -Path $natives.FullName -Destination $Game -Recurse -Force
+            Ok "the mod's files copied into the game folder"
+        } else { Warn "that download has no 'natives' folder; nothing was installed from it" }
+        if ($tmpx) { Remove-Item -Recurse -Force $tmpx -ErrorAction SilentlyContinue }
+    }
+
+    $moved = 0
+    foreach ($top in @("character", "ch8", "ch9")) {
+        $dir = Join-Path $stm $top
+        if (-not (Test-Path $dir)) { continue }
+        Get-ChildItem $dir -Recurse -File | Where-Object { $_.Name -match '\.(mesh|mdf2)\.\d+$' } | ForEach-Object {
+            $rel = $_.FullName.Substring($stm.Length + 1)
+            $dest = Join-Path (Join-Path $stm "coop") $rel
+            New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
+            Move-Item -Force $_.FullName $dest
+            $moved++
+        }
+    }
+    if ($moved -gt 0) { Ok "moved $moved model files to natives\stm\coop (your own first-person view stays normal)" }
+    elseif (Test-Path $coopProbe) { Ok "model files already set up" }
+    else { Warn "no model files found: nothing to set up"; return }
+
+    $cfg = Join-Path $Game "re2_fw_config.txt"
+    if (Test-Path $cfg) {
+        $text = Get-Content $cfg -Raw
+        if ($text -match 'LooseFileLoader_Enabled=false') {
+            Set-Content -Path $cfg -Value ($text -replace 'LooseFileLoader_Enabled=false', 'LooseFileLoader_Enabled=true') -NoNewline -Encoding Ascii
+            Ok "switched on REFramework's Loose File Loader"
+        } elseif ($text -notmatch 'LooseFileLoader_Enabled=true') {
+            Add-Content -Path $cfg -Value "LooseFileLoader_Enabled=true" -Encoding Ascii
+            Ok "switched on REFramework's Loose File Loader"
+        } else { Ok "Loose File Loader already on" }
+    } else {
+        Set-Content -Path $cfg -Value "LooseFileLoader_Enabled=true" -Encoding Ascii
+        Ok "switched on REFramework's Loose File Loader"
+    }
+    Ok "full character models installed (the Lobby says 'Full character models: installed')"
+}
+
 Write-Host "Molded Together installer" -ForegroundColor White
 $found = Find-RE7
 if ($GameDir -ne "") {
@@ -84,6 +219,8 @@ if (-not (Test-Writable $Game)) {
     Write-Host "The Steam folder needs administrator rights: Windows will ask you to allow it." -ForegroundColor Yellow
     $argList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"", "-Elevated")
     if ($Disable) { $argList += "-Disable" }
+    if ($ModelsOnly) { $argList += "-ModelsOnly" }
+    if ($ModelsFrom -ne "") { $argList += @("-ModelsFrom", "`"$ModelsFrom`"") }
     try { Start-Process powershell -Verb RunAs -ArgumentList $argList | Out-Null }
     catch { Fail "Administrator rights weren't given. Right-click Install.cmd and choose 'Run as administrator'." }
     Write-Host "Carrying on in the new window."
@@ -102,6 +239,13 @@ if ($Disable) {
         Write-Host ""
         Write-Host "Molded Together isn't switched on (nothing to do)." -ForegroundColor Green
     }
+    Done
+    exit 0
+}
+
+if ($ModelsOnly) {
+    Step 5 "Full character models (the Nexus mod by AfroJackX)"
+    Install-FullModels
     Done
     exit 0
 }
@@ -201,8 +345,12 @@ $old = Join-Path $Game "reframework\autorun\coop_aggro.lua"
 if (Test-Path $old) { Remove-Item -Force $old }
 Ok ("co-op scripts and network plugin installed" + $(if ($keepConfig) { " (kept your settings and friends)" } else { "" }))
 
-# ---------------------------------------------------------------- 5. saves
-Step 5 "Backing up your RE7 saves"
+# ---------------------------------------------------------------- 5. full character models
+Step 5 "Full character models (the Nexus mod by AfroJackX)"
+Install-FullModels
+
+# ---------------------------------------------------------------- 6. saves
+Step 6 "Backing up your RE7 saves"
 $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $userdata = Join-Path $found.Steam "userdata"
 $any = $false
