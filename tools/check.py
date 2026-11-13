@@ -47,6 +47,7 @@ for args in (['empty', 'x', '100000'], ['rich', 'x', '100000'], ['rich', 'menus'
          '\n'.join(logged[:10]) + r.stderr[-800:])
 
 for test, marker in (('story_test.py', 'all passed'), ('menu_test.py', 'checks passed'), ('give_test.py', 'checks passed'),
+                     ('drop_test.py', 'checks passed'),
                      ('voice_test.py', 'checks passed'), ('light_test.py', 'checks passed'), ('plugin_test.py', 'checks passed')):
     r = run([os.path.join(HARNESS, test), SCRIPTS])
     fails = [l for l in r.stdout.splitlines() if l.startswith('FAIL')]

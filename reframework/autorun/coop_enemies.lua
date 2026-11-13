@@ -708,12 +708,13 @@ local function game_ready()
 end
 
 HELD_IN_CUTSCENE = { open = true, close = true, unlock = true, drawer = true, switch = true, intr = true,
-    ["break"] = true, dbreak = true, took = true, got = true, kill = true, catchup = true, own = true }
+    ["break"] = true, dbreak = true, took = true, got = true, kill = true, catchup = true, own = true,
+    drop = true }   -- v0.51: a friend's discarded item is put down after our cutscene, not during it
 DROPPED_IN_CUTSCENE = { phys = true, dang = true, dmg = true, ehp = true }
 -- Seconds after which a message that waited (while we loaded) is dropped (v0.39). A friend's
 -- scene from a minute ago, or a hand-off of an enemy that has moved on since, would only do
 -- harm now. Lasting changes (doors, drawers, pickups...) have no limit.
-STALE_AFTER = { story = 20, own = 10, phys = 3, dang = 3, dmg = 5, talk = 60, heal = 10 }
+STALE_AFTER = { story = 20, own = 10, phys = 3, dang = 3, dmg = 5, talk = 60, heal = 10, drop = 120 }
 
 -- Changes kept during our cutscene: applied 1 s after it ends (and after a scene settles).
 local function release_held(now)

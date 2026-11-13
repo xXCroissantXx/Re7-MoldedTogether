@@ -1248,6 +1248,8 @@ function PAGES.options()
         "Cutscenes and story progress one of you reaches count for both; the same for everyone.")
     items[#items + 1] = setting_toggle("Share supplies", "share_supplies", false, true,
         "One copy of ammo and healing for everyone (harder); the same for everyone.")
+    items[#items + 1] = setting_toggle("Drop discarded items for your friend", "drop_on_discard", true, true,
+        "An item you discard in the inventory also lands on your friend's ground, and theirs on yours, to pick up. Supplies only; the same for everyone.")
     items[#items + 1] = setting_toggle("Share interactions", "share_interactions", true, true,
         "Fridges, switches, locks and chains done by one of you are done for all.")
     items[#items + 1] = setting_toggle("Share phone calls", "share_phones", true, true, "One of you answers, everyone gets the call.")
