@@ -48,6 +48,8 @@ Made with [coop-anything](https://github.com/cranebeaker/coop-anything). MIT lic
      https://dotnet.microsoft.com/download/dotnet/10.0.
    - If the Steam folder needs administrator rights, Windows asks you to allow it, and the install carries on
      in a new window.
+   - **Full character models** (see below) are set up in the same run: the installer opens the mod's Nexus page,
+     waits while you click **Manual download**, and carries on by itself when the file is in your Downloads folder.
 4. Start RE7 from **Steam** as usual (**Play**): the mod loads with it. The very first start takes a few minutes
    longer while REFramework sets itself up.
 
@@ -65,15 +67,21 @@ update ever stops the mod loading, run Install.cmd again.
 `C:\RE7-coop`). You don't need it any more: run the new Install.cmd, then delete that folder and its **Start
 Molded Together** desktop shortcut to get the space back (your saves aren't in it).
 
-### Optional: full character models
+### Full character models (set up by Install.cmd)
 
-RE7's own full-body player models are incomplete (no real face). For complete characters in the Lobby, each
-player can add the Nexus mod **Third Person Full Model Placeholders** (RE7 mod 86, by AfroJackX):
+RE7's own full-body player models are incomplete (no real face). For complete characters in the Lobby, **Install.cmd**
+sets up the Nexus mod **Third Person Full Model Placeholders** (RE7 mod 86), made by **AfroJackX**; all credit
+for the models and their setup goes to them. Please endorse the mod on its
+[Nexus page](https://www.nexusmods.com/residentevil7/mods/86). The file used is **Third Person Full Model
+Placeholders RT (2022)**.
 
-1. Download its **RT** main file from Nexus into your **Downloads** folder (no need to unzip it).
-2. With the game closed, double-click **Use full models.cmd** (in this download). It finds the download, copies
-   the models into a folder only the co-op mod reads (so your own first-person view stays normal), and switches
-   on REFramework's Loose File Loader.
+Its files belong to their author, so this download doesn't contain them, and an installer can't fetch them for
+you: Nexus Mods only lets a signed-in account download (a free one is enough) and doesn't allow scripts to do it.
+So Install.cmd asks to open the page; click **Manual download** on that file and leave the installer window open:
+it notices the file in your Downloads folder (no need to unzip it), copies the models in, moves them to a
+folder only the co-op mod reads (so your own first-person view stays normal), and switches on REFramework's
+Loose File Loader. If you already have the zip in Downloads, it just goes ahead. You can say no and add them later:
+download the file and run **Install.cmd** again.
 
 The Lobby then says "Full character models: installed".
 
@@ -276,7 +284,8 @@ changes them.
 | F9 opens REFramework's menu too | F9 is your REFramework menu key: pick another for the co-op menu (Options > **Key for this menu**) |
 | The lobby's Start says "waiting" | It names who it waits for: everyone **Ready**, and for a chapter start everyone in the game (not the title screen) |
 | Pause menu won't open | Wait 5 seconds out of any cutscene (the mod clears a stuck video flag), or restart |
-| You see the inside of a head in first person | The full-model mod's files are in place but not set up: close the game and run **Use full models.cmd** |
+| You see the inside of a head in first person | The full-model mod's files are in place but not set up: close the game and run **Install.cmd** again |
+| The Lobby says "Full character models: not installed" | Download **Third Person Full Model Placeholders RT (2022)** from [Nexus](https://www.nexusmods.com/residentevil7/mods/86?tab=files) into Downloads and run **Install.cmd** again |
 
 For a bug report, choose **Make a bug report** (co-op menu > Help and fixes, or the Molded Together window) and send the
 zip it puts on your desktop. The logs are in RE7's Steam folder (Steam > RE7 > Manage > Browse local files), in `reframework\data`: `coop_dummy_log.txt`, `coop_menu_log.txt`,
@@ -309,3 +318,12 @@ those updates. The scripts:
 
 Details and everything learned along the way are in [docs/NOTES.md](docs/NOTES.md) and the coop-anything
 write-up `games/resident-evil-7`.
+
+## Credits
+
+- **AfroJackX**: [Third Person Full Model Placeholders](https://www.nexusmods.com/residentevil7/mods/86) (Nexus RE7
+  mod 86), the complete character models that **Install.cmd** sets up for the Lobby (the **RT (2022)** file). Not
+  included in this download: each player gets it from Nexus. The mod's page credits the people its own work builds
+  on; please see it there.
+- **praydog**: [REFramework](https://github.com/praydog/REFramework), which this mod runs on (installed by
+  Install.cmd from its official release).
