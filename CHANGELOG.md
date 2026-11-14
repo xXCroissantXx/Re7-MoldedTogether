@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.52 (2026-11-13)
+Chapter 1 in co-op, after a playtest of it. Every fix was tested with two copies of the game playing each other.
+
+- **No more black screen when you connect early.** You no longer have to wait until both of you have pressed
+  New Game and watched the opening before connecting. The black screen came from your friend's cutscene being
+  started in your game while it was still loading (New Game, Continue or a chapter change). Now nothing of
+  your friend's starts while your game loads or in its first seconds after, and a cutscene that was waiting
+  for you is dropped when a load starts. If the screen is ever left black anyway, it fades back in by itself
+  after 25 seconds.
+- **The guest house's back door waits for everyone.** It slams shut and locks behind whoever goes in first. Now
+  it stays open until everyone is through, then shuts and locks. If it had already locked with someone
+  outside, it opens again for them.
+- **Cutscenes bring everyone in.** When one of you starts a cutscene, everyone else in the chapter (up to 200 m
+  away) is brought next to them and sees it too, as soon as it has loaded. Before, a friend more than 30 m away
+  usually missed it. (Options: switch off with `"scene_pull": false` in coop_settings.json.)
+- **Into Chapter 3 together.** When Jack knocks Ethan out at the end of Chapter 1, the other player's game
+  follows into Chapter 3 by itself (it used to stay behind, and loading a save was the only way out). The same
+  goes for every chapter change: the guest follows the host after 12 seconds.
+- **VHS tapes follow faster.** Your friend follows you into a tape after 1 second (was 6) and keeps trying for 5
+  minutes if their game is busy (was 90 seconds). Nobody is pulled back into a tape they've already played.
+- **No extra Ethan after small interactions.** After your friend shook the fence, pressed a button or opened
+  the van door, a second, frozen Ethan stayed inside their character on your screen. It's gone.
+- **Bigger co-op menu text** (Kingkiller1195): a **Menu text size** option in Options.
+
 ## v0.51 (2026-11-12)
 One-click Steam install, smoother frame rate and lower ping, items you drop for your friend, and Mia's fights fixed
 after a Chapter 1 playtest. By xXCroissantXx and Kingkiller1195 (now credited as Molded Together's developers).

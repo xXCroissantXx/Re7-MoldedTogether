@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.51; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.52; formerly coop-re7)
 Created by xXCroissantXx & Kingkiller1195
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
@@ -278,7 +278,7 @@ changes them.
 | A Molded or boss stands still on your screen | It's being run by your friend's game: it moves again within a few seconds. If not, tell us in a bug report |
 | Stuck after a cutscene, can't move | Restart the game and load again |
 | Black screen or outside the map after chapter jumps | Restart the game |
-| Black screen but you can move, on a brand-new game | Start a **New Game** alone, play the opening until you can walk, then connect |
+| Black screen but you can move, on a brand-new game | Fixed in v0.52 (you can connect before New Game). If it still happens, it fades back in by itself after 25 seconds; tell us in a bug report |
 | "Create save data?" keeps coming back | F9 > **Options** > **Allow saving**, then Yes |
 | An extra mouse pointer on screen | The REFramework menu is open: close it with Insert (or your menu key, see *No Insert key*) |
 | The co-op menu's text is too small (or too big) | Options > **Menu text size**: Normal, Large (the default) or Extra large. It also follows your screen's size, and the on-screen status lines use it too |

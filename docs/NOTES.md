@@ -1949,3 +1949,32 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
 - Not checked in the game: how the sheets look at Extra large on a 16:9 1080p screen (the form's header row at the top
   of each sheet is the tightest; its Mono / Stereo boxes are skipped when they don't fit, as before) and on a small
   window. The menu scenarios cover the sizes, the option and the screen factor, not the look.
+- v0.52 (2026-11-13, Chapter 1 after the 2026-11-12 playtest; every item bot-tested). Test tools in local/bottest:
+  opening_test.py (--new-game uses app.GameManager.newGameRequest: a real fresh run, c01 from 0), fade_lib.lua
+  (app.FadeControl 'Fade_In_Out_Black'.get_FadeState: 0 clear), backdoor_test.py, door_probe.py, door_hooks.lua,
+  intr_body_test.py, grab_rec.py, ch_follow_test.py, obj_probe.py, type_probe.py.
+  (1) Black screen: reproduced by a host scene waiting in the guest (pending) and started as the guest's game
+  began loading the opening: IsSceneLoading stays true for good. A real New Game alone, or 2/5/15 s after the
+  host's, came out clean. coop_story: coop_story_settle() on newGameRequest/_Chapter7, chapterJumpRequest and
+  loadLevelUsingLoadData (via on_load) drops ss.pending and makes busy_here 'loading' for SETTLE_S=12 s; also a
+  player-object swap (after the first player seen), IsTitleDisp, and a black fade (coop_black_fade). Watchdog: linked,
+  black fade 25 s, no cutscene, not settling -> FadeControl.requestFadeIn(). A jump issued while a scene is
+  starting still hangs the load (a test-only race; players can't do it).
+  (2) Guest house back door sm0192_BackEntranceDoor01A_AutoLock (19.3,0,4.5): at c01 step 100 the game calls
+  DoorPush.requestAutoClose(speed, ease, doLock=true, doMute). coop_world holds that call (SKIP_ORIGINAL) for
+  'AutoLock' doors while coop_door_splits (a friend within 30 m on the other side or in the doorway); sides come
+  from Front/BackInteractDoorList positions (the hinge transform faced along the wall). Released with the same
+  call when everyone is through; an AutoLock door locked with a split is unlockDoor + door_open'ed and held.
+  Bot test: held in both games, then 'everyone is through, it shuts' in both, state 1 locked.
+  (3) Scenes: SCENE_PULL_MAX=200 m for host and guest (was guest 30, host 12); teleport_to_friend(maxd); long warps
+  held at the target 6 s if the player drops (floor not streamed); PENDING_PULLED 30 s. Bot test: guest 130 m
+  away brought over, scene started 2 s after the host's.
+  (4) Chapter follow (coop_dummy): guest jumps to the host's later main chapter (order 2,4,13,5,14,6) after
+  FOLLOW_CH_AFTER=12 s. Bot test: host into Chapter123, guest followed 12 s later, both played c01e08_00 and
+  c03e04_00 and reached c03e00_00 together.
+  (5) Tapes: forced follow after 1 s, for 300 s; tapes_played blocks following back into one. Not bot-tested.
+  (6) Extra Ethan: a retargeted interaction sets the anchor VrDummyPlayer's DrawSelf true (its own pl0001 mesh)
+  and nothing reset it; anchor_guard hides it 4x/s. Bot test (sheet metal, slot 12): no anchor body drawn.
+  (7) Grabs: a Molded grab leaves the player's layer 0 on Idle (the game animates only the first-person camera);
+  hits 610-999 are sent and shown. No 'being grabbed' flag exists (PlayerEventActionManager has only isOnLadder),
+  so no grab pose is made up. The boss's grab clips were the v0.51 bank fetch.

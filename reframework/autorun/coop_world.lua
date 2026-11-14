@@ -197,6 +197,149 @@ local function door_close(d)
     if not ok then ok, err = pcall(d.call, d, "requestClosed(System.Boolean)", false) end
     return ok, err
 end
+
+-- Auto-locking doors (v0.51). Some doors shut and lock behind the player by themselves: the guest house's back
+-- entrance (sm0192_BackEntranceDoor01A_AutoLock) is swung shut and locked at Chapter 1's step 100 with
+-- requestAutoClose(speed, ease, doLock = true) (bot test 2026-11-13). In the 2026-11-12 playtest it locked one
+-- player outside for good. Now such a door only shuts while everyone is on the same side of it: while a friend
+-- (same chapter, within AUTOLOCK_R m) is on the other side or in the doorway, the game's shut is held back,
+-- and a door already shut and locked (their game took the step from ours) is unlocked and opened. Once
+-- everyone is through, it shuts and locks as the game wanted.
+AUTOLOCK_R = 30
+ws.autolock = ws.autolock or { held = {}, opened = {}, pass = false }
+local function is_autolock(d)
+    local go = safe(d.call, d, "get_GameObject")
+    local n = go and tostring(safe(go.call, go, "get_Name") or "") or ""
+    return n:find("AutoLock", 1, true) ~= nil, n
+end
+local function friend_positions()
+    local out = {}
+    for k = 1, 3 do
+        local env = coop_slot_envs and coop_slot_envs[k]
+        local fn = env and rawget(env, "coop_friend_sample")
+        if fn == nil and k == 1 then fn = coop_friend_sample end
+        local smp = fn and safe(fn)
+        if smp and smp.pos then out[#out + 1] = smp.pos end
+    end
+    return out
+end
+-- Which side of the door a point is on (signed distance across the doorway), and how far from it. The doorway's
+-- direction comes from the door's two interaction points (FrontInteractDoorList / BackInteractDoorList, one on
+-- each side): a door's own transform is its hinge, turned any way (the guest house back door's faces along the
+-- wall, bot test 2026-11-13). Found once per door; the hinge's facing only if a door has no such points.
+local door_axes = setmetatable({}, { __mode = "k" })
+local function door_axis(d)
+    local a = door_axes[d]
+    if a then return a end
+    pcall(function()
+        local function first(f)
+            local l = d:get_field(f)
+            local it = l and l:call("get_Count") > 0 and l:call("get_Item", 0)
+            return it and it:call("get_GameObject"):call("get_Transform"):call("get_Position")
+        end
+        local fp, bp = first("FrontInteractDoorList"), first("BackInteractDoorList")
+        if fp and bp then
+            local nx, nz = bp.x - fp.x, bp.z - fp.z
+            local len = math.sqrt(nx * nx + nz * nz)
+            if len > 0.05 then a = { cx = (fp.x + bp.x) / 2, cz = (fp.z + bp.z) / 2, nx = nx / len, nz = nz / len } end
+        end
+    end)
+    if a == nil then
+        local tr = d:call("get_GameObject"):call("get_Transform")
+        local c, q = tr:call("get_Position"), tr:call("get_Rotation")
+        a = { cx = c.x, cz = c.z, nx = 2 * (q.x * q.z + q.w * q.y), nz = 1 - 2 * (q.x * q.x + q.y * q.y) }
+    end
+    door_axes[d] = a
+    return a
+end
+local function door_side(d, p)
+    local a = door_axis(d)
+    return (p.x - a.cx) * a.nx + (p.z - a.cz) * a.nz, math.sqrt((p.x - a.cx) ^ 2 + (p.z - a.cz) ^ 2)
+end
+-- True while a friend near the door is on its other side, or standing in the doorway.
+function coop_door_splits(d)
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local pl = om and om:get_field("PlayerObj")
+    local pp = pl and safe(function() return pl:call("get_Transform"):call("get_Position") end)
+    if pp == nil then return false end
+    local ms = door_side(d, pp)
+    for _, fp in ipairs(friend_positions()) do
+        local fs, dist = door_side(d, fp)
+        if dist < AUTOLOCK_R and (math.abs(fs) < 0.7 or (fs > 0) ~= (ms > 0)) then return true end
+    end
+    return false
+end
+do
+    local m = sdk.find_type_definition("app.DoorPush"):get_method(
+        "requestAutoClose(System.Single, via.curve.EaseType, System.Boolean, System.Boolean)")
+    if m then
+        sdk.hook(m, function(args)
+            local hold = false
+            pcall(function()
+                if ws.autolock.pass then return end
+                local do_lock = (sdk.to_int64(args[5]) & 0xff) ~= 0
+                if not do_lock then return end
+                local d = sdk.to_managed_object(args[2])
+                local auto, name = is_autolock(d)
+                if auto and coop_door_splits(d) then
+                    hold = true
+                    local id = id_of and id_of(d) or tostring(d:get_address())
+                    if not ws.autolock.held[id] then
+                        ws.autolock.held[id] = { d = d, t = os.clock(), name = name }
+                        log(string.format("auto-lock door %s: held open, your friend is on the other side", name))
+                        note("the door stays open until your friend is through")
+                    end
+                end
+            end)
+            if hold then return sdk.PreHookResult.SKIP_ORIGINAL end
+        end, function(r) return r end)
+    end
+end
+local function autolock_shut(d)
+    local speed = tonumber(safe(d.get_field, d, "AutoCloseRotationSpeed")) or 50
+    local ease = safe(d.get_field, d, "AutoCloseEaseType") or 0
+    ws.autolock.pass = true
+    local ok = pcall(d.call, d, "requestAutoClose(System.Single, via.curve.EaseType, System.Boolean, System.Boolean)",
+        speed, ease, true, false)
+    ws.autolock.pass = false
+    return ok
+end
+function coop_check_autolock(now)
+    local al = ws.autolock
+    if now - (al.t or 0) < 0.5 then return end
+    al.t = now
+    for id, h in pairs(al.held) do
+        -- Everyone's through (or the friend left, or 3 minutes passed): it shuts and locks as the game wanted.
+        if not coop_door_splits(h.d) or now - h.t > 180 then
+            al.held[id] = nil
+            local ok = autolock_shut(h.d)
+            log(string.format("auto-lock door %s: everyone is through, it shuts (%s)", h.name, ok and "ok" or "ERR"))
+        end
+    end
+    for id, s in pairs(ws.doors) do
+        local auto, name = is_autolock(s.d)
+        if auto and not al.held[id] then
+            local locked = safe(s.d.call, s.d, "get_isLocked") == true
+            local st = safe(s.d.call, s.d, "get_doorState")
+            if (locked or st == 1) and coop_door_splits(s.d) then
+                -- Shut here while a friend is on the other side (our game took the step from theirs, or it shut
+                -- before they reached it): let them through.
+                if not al.opened[id] then
+                    al.opened[id] = now
+                    pcall(s.d.call, s.d, "unlockDoor")
+                    ws.applying[id] = now
+                    door_open(s.d)
+                    log(string.format("auto-lock door %s: shut with your friend on the other side, opened (was state %s, locked %s)",
+                        name, tostring(st), tostring(locked)))
+                    note("the door was shut between you and your friend: it's open again")
+                    al.held[id] = { d = s.d, t = now, name = name }
+                end
+            elseif al.opened[id] and now - al.opened[id] > 30 then
+                al.opened[id] = nil
+            end
+        end
+    end
+end
 function check_open_retry(id, s, state, now)
     local r = ws.open_retry[id]
     if r == nil or now < r.t then return end
@@ -2574,6 +2717,8 @@ re.on_frame(function()
         ws.poll_t = now
         local ok, err = pcall(poll_doors, now)
         if not ok and not ws.poll_err then ws.poll_err = true log("door poll ERR " .. tostring(err)) end
+        local aok, aerr = pcall(coop_check_autolock, now)
+        if not aok and not ws.autolock_err then ws.autolock_err = true log("auto-lock door ERR " .. tostring(aerr)) end
         local fpok, fperr = pcall(poll_phys, now)
         if not fpok and not ws.phys_poll_err then ws.phys_poll_err = true log("phys poll ERR " .. tostring(fperr)) end
         pcall(poll_locks, now)

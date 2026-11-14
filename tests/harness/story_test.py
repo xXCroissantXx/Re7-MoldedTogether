@@ -100,6 +100,10 @@ frames(10)
 check(sent("rewind 5"), "the friend is told we loaded a save")
 friend("story c03e00_00 5")
 frames(2)
+-- v0.51: not in the first seconds after a load (a scene started then left the screen black for good) ...
+check(not requested("c03e00_00"), "a friend's scene right after our load waits for the load to settle")
+frames(14)
+-- ... and once it has settled, it plays.
 check(requested("c03e00_00"), "after loading the save, the friend's dinner can start here again")
 ''',
 'loading the save from just before the dinner (every stage at 0)': r'''

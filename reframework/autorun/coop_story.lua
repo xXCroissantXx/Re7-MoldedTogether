@@ -119,7 +119,9 @@ local function played_here()
     return ss.played
 end
 local PENDING_FOR = 10    -- s to keep waiting for a nearby friend's cutscene to load here
-local NEAR = 12           -- m: a friend's cutscene pulls us in only this close
+local PENDING_PULLED = 30 -- s, after we were brought next to them (the area streams in around us first)
+local NEAR = 12           -- m: a friend's cutscene pulls us in only this close (with "scene_pull" off)
+SCENE_PULL_MAX = 200      -- m (v0.51): with it on (the default), from this far
 local IN_STEP = 30        -- s after a shared cutscene during which their progress is copied
 
 -- Lines are collected and appended once a second (was a full read + rewrite per line).
@@ -534,7 +536,15 @@ end
 local function busy_here()
     local om = sdk.get_managed_singleton("app.ObjectManager")
     if om == nil or om:get_field("PlayerObj") == nil then return "loading" end
+    -- v0.51: a load, and its first seconds, count as loading (see coop_story_settle), and so does a screen
+    -- faded to black: a friend's scene started then left the game on a black screen for good.
+    if os.clock() < (ss.settle_until or 0) then return "loading" end
     local gm = sdk.get_managed_singleton("app.GameManager")
+    if gm then
+        local tok, title = pcall(gm.get_field, gm, "IsTitleDisp")
+        if tok and title == true then return "loading" end
+    end
+    if coop_black_fade and coop_black_fade() then return "faded out" end
     if gm and pcall(gm.call, gm, "get_IsPause") and gm:call("get_IsPause") == true then return "paused" end
     local mm = sdk.get_managed_singleton("app.MenuManager")
     local ok, open = false, false
@@ -591,29 +601,36 @@ local function apply_story(name, ch, phone)
             d and string.format("%.0f", d) or "?"))
         d = 0
     end
-    if (d == nil or d > NEAR) and follower() then
-        -- The host leads: their scene plays here too; close by, we're brought next to them first.
-        if d and d <= 30 and teleport_to_friend then pcall(teleport_to_friend) end
+    -- v0.51: a cutscene pulls everyone in the chapter in (the owner's rule after the 2026-11-12 playtest: "cutscenes
+    -- should automatically teleport everyone and start instantly when someone initiates them"). Whoever starts
+    -- one, the others within SCENE_PULL_MAX m are brought next to them and it plays as soon as it has loaded there.
+    -- It used to bring the guest along only from 30 m (beyond that the scene waited 10 s to load where they stood,
+    -- which it never did, and was dropped), and the host only from 12 m.
+    local pull = settings == nil or settings.scene_pull ~= false
+    local reach = pull and SCENE_PULL_MAX or NEAR
+    if d ~= nil and d > reach and not follower() then
+        note(string.format("your friend is watching a cutscene (%.0f m away: you'll see it when you get there)", d))
+        log(string.format("friend's %s: not joined, %.0f m away (you'll see it when you get there)", name, d))
+        return
+    end
+    if follower() and (d == nil or d > NEAR) then
         log(string.format("friend's %s: the host leads, playing it here (%s m away)", name, d and string.format("%.0f", d) or "?"))
         note("the host's story: you're brought into this scene")
-    elseif d == nil or d > NEAR then
-        note(string.format("your friend is watching a cutscene (%s m away: you'll see it when you get there)",
-            d and string.format("%.0f", d) or "?"))
-        log(string.format("friend's %s: not joined, %s m away (you'll see it when you get there)", name,
-            d and string.format("%.0f", d) or "?"))
-        return
-    elseif d > 2.5 and teleport_to_friend then
-        -- v0.48: joining their scene from the next room left a player locked in the boiler room while
-        -- the fight started without them (2026-11-10): stand next to them first.
-        local tok = select(2, pcall(teleport_to_friend))
-        log(string.format("friend's %s: joining from %.0f m away, brought next to them first (%s)", name, d, tostring(tok)))
     end
     local busy = busy_here()
+    -- Brought next to them first (v0.48: joining from the next room left a player locked in the boiler room while
+    -- the fight started without them). Not while we're loading or in a scene of our own: then when it starts.
+    local pulled = false
+    if not busy and d and d > 2.5 and d <= reach and teleport_to_friend then
+        local tok = select(2, pcall(teleport_to_friend, reach))
+        pulled = tok == true
+        log(string.format("friend's %s: joining from %.0f m away, brought next to them first (%s)", name, d, tostring(tok)))
+    end
     -- for: the friend's scene this one stands in for (v0.50): a sequence started here from its _00 because the
     -- friend played a later scene of it. Dropped if our own game plays that scene itself meanwhile.
     local instead = start ~= name and name or nil
     if busy then
-        ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1, instead = instead }
+        ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1, instead = instead, pull = d and d > 2.5 }
         log("friend's " .. start .. " waits: you're " .. busy)
     elseif setting_loaded(start) then
         -- Not at once (v0.48): a scene the friend's story step started comes with that step ("prog"), and the
@@ -621,7 +638,8 @@ local function apply_story(name, ch, phone)
         -- a step is queued; the step plays it, and if the step doesn't, it plays after (the loop below).
         ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1, hold_until = os.clock() + 1.5, instead = instead }
     else
-        ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1, instead = instead }
+        -- After a pull the area streams in around us: allow it longer to load (PENDING_PULLED).
+        ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1, instead = instead, pulled = pulled }
         log("waiting for " .. start .. " to load here")
     end
 end
@@ -830,6 +848,7 @@ local function on_load(what)
     if ss.load and ss.load.addr == addr then return end   -- the same load, another step of it
     ss.load = { t = os.clock(), what = what, addr = addr }
     log("a save is loading (" .. what .. ")")
+    if coop_story_settle then pcall(coop_story_settle, "a save is loading") end
 end
 -- The level load from save data is what counts (a load request can be cancelled in the menu);
 -- the requests only if this build has no such method.
@@ -844,6 +863,92 @@ do
         log("save load: watching the load requests")
     end
 end
+
+-- Loads and the black screen (v0.51). A friend's scene that waited here was started while this game was loading
+-- (a New Game, Continue, a chapter jump): the old player is still there for a moment, so nothing stopped it, and
+-- the game came out of the load on a black screen for good. That is the "friend only sees black unless both
+-- played the opening before connecting" of the 2026-11-12 playtest (bot test 2026-11-13: reproduced by a scene
+-- waiting while the game started the opening; the opening alone, or a real New Game alone, came out fine).
+-- Now any load drops the friend's waiting scenes, and for SETTLE_S s after it (and while the player object is
+-- new) this game counts as loading, so nothing of theirs is started (busy_here).
+SETTLE_S = 12
+function coop_story_settle(why)
+    ss.settle_until = math.max(ss.settle_until or 0, os.clock() + SETTLE_S)
+    local n = 0
+    for k in pairs(ss.pending) do ss.pending[k] = nil n = n + 1 end
+    if n > 0 then log(string.format("%s: %d of your friend's waiting scene(s) dropped (they were for before the load)", why, n)) end
+end
+do
+    local gmt = sdk.find_type_definition("app.GameManager")
+    for _, mname in ipairs({ "newGameRequest", "newGameRequest_Chapter7",
+        "chapterJumpRequest(System.String, System.Boolean, System.String)" }) do
+        local m = gmt and gmt:get_method(mname)
+        if m then pcall(sdk.hook, m, function(args) pcall(coop_story_settle, "a load started (" .. mname:match("^[%w_]+") .. ")") end, function(r) return r end) end
+    end
+    -- A save load settles too: from on_load (one hook on loadLevelUsingLoadData).
+end
+-- A new player object (the game swapped it in a load) restarts the settle time too.
+re.on_frame(function()
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local p = om and om:get_field("PlayerObj")
+    local addr = p and p:get_address() or 0
+    if addr ~= (ss.player_addr or 0) then
+        ss.player_addr = addr
+        -- Not the first player this script sees (scripts started mid-game): only a swap after we had one.
+        if addr ~= 0 and ss.had_player and addr ~= ss.had_player then
+            ss.settle_until = math.max(ss.settle_until or 0, os.clock() + SETTLE_S)
+        end
+        if addr ~= 0 then ss.had_player = addr end
+    end
+end)
+
+-- The screen fade (app.FadeControl "Fade_In_Out_Black"): state 0 when it's clear. Found once per scene.
+local fade = { comp = nil, t = -100 }
+function coop_black_fade()
+    local now = os.clock()
+    -- Found again after every load (a new player object): the old scene's fade is gone with it.
+    if fade.for_player ~= ss.player_addr then fade.comp, fade.for_player, fade.t = nil, ss.player_addr, -100 end
+    if fade.comp == nil and now - fade.t > 5 then
+        fade.t = now
+        pcall(function()
+            local sm = sdk.get_native_singleton("via.SceneManager")
+            local scene = sdk.call_native_func(sm, sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
+            local arr = scene:call("findComponents(System.Type)", sdk.typeof("app.FadeControl"))
+            for i = 0, arr:call("get_Count") - 1 do
+                local c = arr:call("get_Item", i)
+                local go = c:call("get_GameObject")
+                if go and tostring(go:call("get_Name")):find("Black", 1, true) then fade.comp = c end
+            end
+        end)
+    end
+    if fade.comp == nil then return false end
+    local ok, st = pcall(fade.comp.call, fade.comp, "get_FadeState")
+    if not ok then fade.comp = nil return false end
+    return st ~= nil and st ~= 0
+end
+-- A black screen that never clears (v0.51): with a friend connected, faded to black for FADE_STUCK_S s while
+-- nothing plays (no cutscene, no movie, not loading, not paused) and the player is there, it's faded back in.
+FADE_STUCK_S = 25
+re.on_frame(function()
+    local now = os.clock()
+    if now - (fade.check_t or 0) < 1 then return end
+    fade.check_t = now
+    local ns = coop_net_state and coop_net_state()
+    local linked = coop_link_friend ~= nil and ns ~= nil and coop_link_friend(ns.kv) == true
+    if not linked then fade.black_since = nil return end
+    local black = coop_black_fade()
+    local quiet = not (local_cutscene and local_cutscene()) and now >= (ss.settle_until or 0)
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local there = om and om:get_field("PlayerObj") ~= nil
+    if not (black and quiet and there) then fade.black_since = nil return end
+    fade.black_since = fade.black_since or now
+    if now - fade.black_since < FADE_STUCK_S or now - (fade.lifted_t or -100) < 60 then return end
+    fade.lifted_t = now
+    local ok = pcall(fade.comp.call, fade.comp, "requestFadeIn")
+    log(string.format("the screen stayed black for %d s with nothing playing: faded back in (%s)", FADE_STUCK_S,
+        ok and "ok" or "ERR"))
+    note("the screen was stuck on black: it's faded back in")
+end)
 local function after_load()
     local ch = chapter()
     local clock = coop_story_clock()
@@ -1179,9 +1284,15 @@ re.on_frame(function()
             log(string.format("friend's %s: your game played it itself, so %s isn't started for it", p.instead, name))
         elseif held then
             -- see apply_story: the friend's step may play it
-        elseif now - p.t > PENDING_FOR or p.ch ~= chapter() or d == nil or (d > NEAR and not follower()) then
+        elseif now - p.t > (p.pulled and PENDING_PULLED or PENDING_FOR) or p.ch ~= chapter() or d == nil
+            or (d > ((settings == nil or settings.scene_pull ~= false) and SCENE_PULL_MAX or NEAR) and not follower()) then
             ss.pending[name] = nil
             log("gave up waiting for " .. name)
+        elseif p.pull and not busy and not p.pulled and d > 2.5 and teleport_to_friend then
+            -- It came while we were busy (v0.51): now we're free, brought next to them first.
+            local tok = select(2, pcall(teleport_to_friend, SCENE_PULL_MAX))
+            p.pulled, p.t = true, now
+            log(string.format("friend's %s: brought next to them now (%.0f m, %s)", name, d, tostring(tok)))
         else
             -- Our own game may have started the scene, or its sequence, meanwhile (v0.39).
             local start, why = scene_to_start(name)

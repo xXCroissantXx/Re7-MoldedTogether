@@ -325,6 +325,20 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 - [ ] If Mia only ever goes for one of you, make a bug report on both PCs: the enemy log now says why her other
       game couldn't run her ("your friend's game can't run Em2000: ...").
 
+## 25. New in v0.52
+
+- [ ] **Connect early**: connect on the title screen, then both press New Game at about the same time: both
+      see the opening and get to the car, no black screen.
+- [ ] **Back door**: at the guest house, one of you goes in through the back door while the other stays
+      outside: the door stays open; the second one walks in and it shuts and locks behind them.
+- [ ] **Cutscenes**: stand far apart (another room or outside); one of you starts a cutscene: the other is
+      brought over and sees it too.
+- [ ] **Chapter 3**: Jack knocks Ethan out at the end of Chapter 1: within about 15 seconds both of you are on
+      the way to the dinner (Chapter 3).
+- [ ] **Small interactions**: your friend shakes the fence or presses the gate button: afterwards there is only
+      one Ethan where they stand.
+- [ ] **VHS tape**: one of you puts in the tape: the other follows within a few seconds.
+
 ## Afterwards
 
 Each player clicks **Make a bug report** (Molded Together window, *Help*) and sends the zip

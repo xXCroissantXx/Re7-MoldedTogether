@@ -2356,12 +2356,24 @@ function coop_follow_tape(item, ch)
     follow.forced = { ch = target, t = os.clock() }
     log("follow: friend put " .. item .. " in the video deck; going after them")
 end
+-- v0.51: the tape is followed after 1 s (was 6) and tried for 5 minutes (was 90 s): in the 2026-11-12 playtest
+-- the friend got into the tape five minutes late. A tape this game has already played isn't followed into
+-- again: the owner, back from the tape, was pulled into it a second time when the friend finally went in.
+follow.tapes_played = follow.tapes_played or {}
 local function follow_forced(now)
     local F = follow.forced
     if F == nil then return false end
     if local_chapter() == F.ch then follow.forced, follow.done_for = nil, F.ch log("follow: in the tape with your friend") return true end
-    if now - F.t > 90 then follow.forced = nil log("follow: gave up after 90 s (" .. tostring(F.msg) .. ")") return false end
-    if now - F.t < 6 or now - (F.try_t or 0) < 2 or local_cutscene() or (coop_busy and coop_busy()) then return true end
+    if now - F.t > 300 then follow.forced = nil log("follow: gave up after 5 minutes (" .. tostring(F.msg) .. ")") return false end
+    if follow.tapes_played[F.ch] then
+        follow.forced = nil
+        log("follow: friend put in a tape you've already played: not following")
+        return false
+    end
+    if now - F.t < 1 or now - (F.try_t or 0) < 2 or local_cutscene() or (coop_busy and coop_busy()) then
+        F.msg = F.msg or (local_cutscene() and "you're in a cutscene" or nil)
+        return true
+    end
     F.try_t = now
     chapters.list_t = nil
     ensure_chapter_list()
@@ -2382,10 +2394,12 @@ on_frame_1(function()
     local last = net.history[#net.history]
     local fresh = last ~= nil and (now - last.t) < (NET_TIMEOUT or 2)
     local mine, theirs = local_chapter(), net.peer_chapter
+    if mine and TAPE_CHAPTERS[mine] then follow.tapes_played[mine] = true end
     if not fresh or theirs == nil or mine == nil then follow.want_t = nil return end
     if theirs == mine then follow.was_together, follow.want_t, follow.done_for = true, nil, nil return end
     if settings and settings.follow_tapes == false then return end
     if not (follow.was_together and TAPE_CHAPTERS[theirs] and not TAPE_CHAPTERS[mine]) then return end
+    if follow.tapes_played[theirs] then return end
     if follow.done_for == theirs then return end
     if local_cutscene() then follow.want_t = nil return end
     follow.want_t = follow.want_t or now
@@ -2404,6 +2418,54 @@ on_frame_1(function()
         follow.done_for = theirs
         log("follow: gave up after 30 s (" .. tostring(join.msg) .. ")")
     end
+end)
+
+-- Following the host into the next chapter (v0.51). Chapter 1 ends with Jack knocking Ethan out: the host's
+-- game goes into Chapter123 (the transition) and on to Chapter 3, but the guest's game never asked for the
+-- transition (its last scene's step came from the host), and in the 2026-11-12 playtest the guest had to load a
+-- save to get anywhere. Now when the host is in a later main chapter and stays there for FOLLOW_CH_AFTER s, the
+-- guest's game jumps after it, into the transition when the host is in one (its movie plays and it lands in
+-- the next chapter) or straight into the host's chapter. Only forward, only the guest, only from where the two
+-- were together. Saving is switched off for the jump as for any chapter jump (the next chapter's own autosave
+-- needs saving switched back on).
+CHAPTER_ORDER_V = { [2] = 1, [4] = 2, [13] = 3, [5] = 4, [14] = 5, [6] = 6 }
+FOLLOW_CH_AFTER = 12
+local chf = { want = nil, since = nil, try_t = 0, tries = 0, done = nil }
+on_frame_1(function()
+    local now = os.clock()
+    if now - (chf.check_t or 0) < 1 then return end
+    chf.check_t = now
+    if SLOT ~= 1 or coop_enemy_role_now ~= "guest" then return end
+    if settings and (settings.story_follow_host == false or settings.follow_chapters == false) then return end
+    local last = net.history[#net.history]
+    if last == nil or now - last.t > (NET_TIMEOUT or 2) then chf.want, chf.since = nil, nil return end
+    local mine, theirs = local_chapter(), net.peer_chapter
+    local om, ot = CHAPTER_ORDER_V[mine or -1], CHAPTER_ORDER_V[theirs or -1]
+    if om == nil or ot == nil or ot <= om or not follow.was_together or chf.done == theirs then
+        chf.want, chf.since = nil, nil
+        return
+    end
+    if chf.want ~= theirs then chf.want, chf.since, chf.tries = theirs, now, 0 end
+    -- Our own game may go there by itself (its own transition, a beat later): give it time. A cutscene of ours
+    -- waits too, unless it has been running far longer than the host has been gone (a stuck one).
+    if now - chf.since < FOLLOW_CH_AFTER then return end
+    if local_cutscene() and now - chf.since < 60 then return end
+    if now - chf.try_t < 3 then return end
+    chf.try_t = now
+    chapters.list_t = nil
+    ensure_chapter_list()
+    local target
+    for _, e in ipairs(chapters.list or {}) do if e.value == theirs then target = e end end
+    local busy = target == nil and "that chapter isn't in the jump list" or jump_busy()
+    if busy then
+        chf.tries = chf.tries + 1
+        if chf.tries == 1 or chf.tries % 10 == 0 then log("follow chapter: waiting (" .. busy .. ")") end
+        return
+    end
+    chf.done = theirs
+    log(string.format("follow chapter: the host went on to %s %d s ago; following", chapter_name(theirs), math.floor(now - chf.since)))
+    join.msg = "following your friend into " .. chapter_name(theirs)
+    jump_to_chapter(target)
 end)
 
 on_frame_1(function()
@@ -3321,7 +3383,29 @@ TELEPORT_MAX = 40   -- m
 bot_test_name = false
 BOT_TEST_NAME = "Тест 测试 テスト 테스트 Ünï"
 
-function teleport_to_friend()
+-- A long warp (v0.51, cutscenes pull everyone in from up to 200 m) can land before the floor there has streamed
+-- in: for HOLD_S s after it the player is put back at the target whenever they drop more than 1 m below it.
+WARP_HOLD_S = 6
+local warp_hold = nil
+re.on_frame(function()
+    local h = warp_hold
+    if h == nil then return end
+    local now = os.clock()
+    if now > h.until_t or (local_cutscene and local_cutscene()) then warp_hold = nil return end
+    local ok = pcall(function()
+        local player = get_player()
+        local p = player and player:call("get_Transform"):call("get_Position")
+        if p and p.y < h.pos.y - 1.0 then
+            local mc = player:call("getComponent(System.Type)", sdk.typeof("app.MovementController"))
+            mc:call("warp(via.vec3, via.Quaternion)", h.pos, player:call("get_Transform"):call("get_Rotation"))
+            h.n = h.n + 1
+            if h.n == 1 then log("teleport: the floor wasn't there yet, held at the target") end
+        end
+    end)
+    if not ok or h.n > 60 then warp_hold = nil end
+end)
+
+function teleport_to_friend(maxd)
     -- v0.48: by the friend's last position from the link, not their character on screen. That is
     -- hidden while a scene plays, so a player stuck in a scene their friend had left (the boiler
     -- room, 2026-11-10) got "no friend to go to" from the one button that could have freed them.
@@ -3350,13 +3434,16 @@ function teleport_to_friend()
     -- loaded yet. Only short hops (same area); otherwise walk towards them.
     local pp = player:call("get_Transform"):call("get_Position")
     local dist = math.sqrt((target.x - pp.x) ^ 2 + (target.y - pp.y) ^ 2 + (target.z - pp.z) ^ 2)
-    if dist > TELEPORT_MAX then
+    if dist > (maxd or TELEPORT_MAX) then
         join.msg = string.format("friend is %d m away: too far to teleport safely, walk closer", math.floor(dist))
         log("teleport: refused, " .. join.msg)
         return false
     end
     local pq = player:call("get_Transform"):call("get_Rotation")
     local ok, err = pcall(mc.call, mc, "warp(via.vec3, via.Quaternion)", target, pq)
+    if ok and dist > 15 then
+        warp_hold = { pos = Vector3f.new(target.x, target.y + 0.05, target.z), until_t = now + WARP_HOLD_S, n = 0 }
+    end
     join.msg = ok and "teleported next to your friend" or "teleport failed"
     log("teleport: " .. (ok and "warped next to friend" or ("ERR " .. tostring(err))))
     return ok
@@ -4068,6 +4155,23 @@ local function mirror_event_pose()
         if e[3] then e[2]:call("set_LocalPosition", e[1]:call("get_LocalPosition")) end
     end
 end
+-- The anchor stays hidden (v0.51). A scripted interaction run on it (the friend's fence, button, van door) turns
+-- the anchor's own body on (VrDummyPlayer's pl0001 mesh: DrawSelf true again), and nothing turned it off: from
+-- then on a second, frozen Ethan stood inside the friend's character (2026-11-12 playtest; bot test 2026-11-13 on
+-- the sheet metal: the anchor's body appeared when the interaction started and was still drawn after it ended).
+-- The friend's visible body is its own parts, so the anchor is put back out of sight whenever it shows up.
+local anchor_guard = { t = 0, n = 0 }
+re.on_frame(function()
+    local now = os.clock()
+    if now - anchor_guard.t < 0.25 or dummy == nil or #parts == 0 then return end
+    anchor_guard.t = now
+    if safe(dummy.call, dummy, "get_DrawSelf") == true then
+        safe(dummy.call, dummy, "set_DrawSelf", false)
+        anchor_guard.n = anchor_guard.n + 1
+        if anchor_guard.n <= 5 then log("the friend's hidden anchor was shown (an interaction on it): hidden again") end
+    end
+end)
+
 re.on_pre_application_entry("PrepareRendering", function()
     if os.clock() >= ghost_event.until_t then return end
     local ok, err = pcall(mirror_event_pose)
