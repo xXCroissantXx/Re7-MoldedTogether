@@ -157,11 +157,10 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
       down), A chooses, B goes back.
 - [ ] **In play**: open it; your character and the camera stay still; close it and you can move again.
 - [ ] **Inviting**: Friends > your friend > Invite; they see the invite at the bottom left, press F9, Accept.
-- [ ] **A lobby, no jump**: one hosts (Lobby > Host a lobby); the other sees "lobby is waiting", opens the menu,
-      Ready; the host presses Start ("Where each of you is now").
-- [ ] **A lobby, Chapter 3**: both load a save (Continue); the host picks Chapter 3; both Ready; Start: both games
-      go to Chapter 3 and the dinner starts for both. Try pressing Start while one of you is on the title screen:
-      it waits and says so.
+- [ ] **A lobby, no jump**: one opens Lobby (they host); the other is in it and ready by themselves; the host
+      presses Start ("Continue (own saves)").
+- [ ] **A lobby, Chapter 3**: the host picks Chapter 3; Start: both games go to Chapter 3 and the dinner starts
+      for both (from the title screen too, since v0.54).
 - [ ] **Joining a host**: the host closes the lobby and hosts again; the other picks them in Friends (Join): they're
       let in by themselves.
 - [ ] **Quick messages** from the menu with a controller.
@@ -175,8 +174,8 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
       Their axe swings are heard.
 - [ ] **Disconnecting**: one of you closes the game: within about 30 seconds the other's status says not
       connected. Start again: you reconnect (one invite). Try **Disconnect from everyone** and a host's remove.
-- [ ] **Lobby Continue**: both on the title screen; the host hosts, picks "Continue", both Ready, Start: both games
-      load their latest save. Note it if the title screen doesn't load (then choose CONTINUE yourself).
+- [ ] **Lobby Continue**: both on the title screen; the host opens Lobby, picks "Continue (own saves)", Start: both
+      games load their latest save. Note it if the title screen doesn't load (then choose CONTINUE yourself).
 - [ ] **The VHS tape**: one of you puts a tape in the VCR: the other follows into it, and afterwards the tape is
       gone from both inventories.
 - [ ] **Behind the host**: the one behind uses Lobby > "Get the host's key items and weapons" (experimental).
@@ -283,9 +282,10 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 ## 21. New in v0.49
 
 - [ ] **Fresh settings**: one of you deletes `coop_settings.json` (co-op folder, `reframework\data`) before
-      starting: Options shows Share story, One game leads the story and Enemies chase both players **On**.
-- [ ] **Options for everyone**: one of you turns **One Molded for both** off: the other is told it's off for both
-      of you; turn it back on.
+      starting: Share story, One game leads the story and Enemies chase both players are **On** (in the
+      REFramework window since v0.54).
+- [ ] **Options for everyone**: one of you turns **Share supplies** on: the other is told it's on for both of you;
+      turn it back off.
 - [ ] **Two Molded**: stand apart, each next to a different Molded: each fights its own player, and both screens
       show both Molded in the same places.
 - [ ] **Walk away**: let a Molded go after you, then walk off while your friend stays by it: it turns on them.
@@ -338,6 +338,29 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 - [ ] **Small interactions**: your friend shakes the fence or presses the gate button: afterwards there is only
       one Ethan where they stand.
 - [ ] **VHS tape**: one of you puts in the tape: the other follows within a few seconds.
+
+## 26. New in v0.53
+
+- [ ] **Cutscene start**: stand apart; one of you starts a cutscene: it starts for the other within about a
+      second (watch the first line of dialogue).
+- [ ] **VHS tape**: one of you puts in a tape: the other follows within a few seconds, and the tape's cutscenes
+      play for both.
+- [ ] **(Optional) Wait for each other**: both set `"scene_ready": true` in coop_settings.json, restart, and
+      repeat the two checks above: the one who starts it pauses briefly, then both start together. Tell us if a
+      cutscene ever doesn't start.
+
+## 27. New in v0.54
+
+- [ ] **The sheets**: on the title screen choose CO-OP: the co-op screen is on the game's paper sheets (Lobby,
+      Friends... on the left, the rows on the right). Close it and open the game's own **Options**: it looks and
+      works as normal. In play, open it with the menu key: it uses the game's in-game Options screen.
+- [ ] **Lobby from the title screen**: both on the title screen and connected. One opens CO-OP > Lobby: the other
+      is in it and shows "ready". The host picks **New Game** and presses **Start**: both games start a new game.
+- [ ] **A chapter from the title screen**: both on the title screen again; the host picks Chapter 3 or 4, Start:
+      both games load their latest save by themselves (no "Load most recent saved data?" left waiting), then both
+      go to the chapter.
+- [ ] **Holding it back**: the friend sets Ready to No: the host's Start says it's waiting for them.
+- [ ] **After a start**: play for a few minutes: no "The lobby's host left" messages while you're both connected.
 
 ## Afterwards
 

@@ -1978,3 +1978,46 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   (7) Grabs: a Molded grab leaves the player's layer 0 on Idle (the game animates only the first-person camera);
   hits 610-999 are sent and shown. No 'being grabbed' flag exists (PlayerEventActionManager has only isOnLadder),
   so no grab pose is made up. The boss's grab clips were the v0.51 bank fetch.
+- v0.53 (2026-11-13, start together). Default: the pending loop runs 4x/s (was 1) and a loaded friend's scene
+  waits 0.5 s (was 1.5) for a step: bot tests 1 s apart at most in the 1 s log (was 2 s). Opt-in scene_ready:
+  hold at GameEventManager.requestEvent (returns app.GameEventManager.Handle, a 72-byte class with start/end
+  delegates): a held call returns a fresh Handle, transferTo'd onto the real one on release; 'story <n> <ch>
+  hold' -> friend pulls/loads, 'sready' as it requests, 'snoready' if not joining; SCENE_READY_MAX 8 s. Tries:
+  (1) holding/replaying GameEventController.requestSetup: the replay played 26 s late; (2) SKIP at requestEvent:
+  the caller got an undefined Handle (exception in re7bots' own request); (3) swapping the name for an unknown
+  one: blocked the game's queue (real scene 24 s late); (4) Handle + transferTo: worked on SR.play (both within
+  1 s) but in the revive test the same scene was requested twice in one moment and the held one was set up
+  without playing -> opt-in. story_test 'far away' now 300 m (the 200 m pull).
+  STORY_NAME now matches tape scenes (c01f01_00). Tapes: coop_world sets coop_tape_sent_t on a tape use;
+  GameManager.chapterJumpRequest / nextChapterJumpRequest are held (TAPE_HOLD_MAX 6 s) until 'tapejump' (sent by
+  the follower's follow_forced, which sets coop_tape_follow_t); in a tape entered within 120 s the first new
+  scene is held up to TAPE_READY_MAX 30 s with no friend in the chapter yet, and a 'hold' for another (tape)
+  chapter is kept in ss.ready_for instead of answered 'snoready'. The tape path is NOT bot-tested: the only deck
+  save (slot 10) is past its tape and the deck's Fsm ignores setCurrentState(SelectSuccess_FF000).
+  Audit (same day): story steps in step through Ch4 (player switches to Mia Pl2100 and back) and FF000, 128
+  steps; c04e70_00 'blocking the bots' was the runner forcing Mia's scene as Ethan (story_lib SR.play now skips
+  scenes for another character). intr_catalog.py: only app.InteractAutoSendFsm (look triggers, LookTimerMax)
+  is unshared, per player by design (no longer logged). Later bosses (Em3100...) still run per game.
+- v0.54 (2026-11-14, paper menu + lobby start). Co-op screen on the game's own GUIs: title = GUI_option (paper,
+  app.OptionMenu + SceneMenuHolderTarget), in play = OptionMenu (dark in-game layout; GUI_option isn't there).
+  Tree View > c_option > { c_items, c_selection, m_title_record, m_title, ScrollList (SelectItem, item1..10),
+  item_scroll (item_si, item1..6) }; rows list_text > { m_title, m_value, c_arw_L/R }. Highlight via the row's
+  set_PlayState (DEFAULT/SELECT/DECIDE/DISABLE/DISABLE_SELECT); set_Color on cursors gave black bars. Every
+  property changed is remembered and put back on close (sk_restore). menu_sheets=false -> drawn sheets.
+  Options page trimmed to gameplay-changing + experimental (+ menu text size, key, saving); the rest stay in
+  coop_settings.json / the REFramework window. Lobby: opening it with a friend linked hosts it; guests are
+  ready by default; start_blocker uses lobby check-ins (m.fresh is position samples: none on the title).
+  Title starts: chapterJumpRequest straight from the title breaks the picture (white rings); New Game =
+  GameManager.newGameRequest (clean from title and play). Continue: TitleSubMenu step ContinueBefore (12) asks
+  'Load most recent saved data?' in TitleSubMenu._cutinHandle (app.cutin.CutinHandle2Choice, Result 0/1, 2 =
+  Undecided; proc CutinProc2Choice). set_Result(0) / notifyDecide(0) record the answer but the window stays;
+  changeStepNextUpdate(1 = Continue) is ignored while it's up. A Decide press through app.Pad (bits OR'd after
+  updateButton, like bottest/vpad.lua) answers it: coop_menu press_decide, only while a lobby start waits on it.
+  Chapter starts from the title: Continue (or New Game if no save), then the jump once the player exists and
+  IsSceneLoading has been false 5 s. Bot test: Chapter4_Start from both titles -> both chapter 6.
+  coop_enemies read_events skipped everything while on the title/loading (v0.32), lobby messages included:
+  read_early_events handles 'lobby' there (marked in es.early so the normal read skips them).
+  kv() flicker: coop_net_state.kv can read empty mid-rewrite; the host then saw my_id() nil -> not host ->
+  'host left' and wiped its lobby. kv() keeps the last good reading 30 s; host-left needs 20 s (open) / 60 s
+  (started) of silence. udp links: lobby ids are '9<port>' from coopnet_config.json (the two test copies share
+  one SteamID). Bot tools: bottest/title_pair.py, lobby_title_test.py, title_steps.lua, cutin_probe*.lua.

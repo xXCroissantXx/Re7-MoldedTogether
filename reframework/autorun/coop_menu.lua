@@ -73,9 +73,21 @@ local function safe(f, ...)
     return nil
 end
 
+-- The link's details (mode, our SteamID, the friends'). v0.54: the last good reading is kept for 30 s. The
+-- status file can read as empty while CoopNet rewrites it (more often during loads), and for that moment the
+-- host didn't know its own ID: it took itself for a guest whose host had gone and closed its own lobby, then
+-- took the friend's next message for a new lobby ("The lobby's host left" / "... is setting up the game" over and
+-- over after a start, bot test 2026-11-14).
+local KV_LAST = { t = -100 }
 local function kv()
     local n = coop_net_state and safe(coop_net_state)
-    return (n and n.kv) or {}
+    local k = n and n.kv
+    if k and (k.mode or k.steamSelf) then
+        KV_LAST.kv, KV_LAST.t = k, os.clock()
+        return k
+    end
+    if KV_LAST.kv and os.clock() - KV_LAST.t < 30 then return KV_LAST.kv end
+    return k or {}
 end
 
 local function say(text, color)
@@ -147,7 +159,25 @@ end
 
 -- The party: who we're connected to (up to 3 friends), from CoopNet's status.
 local function id_less(a, b) return a ~= nil and b ~= nil and ((#a < #b) or (#a == #b and a < b)) end
-local function my_id() local k = kv() return k.steamSelf ~= "0" and k.steamSelf or nil end
+-- v0.54: the lobby on a "udp" link too (LAN or direct IP; and the two test copies). There are no SteamIDs
+-- there (two copies on one PC even share one), so each side is known by its port: "9<port>".
+local UDP_IDS = { t = -100 }
+local function udp_ids()
+    local now = os.clock()
+    if now - UDP_IDS.t > 5 then
+        UDP_IDS.t = now
+        local ok, cfg = pcall(json.load_file, "coopnet_config.json")
+        if ok and type(cfg) == "table" and tonumber(cfg.localPort) and tonumber(cfg.peerPort) then
+            UDP_IDS.me, UDP_IDS.peer = "9" .. math.floor(tonumber(cfg.localPort)), "9" .. math.floor(tonumber(cfg.peerPort))
+        end
+    end
+    return UDP_IDS.me, UDP_IDS.peer
+end
+local function my_id()
+    local k = kv()
+    if k.mode == "udp" then local me = udp_ids() if me then return me end end
+    return k.steamSelf ~= "0" and k.steamSelf or nil
+end
 local function my_name()
     local k = kv()
     return (k.steamName and k.steamName ~= "") and k.steamName or "You"
@@ -156,6 +186,9 @@ local function member(slot)
     local k = kv()
     local key = slot == 1 and "peer" or ("peer" .. slot)
     local id = k[key] and k[key]:match("^steam:(%d+)$")
+    if id == nil and slot == 1 and k.mode == "udp" and k.peer and k.peer ~= "-" and k.peer ~= "" then
+        id = select(2, udp_ids())
+    end
     if id == nil or id == "0" then return nil end
     local name = slot == 1 and k.peerName or k["peer" .. slot .. "Name"]
     local env = coop_slot_envs and coop_slot_envs[slot]
@@ -236,13 +269,17 @@ coop_lobby = L
 
 -- Where to start. Only the chapter jumps this game offers are listed (ensure_chapter_list).
 local STARTS = {
-    { key = "here", label = "Continue: everyone's own latest save",
+    { key = "here", label = "Continue (own saves)",
       hint = "Whoever is on the title screen loads their latest save (Continue); whoever is playing carries on." },
+    -- v0.54: a New Game for everyone at once (app.GameManager.newGameRequest: clean from the title screen and from
+    -- in play, bot tests 2026-11-13/14).
+    { key = "new", label = "New Game",
+      hint = "Everyone starts a new game together, from the opening. Nothing is saved until you switch on Allow saving." },
     { key = "host", label = "The host's chapter",
       hint = "Everyone not in the host's chapter goes to the start of it." },
-    { key = "Chapter1_Start", label = "Chapter 1: the guest house",
+    { key = "Chapter1_Start", label = "Chapter 1: guest house",
       hint = "From the start of the story, after the drive in." },
-    { key = "Chapter3_Start", label = "Chapter 3: the Baker house",
+    { key = "Chapter3_Start", label = "Chapter 3: Baker house",
       hint = "From the dinner with the Bakers." },
     { key = "Chapter4_Start", label = "Chapter 4: the ship",
       hint = "From the shipwreck (you start as Mia)." },
@@ -260,7 +297,7 @@ end
 local function starts_available()
     local out = {}
     for _, s in ipairs(STARTS) do
-        if s.key == "here" or s.key == "host" or jump_entry(s.key) then out[#out + 1] = s end
+        if s.key == "here" or s.key == "new" or s.key == "host" or jump_entry(s.key) then out[#out + 1] = s end
     end
     return out
 end
@@ -289,13 +326,16 @@ local function set_presence()
     else command("presence lobby -") end
 end
 
-local function lobby_host()
-    if my_id() == nil then say("Steam isn't ready yet: wait a moment and try again", 0xFF6B6BFF) return end
+local function lobby_host(quiet)
+    if my_id() == nil then
+        if quiet ~= true then say("Steam isn't ready yet: wait a moment and try again", 0xFF6B6BFF) end
+        return
+    end
     L.state, L.host, L.round, L.start = "open", my_id(), (L.round or 0), L.start or "here"
     L.ready, L.ready_for, L.info, L.go = true, L.start, {}, nil
     L.open_t = -100
     set_presence()
-    say("You're hosting a lobby. Invite friends, pick where to start, then Start.", 0xFF7FFF8C)
+    if quiet ~= true then say("You're hosting a lobby. Invite friends, pick where to start, then Start.", 0xFF7FFF8C) end
 end
 local function lobby_close(why)
     if i_host() then send("lobby closed " .. L.host) end
@@ -315,14 +355,16 @@ end
 local function start_blocker()
     local ms = members()
     if #ms == 0 then return "nobody has joined yet" end
-    local jump = L.start ~= "here"
-    if jump and where_am_i() == "title" then return "load a save first (Continue): a chapter jump can't start from the title screen" end
+    -- v0.54: a chapter start works from the title screen too (each game loads its save, or starts a New Game,
+    -- first: see begin_go), so nobody has to press Continue before the host can start. Only "the host's chapter"
+    -- needs the host to be in one.
+    if L.start == "host" and where_am_i() == "title" then return "you're on the title screen: pick a chapter, Continue or New Game" end
     for _, m in ipairs(ms) do
         local i = L.info[m.slot]
-        if not m.fresh then return m.name .. " isn't connected right now" end
+        -- By their lobby check-ins (v0.54), not their position samples: a game on the title screen has no
+        -- player to send, so a friend there read as "not connected" and the host could never start.
         if i == nil or os.clock() - i.t > 8 then return "waiting to hear from " .. m.name end
         if i.start ~= L.start or not i.ready then return m.name .. " isn't ready yet" end
-        if jump and i.where == "title" then return m.name .. " is on the title screen: they need to load a save first" end
     end
     return nil
 end
@@ -345,6 +387,16 @@ local function begin_go(round, start, host_ch)
         end
         return
     end
+    if start == "new" then
+        local gm = game_manager()
+        local ok, err = pcall(gm.call, gm, "newGameRequest")
+        L.go.done = true
+        log("lobby start: New Game: " .. tostring(ok) .. (ok and "" or (" " .. tostring(err))))
+        say(ok and "Started! A new game for everyone..." or "Couldn't start a new game: choose NEW GAME on the tape recorder",
+            ok and 0xFF7FFF8C or 0xFF6B6BFF)
+        if ok then M.open_wanted = false end
+        return
+    end
     local e
     if start == "host" then
         if host_ch == nil or host_ch == my_chapter() then
@@ -362,6 +414,13 @@ local function begin_go(round, start, host_ch)
         return
     end
     L.go.entry = e
+    -- From the title screen (v0.54): a jump straight from there breaks the picture (tried again 2026-11-14), so
+    -- this game first loads its latest save (Continue), or starts a New Game when it has none, and jumps once
+    -- it's in play (pump_go).
+    if on_title() then
+        L.go.continue_t = os.clock()
+        M.open_wanted = false
+    end
     say("Starting: going to " .. start_label(start == "host" and e.key or start) .. "...", 0xFF7FFF8C)
 end
 -- The title screen's Continue, the way the menu does it itself (v0.41): highlight the CONTINUE
@@ -380,7 +439,7 @@ local function array_items(arr)
     end
     return out
 end
-local function title_continue()
+local function title_menu()
     local sc = sdk.call_native_func(sdk.get_native_singleton("via.SceneManager"), sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
     local arr = sc and safe(sc.call, sc, "findComponents(System.Type)", sdk.typeof("app.TitleSubMenu"))
     local tsm
@@ -388,6 +447,64 @@ local function title_continue()
         local go = safe(t.call, t, "get_GameObject")
         if go and safe(go.call, go, "get_Name") == "GUI_menu" then tsm = t end
     end
+    return tsm
+end
+
+-- Continue's "Load most recent saved data?" (v0.54). The title's Continue step (ContinueBefore) asks this in a
+-- two-choice window (TitleSubMenu._cutinHandle, app.cutin.CutinHandle2Choice; Result 2 = not answered yet), and
+-- the lobby's start used to stop there: nobody answered, and after 30 s it said "choose CONTINUE". Setting the
+-- answer by code (set_Result, CutinProc2Choice.notifyDecide) records it but the window never closes (bot test
+-- 2026-11-14); one press of the pad's Decide button answers it the game's own way, and Yes is its default
+-- (_DefaultSelectYes). So: one Decide press through the game's pad (app.Pad's button bits, set right after
+-- app.Pad.updateButton works them out), only while the lobby start waits on this question.
+local PADPRESS = { hooked = false, frames = 0, mask = 0 }
+local function press_decide()
+    if not PADPRESS.hooked then
+        PADPRESS.hooked = true
+        local m = sdk.find_type_definition("app.Pad"):get_method("updateButton")
+        dbg_note{ feature = "Lobby", name = "Press Decide for Continue's question during a lobby start",
+            when = "when the game calls app.Pad.updateButton; installed the first time a lobby start needs it",
+            reads = "whether a press is queued (3 frames)",
+            writes = "the pad's Decide bits (_ButtonDown, _ButtonTrigger, then _ButtonRelease) while one is queued" }
+        sdk.hook(m, function(args) PADPRESS.this = sdk.to_managed_object(args[2]) end, function(ret)
+            local p = PADPRESS.this
+            if p and PADPRESS.frames > 0 then
+                pcall(function()
+                    p:set_field("_ButtonDown", p:get_field("_ButtonDown") | PADPRESS.mask)
+                    if PADPRESS.first then p:set_field("_ButtonTrigger", p:get_field("_ButtonTrigger") | PADPRESS.mask) end
+                end)
+            elseif p and PADPRESS.release then
+                pcall(function() p:set_field("_ButtonRelease", p:get_field("_ButtonRelease") | PADPRESS.mask) end)
+            end
+            return ret
+        end)
+        dbg_note{ feature = "Lobby", name = "Count down the Decide press",
+            when = "every frame, once a lobby start has needed a press",
+            reads = "the frames left of the press", writes = "the press's frame count and release" }
+        re.on_frame(function()
+            if PADPRESS.frames > 0 then
+                PADPRESS.frames = PADPRESS.frames - 1
+                PADPRESS.first = false
+                if PADPRESS.frames == 0 then PADPRESS.release = true end
+            elseif PADPRESS.release then
+                PADPRESS.release = false
+            end
+        end)
+    end
+    local f = sdk.find_type_definition("app.Pad.Button"):get_field("Decide")
+    local b = f and f:get_data(nil)
+    if b == nil then return false end
+    PADPRESS.mask, PADPRESS.frames, PADPRESS.first, PADPRESS.release = 1 << b, 3, true, false
+    return true
+end
+local function title_question_waiting()
+    local tsm = title_menu()
+    local h = tsm and safe(tsm.get_field, tsm, "_cutinHandle")
+    return h ~= nil and tonumber(safe(h.call, h, "get_Result")) == 2
+end
+
+local function title_continue()
+    local tsm = title_menu()
     if tsm == nil then return false, "no title menu yet" end
     if safe(tsm.get_field, tsm, "IsMainListControl") ~= true then return false, "the title menu isn't ready" end
     local steps = tsm:get_field("_StepParam")
@@ -411,26 +528,56 @@ local function pump_go(now)
     if g and not g.done and g.continue_t then
         if now < (g.next_t or 0) then return end
         g.next_t = now + 1
-        if not on_title() then g.done = true return end   -- loading: it worked
+        if not on_title() then
+            -- Loading: it worked. A chapter start goes on to its jump once the game is in play (v0.54).
+            if g.entry then g.continue_t, g.t0, g.after_load = nil, now, true else g.done = true end
+            return
+        end
         if now - g.continue_t > 30 then
             g.done = true
             say("Choose CONTINUE on the tape recorder to load your save", 0xFF7FE6FF)
             return
         end
-        if not g.pressed then
+        if g.pressed then
+            -- The question Continue asks: Yes (its default), with one Decide press, up to four tries.
+            if g.continue_ok and (g.decides or 0) < 4 and now - (g.pressed_t or now) > 1 and title_question_waiting() then
+                g.decides = (g.decides or 0) + 1
+                local ok = press_decide()
+                log("lobby start: answering Load most recent saved data? with Yes (" .. tostring(ok) .. ")")
+                g.next_t = now + 2
+            end
+        else
             local ok, why = title_continue()
-            if ok then g.pressed = true else log("lobby start: " .. tostring(why)) end
+            if ok then g.pressed, g.pressed_t, g.continue_ok = true, now, not (settings and settings.auto_continue == false)
+            elseif g.entry and tostring(why):find("no Continue row", 1, true) then
+                -- No save to load (v0.54): a New Game gets this game into play, then the jump.
+                local gm = game_manager()
+                g.pressed = pcall(gm.call, gm, "newGameRequest")
+                log("lobby start: no save to continue from: New Game first (" .. tostring(g.pressed) .. ")")
+            else log("lobby start: " .. tostring(why)) end
         end
         return
     end
     if g == nil or g.done or g.entry == nil or now < g.next_t then return end
     g.next_t = now + 2
-    if now - g.t0 > 60 then
+    -- After a load from the title it may take a while (a New Game's opening plays first).
+    if now - g.t0 > (g.after_load and 300 or 60) then
         g.done = true
-        say("Couldn't start the chapter jump in a minute: " .. tostring(chapters and chapters.last), 0xFF6B6BFF)
+        say("Couldn't start the chapter jump: " .. tostring(chapters and chapters.last), 0xFF6B6BFF)
         return
     end
     if jump_to_chapter == nil then g.done = true return end
+    -- After a load from the title (v0.54): not until that load is over (the player is in the world and the game
+    -- has stopped loading for 5 s). The first try asked for the jump 5 s into the load.
+    if g.after_load then
+        local gm = game_manager()
+        local om = sdk.get_managed_singleton("app.ObjectManager")
+        local p = om and safe(om.get_field, om, "PlayerObj")
+        local loading = gm and safe(gm.call, gm, "get_IsSceneLoading") == true
+        if p == nil or loading then g.settled_t = nil return end
+        g.settled_t = g.settled_t or now
+        if now - g.settled_t < 5 then return end
+    end
     -- Not in the middle of a cutscene: the jump waits for it to end.
     if local_cutscene and safe(local_cutscene) then log("lobby start: waiting for the cutscene to end") return end
     local busy = jump_busy and safe(jump_busy)
@@ -482,12 +629,15 @@ function coop_menu_on_event(text)
         local first = L.state == nil or L.host ~= hid
         L.state = (L.state == "started" and L.host == hid and round <= (L.seen_round or 0)) and "started" or "open"
         L.host, L.host_ch = hid, hch
-        if start ~= L.start then L.start = start L.ready = false end
+        -- v0.54: ready by default, for whatever start the host picks, so the host can start as soon as a friend
+        -- is connected; "Ready: No" in the lobby still holds the start back.
+        if start ~= L.start then L.start = start L.ready_for = start L.me_t = -100 end
         L.round = round
         L.host_seen_t = now
         if first then
-            L.ready, L.info = false, {}
-            say(host_name() .. " is hosting a lobby: open the co-op menu (" .. menu_key().name .. ") to get ready", 0xFF7FFF8C)
+            L.ready, L.ready_for, L.info = true, start, {}
+            L.me_t = -100
+            say(host_name() .. " is setting up the game: you're ready (co-op menu, " .. menu_key().name .. ", to change)", 0xFF7FFF8C)
         end
         return true
     end
@@ -550,10 +700,12 @@ function coop_menu_on_event(text)
 end
 
 local function pump_lobby(now)
-    -- The host is gone (disconnected for 15 s): the lobby is over.
+    -- The host is gone: the lobby is over. v0.54: only after real silence (20 s while open, 60 s after a start,
+    -- when a load can keep their messages back), not the moment their slot can't be read.
     if L.state ~= nil and not i_host() then
         local s = L.host and slot_of(L.host)
-        if s == nil or (L.host_seen_t and now - L.host_seen_t > 15 and L.state == "open") then
+        local quiet = L.host_seen_t and now - L.host_seen_t or 1e9
+        if quiet > (L.state == "open" and 20 or 60) or (s == nil and quiet > 8) then
             L.state, L.host, L.info, L.ready = nil, nil, {}, false
             say("The lobby's host left")
         end
@@ -1015,8 +1167,12 @@ end
 
 function PAGES.lobby()
     local items = {}
+    -- v0.54: with a friend connected the lobby is simply there: whoever opens this page first sets the game up
+    -- (hosts), the others are in it and ready by default, and Start works at once, from the title screen too.
+    if L.state == nil and #linked_members() > 0 and my_id() ~= nil then lobby_host(true) end
     if L.state == nil then
         items[#items + 1] = { info = true, text = party_line(), color = 0xFF969696 }
+        items[#items + 1] = { info = true, text = "Connect to a friend first (Friends), then start the game here.", color = 0xFF969696 }
         items[#items + 1] = { text = "Host a lobby", on = lobby_host,
             hint = "You pick where to start; friends who join you get ready, and you start together." }
         items[#items + 1] = { text = "Join a friend's lobby", on = function() go_page("friends") end,
@@ -1028,19 +1184,20 @@ function PAGES.lobby()
         color = 0xFFFFFFFF }
     -- Players.
     local mine = where_am_i()
-    items[#items + 1] = { info = true, text = string.format("  %s (you): %s, %s, %s", my_name(), chapter_label(my_chapter()),
-        WHERE_TEXT[mine] or mine, (host or L.ready) and "ready" or "not ready"),
+    -- v0.54: short enough for a row of the game's sheet; on the title screen there's no chapter to name.
+    local function place(where, ch) return where == "title" and (WHERE_TEXT.title or "on the title screen") or chapter_label(ch) end
+    items[#items + 1] = { info = true, text = string.format("%s (you): %s, %s", my_name(), place(mine, my_chapter()),
+        (host or L.ready) and "ready" or "not ready"),
         color = (host or L.ready) and 0xFF7FFF8C or 0xFF7FE6FF }
     for _, m in ipairs(members()) do
         local i = L.info[m.slot]
         local state
-        if not m.fresh then state = "not connected"
-        elseif i == nil or os.clock() - i.t > 8 then state = "joining..."
+        local heard = i ~= nil and os.clock() - i.t <= 8   -- their lobby check-ins (they come on the title screen too)
+        if not heard then state = m.fresh and "joining..." or "not connected"
         else
-            state = string.format("%s, %s", WHERE_TEXT[i.where] or i.where,
-                (i.ready and i.start == L.start) and "ready" or "not ready")
+            state = (i.ready and i.start == L.start) and "ready" or "not ready"
         end
-        local color = (i and i.ready and i.start == L.start and m.fresh) and 0xFF7FFF8C or 0xFF7FE6FF
+        local color = (heard and i.ready and i.start == L.start) and 0xFF7FFF8C or 0xFF7FE6FF
         local ping = (m.fresh and m.ping) and string.format(", %d ms", math.floor(m.ping * 1000 + 0.5)) or ""
         -- Where they are in the story next to us (v0.41).
         local cmp = coop_story_compare and safe(coop_story_compare, m.slot)
@@ -1052,15 +1209,11 @@ function PAGES.lobby()
             where = where .. ", on " .. tostring(coop_difficulty_name and safe(coop_difficulty_name, fd) or fd) .. " (not yours)"
             color = 0xFF6B6BFF
         end
-        local row = { info = not host, text = string.format("  %s: %s, %s%s%s", m.name, chapter_label(m.chapter), state, where, ping), color = color }
-        if host then
-            -- The host can take a player out of the session (v0.41).
-            row.on = function() ask("Remove " .. m.name .. " from the session?", "Remove", function() kick(m.id) say(m.name .. " was removed") end) end
-            row.hint = "Enter: remove " .. m.name .. " from the session."
-        end
-        items[#items + 1] = row
+        -- A plain line (v0.54): removing a player is its own row further down, so the first thing highlighted on
+        -- this page isn't "remove your friend".
+        items[#items + 1] = { info = true, text = string.format("%s: %s, %s%s%s", m.name, place(heard and i.where or nil, m.chapter),
+            state, where, ping), color = color }
     end
-    for _ = #members() + 2, 4 do items[#items + 1] = { info = true, text = "  (free place)", color = 0xFF6E6E6E } end
     -- Where to start.
     local avail = starts_available()
     local cur = 1
@@ -1081,17 +1234,23 @@ function PAGES.lobby()
             color = why and nil or 0xFF7FFF8C, off = why,
             on = function()
                 if L.start == "here" then lobby_start()
+                elseif L.start == "new" then ask("Everyone starts a new game from the beginning. Start?", "Start", lobby_start)
                 else ask("Everyone goes to " .. start_label(L.start) .. ". Saving switches off for the jump. Start?", "Start", lobby_start) end
             end,
             hint = why and ("Not yet: " .. why) or "Everyone goes now." }
         items[#items + 1] = { text = "Invite friends", on = function() go_page("friends") end }
+        -- The host can take a player out of the session (v0.41).
+        for _, m in ipairs(members()) do
+            items[#items + 1] = { text = "Remove " .. m.name,
+                on = function() ask("Remove " .. m.name .. " from the session?", "Remove", function() kick(m.id) say(m.name .. " was removed") end) end,
+                hint = "Takes " .. m.name .. " out of the session." }
+        end
         items[#items + 1] = { text = "Close the lobby", on = function() ask("Close the lobby? You stay connected.", "Close it", lobby_close) end }
     else
         items[#items + 1] = { text = "Ready", value = L.ready and "Yes" or "No",
             on = function() L.ready = not L.ready L.ready_for = L.start L.me_t = -100 end,
             left = function() L.ready = false L.me_t = -100 end, right = function() L.ready = true L.ready_for = L.start L.me_t = -100 end,
-            hint = (L.start ~= "here" and where_am_i() == "title") and "Load a save first (Continue): the jump can't start from the title screen."
-                or "The host starts once everyone is ready." }
+            hint = "You're ready by default: the host can start any time. Switch to No to hold the start back." }
         -- Behind the host in the story: their key items and weapons (v0.41, experimental).
         local hslot = L.host and slot_of(L.host)
         local cmp = hslot and coop_story_compare and safe(coop_story_compare, hslot)
@@ -1290,46 +1449,27 @@ function PAGES.session()
     return "This session", items
 end
 
+-- v0.54 (the owner's rule): only what changes how the game plays, and what is experimental. The switches for
+-- things that are simply part of co-op (shared story, doors, bosses, Molded, phones, pushed objects, the host
+-- leading, enemies chasing both, following into tapes) and the ones about looks (nameplate, footsteps, voice,
+-- weapon in hand, ladders, on-screen status) are gone from this page. Their settings still work from
+-- coop_settings.json and the REFramework window, and the shared ones are still agreed between the games.
 function PAGES.options()
     local items = {}
-    items[#items + 1] = setting_toggle("Share story", "share_story", true, true,
-        "Cutscenes and story progress one of you reaches count for both; the same for everyone.")
     items[#items + 1] = setting_toggle("Share supplies", "share_supplies", false, true,
         "One copy of ammo and healing for everyone (harder); the same for everyone.")
     items[#items + 1] = setting_toggle("Drop discarded items for your friend", "drop_on_discard", true, true,
         "An item you discard in the inventory also lands on your friend's ground, and theirs on yours, to pick up. Supplies only; the same for everyone.")
-    items[#items + 1] = setting_toggle("Share interactions", "share_interactions", true, true,
-        "Fridges, switches, locks and chains done by one of you are done for all.")
-    items[#items + 1] = setting_toggle("Share phone calls", "share_phones", true, true, "One of you answers, everyone gets the call.")
     items[#items + 1] = setting_toggle("Join your friend's scripted moves", "intr_pull_me", false, false,
         "Off: the phone, a fridge, a pot your friend uses plays on their character and you keep control. On: you're put through it too. Cutscenes always play for both.")
-    items[#items + 1] = setting_toggle("Share pushed objects", "share_physics", true, true, "Chairs and bottles you push move for everyone.")
-    items[#items + 1] = setting_toggle("Share boss fights", "share_bosses", true, true, "One game runs Mia, the others copy her.")
-    items[#items + 1] = setting_toggle("One boss for both", "share_jack_fight", true, true,
-        "On: Jack in the morgue and Mia are one for all of you, run by the game of whoever is nearer, so they go for any of you. Off: each game runs its own; health and defeat are shared.")
-    items[#items + 1] = setting_toggle("One Molded for both", "share_molded_moves", true, true,
-        "On: each Molded is one for all of you, run by the game of whoever is nearer, so it's in the same place on every screen and goes for any of you. Off: each game runs its own; health and deaths are shared.")
-    items[#items + 1] = setting_toggle("Molded go after any of you", "share_molded_target", true, true,
-        "With \"One Molded for both\" off: a Molded that's fighting goes for whichever of you is nearest, in every game, so it chases the same person on both screens.")
     items[#items + 1] = setting_toggle("Bump into your friend", "bump_friend", true, false,
         "Lets go in scripted scenes and when you're stuck.")
-    items[#items + 1] = setting_toggle("Follow your friend into VHS tapes", "follow_tapes", true, false)
     items[#items + 1] = setting_toggle("Heal your friend", "heal_friend", false, false,
         "Use a healing item next to them: it heals them, not you.")
-    items[#items + 1] = setting_toggle("Show your friend's weapon", "show_weapon", true, false, nil,
-        function() if show_friend_weapon_again then pcall(show_friend_weapon_again) end end)
-    items[#items + 1] = setting_toggle("Hide your friend on ladders", "hide_on_ladders", false, false, "Your friend climbs with the game's own ladder animation; on hides them instead.")
-    items[#items + 1] = setting_toggle("Nameplate over your friend", "nameplate", true, false)
-    items[#items + 1] = setting_toggle("Friend's footsteps", "footsteps", true, false)
-    items[#items + 1] = setting_toggle("Your friend's voice", "friend_voice", true, false,
-        "Their grunts when they're hit, block or land, their scream if they die, getting back up.")
     items[#items + 1] = setting_toggle("Your friend's flashlight (experimental)", "friend_light", false, false,
         "In the dark, their flashlight shines where they look (once your own has been on).")
-    items[#items + 1] = setting_toggle("One game leads the story", "story_follow_host", true, true,
-        "The host's story scenes play for everyone wherever you are, and the host's progress counts for all; the same for everyone.")
-    items[#items + 1] = setting_toggle("Enemies chase both players", "enemy_chase_both", true, true,
-        "Up close, an enemy turns on whichever of you is nearer (its game changes to that player's); the same for everyone.")
-    items[#items + 1] = setting_toggle("On-screen status", "hud", true, false)
+    items[#items + 1] = setting_toggle("Cutscenes wait for both (experimental)", "scene_ready", false, false,
+        "A cutscene or VHS tape you start waits a moment for your friend's game, then starts for both together. Each of you sets it.")
     do
         local cur = text_size_index()
         local function pick(d)
@@ -1686,6 +1826,302 @@ local function draw_paper(title, items, is_confirm)
     end
 end
 
+-- The game's own sheets (v0.54). The co-op screen is shown on RE7's real Options sheets instead of drawn ones:
+-- on the title screen the two sheets of paper on the desk (the GUI object "GUI_option"), in play the game's
+-- own in-game Options layout ("OptionMenu" under MenuManager). Both are the same GUI: a title (m_title), the
+-- left list (item_scroll: item_si, item1..item5 show) and the right list (ScrollList: SelectItem, item1..item9
+-- show; each row's list_text holds m_title, m_value and the arrows c_arw_L / c_arw_R). The GUI is switched on
+-- without opening the game's Options (its app.OptionMenu stays idle), our text is written into its rows
+-- (Text.set_Message) and a row is highlighted or greyed through its own play states (SELECT, DECIDE, DISABLE...),
+-- so the font, the paper, the highlight bar and the greyed rows are the game's own. Everything changed is
+-- remembered and put back when the screen closes, so the game's real Options are untouched. Worked out live
+-- 2026-11-13/14 on a test copy (pictures of its window). "menu_sheets": false in coop_settings.json: the drawn
+-- sheets of v0.46 instead, which are also the fallback when the game's sheet can't be found.
+local SK = { saved = nil, gui = nil, t = -100 }
+local SK_LEFT = { "item_si", "item1", "item2", "item3", "item4", "item5" }
+local SK_RIGHT = { "SelectItem", "item1", "item2", "item3", "item4", "item5", "item6", "item7", "item8", "item9" }
+local function sk_child(e, name)
+    local c = e and e:call("get_Child")
+    while c do
+        if c:call("get_Name") == name then return c end
+        c = c:call("get_Next")
+    end
+    return nil
+end
+local function sk_find()
+    local sc = sdk.call_native_func(sdk.get_native_singleton("via.SceneManager"), sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
+    local arr = sc and sc:call("findComponents(System.Type)", sdk.typeof("via.gui.GUI"))
+    local title, ingame
+    for i = 0, (arr and arr:call("get_Count") or 0) - 1 do
+        local g = arr:call("get_Item", i)
+        local n = g and g:call("get_GameObject"):call("get_Name")
+        if n == "GUI_option" then title = g elseif n == "OptionMenu" then ingame = g end
+    end
+    return title or ingame, title ~= nil
+end
+local function sk_keep(e, what, getter)
+    local k = tostring(e:get_address()) .. what
+    if SK.saved[k] == nil then
+        local ok, v = pcall(e.call, e, getter)
+        SK.saved[k] = { e = e, what = what, v = ok and v or nil, had = ok }
+    end
+end
+local function sk_vis(e, on)
+    if e == nil then return end
+    sk_keep(e, "vis", "get_Visible")
+    if e:call("get_Visible") ~= on then e:call("set_Visible", on) end
+end
+local function sk_msg(e, s)
+    if e == nil then return end
+    sk_keep(e, "msg", "get_Message")
+    if e:call("get_Message") ~= s then e:call("set_Message", s) end
+end
+local function sk_state(e, name)
+    if e == nil then return end
+    sk_keep(e, "state", "get_PlayState")
+    if tostring(e:call("get_PlayState")) ~= name then e:call("set_PlayState", name) end
+end
+local function sk_restore()
+    for _, s in pairs(SK.saved or {}) do
+        pcall(function()
+            if s.what == "vis" and s.had then s.e:call("set_Visible", s.v)
+            elseif s.what == "msg" then s.e:call("set_Message", s.v)
+            elseif s.what == "state" and s.v then s.e:call("set_PlayState", tostring(s.v)) end
+        end)
+    end
+    if SK.gui and SK.was then
+        pcall(function()
+            SK.gui:call("set_Enabled", SK.was.enabled)
+            SK.gui:call("get_GameObject"):call("set_DrawSelf", SK.was.draw)
+        end)
+        log("sheets: the game's Options sheet given back")
+    end
+    SK.gui, SK.saved, SK.was, SK.el, SK.sig = nil, nil, nil, nil, nil
+end
+-- The elements, looked up once per sheet.
+local function sk_elements(g)
+    local root = sk_child(g:call("get_View"), "c_option")
+    local left, right = sk_child(root, "item_scroll"), sk_child(root, "ScrollList")
+    if root == nil or left == nil or right == nil then return nil end
+    local el = { root = root, left = left, right = right, title = sk_child(root, "m_title"), lrows = {}, rrows = {} }
+    for i, n in ipairs(SK_LEFT) do
+        local row = sk_child(left, n)
+        if row == nil then return nil end
+        el.lrows[i] = { row = row, text = sk_child(row, "m_item") }
+    end
+    for i, n in ipairs(SK_RIGHT) do
+        local row = sk_child(right, n)
+        local lt = row and sk_child(row, "list_text")
+        if lt == nil then return nil end
+        el.rrows[i] = { row = row, lt = lt, name = sk_child(lt, "m_title"), value = sk_child(lt, "m_value"),
+            al = sk_child(lt, "c_arw_L"), ar = sk_child(lt, "c_arw_R") }
+    end
+    return el
+end
+-- Show the model { title, focus, cats = { { text, sel } x6 }, rows = { { text, value, arrows, off, sel } x10 } }.
+-- Returns "title" or "ingame" (which sheet it is on), or nil when there is no sheet to use.
+local function sk_ready()
+    local now = os.clock()
+    if SK.gui == nil or now - SK.t > 1 then
+        SK.t = now
+        local g, on_title = sk_find()
+        if g == nil then return nil end
+        if SK.gui == nil or SK.gui:get_address() ~= g:get_address() then
+            -- Another scene's sheet (title -> game): the old one is gone with its scene.
+            SK.gui, SK.saved, SK.el, SK.sig = g, {}, nil, nil
+            SK.was = { draw = g:call("get_GameObject"):call("get_DrawSelf"), enabled = g:call("get_Enabled") }
+            SK.mode = on_title and "title" or "ingame"
+            log("sheets: on the game's " .. (on_title and "title-screen Options sheets" or "in-game Options layout"))
+        end
+    end
+    SK.el = SK.el or sk_elements(SK.gui)
+    if SK.el == nil then return nil end
+    return SK.mode
+end
+local function sk_apply(model, sig)
+    local now = os.clock()
+    local g, el = SK.gui, SK.el
+    -- Written when something changed, for a few frames after (a row's state change shows its arrows again for
+    -- a frame), and every quarter second.
+    if sig == SK.sig and (SK.settle or 0) <= 0 and now - (SK.full_t or -100) < 0.25 then return SK.mode end
+    if sig ~= SK.sig then SK.settle = 4 else SK.settle = (SK.settle or 0) - 1 end
+    SK.sig, SK.full_t = sig, now
+    local go = g:call("get_GameObject")
+    if not go:call("get_DrawSelf") then go:call("set_DrawSelf", true) end
+    if not g:call("get_Enabled") then g:call("set_Enabled", true) end
+    sk_vis(sk_child(el.root, "c_items"), false)
+    sk_vis(sk_child(el.root, "c_selection"), false)
+    sk_vis(sk_child(el.root, "m_title_record"), false)
+    sk_vis(el.title, true)
+    sk_msg(el.title, model.title)
+    sk_vis(el.left, true)
+    sk_vis(sk_child(el.left, "item_sb"), false)
+    sk_vis(sk_child(el.left, "item6"), false)
+    for i, r in ipairs(el.lrows) do
+        local c = model.cats[i]
+        sk_vis(r.row, c ~= nil)
+        if c then
+            sk_msg(r.text, c.text)
+            sk_state(r.row, c.sel and (model.focus == "A" and "SELECT" or "DECIDE") or "DEFAULT")
+        end
+    end
+    sk_vis(el.right, true)
+    sk_vis(sk_child(el.right, "ScrollBar"), false)
+    sk_vis(sk_child(el.right, "item10"), false)
+    for i, r in ipairs(el.rrows) do
+        local it = model.rows[i]
+        sk_vis(r.row, it ~= nil)
+        if it then
+            local st = it.sel and (it.off and "DISABLE_SELECT" or "SELECT") or (it.off and "DISABLE" or "DEFAULT")
+            sk_state(r.row, st)
+            sk_state(r.lt, st)
+            sk_msg(r.name, it.text or "")
+            sk_msg(r.value, it.value or "")
+            sk_vis(r.al, it.arrows == true)
+            sk_vis(r.ar, it.arrows == true)
+        end
+    end
+    return SK.mode
+end
+local function clip(s, n)
+    s = tostring(s or "")
+    if #s <= n then return s end
+    return s:sub(1, n - 3) .. "..."
+end
+-- Where the rows are on screen, for the mouse: measured on a 960x540 picture of each layout (title: the
+-- sheets lie in perspective on the desk, so these are near enough, not exact).
+local SK_GEOM = {
+    title = { ax1 = 160, ax2 = 610, ay = 296, ah = 54, bx1 = 724, bx2 = 1670, by = 268, bh = 57.6 },
+    ingame = { ax1 = 145, ax2 = 650, ay = 197, ah = 60, bx1 = 770, bx2 = 1772, by = 197, bh = 60 },
+}
+local function draw_sheets(title, items, is_confirm)
+    if settings and settings.menu_sheets == false then return draw_paper(title, items, is_confirm) end
+    -- No sheet of the game's to use (or it can't be read): the drawn ones, before anything is laid out for ten rows.
+    local rok, ready = pcall(sk_ready)
+    if not rok or ready == nil then
+        if not rok and not SK.err then SK.err = true log("sheets ERR " .. tostring(ready)) end
+        if SK.gui then pcall(sk_restore) end
+        return draw_paper(title, items, is_confirm)
+    end
+    -- Sheet A: six of the sections, the window following the chosen one.
+    local ncat = #CATS
+    local cat = M.cat or 1
+    local cfirst = M.cat_first or 1
+    if cat < cfirst then cfirst = cat end
+    if cat > cfirst + #SK_LEFT - 1 then cfirst = cat - #SK_LEFT + 1 end
+    cfirst = math.max(1, math.min(cfirst, math.max(1, ncat - #SK_LEFT + 1)))
+    M.cat_first = cfirst
+    local model = { title = "Molded Together", focus = (M.focus == "B" or is_confirm) and "B" or "A", cats = {}, rows = {} }
+    for i = 1, #SK_LEFT do
+        local c = CATS[cfirst + i - 1]
+        if c then model.cats[i] = { text = c.label, sel = (cfirst + i - 1) == cat } end
+    end
+    -- Sheet B: the page's rows (its title first when it isn't the section's own name), ten at a time.
+    local all, off = {}, 0
+    local cl = CATS[cat] and CATS[cat].label
+    if title and title ~= cl then all[1] = { info = true, text = title } off = 1 end
+    for _, it in ipairs(items) do all[#all + 1] = it end
+    local selectable, sidx = {}, {}
+    for i, it in ipairs(items) do if not it.info then selectable[#selectable + 1] = i sidx[i] = #selectable end end
+    local pkey = M.page or "close"
+    local key = is_confirm and "confirm" or pkey
+    local sel = (is_confirm and M.confirm.sel) or M.sel[pkey] or 1
+    if #selectable > 0 then sel = math.max(1, math.min(sel, #selectable)) end
+    if is_confirm then M.confirm.sel = sel else M.sel[pkey] = sel end
+    local active = M.focus == "B" or is_confirm
+    local chosen = active and selectable[sel] or nil          -- index into items
+    local fit_n = #SK_RIGHT
+    local first = M.scroll[key] or 1                           -- index into all
+    if chosen then
+        local ci = chosen + off
+        if ci < first then first = ci end
+        if ci > first + fit_n - 1 then first = ci - fit_n + 1 end
+        if ci - first <= 1 and first > 1 and all[first - 1] and all[first - 1].info then first = first - 1 end   -- its heading too
+    end
+    first = math.max(1, math.min(first, math.max(1, #all - fit_n + 1)))
+    M.scroll[key] = first
+    local sig = { model.focus, tostring(cat), tostring(cfirst), tostring(first) }
+    for i = 1, fit_n do
+        local it = all[first + i - 1]
+        if it then
+            local arrows = (it.left ~= nil or it.right ~= nil) and not it.info
+            local r = { text = clip(it.text, it.value and 44 or 84), value = it.value and clip(it.value, 24) or "",
+                arrows = arrows, off = it.off ~= nil and it.off ~= false, sel = chosen ~= nil and (first + i - 1) == chosen + off }
+            model.rows[i] = r
+            sig[#sig + 1] = r.text .. "\1" .. r.value .. "\1" .. tostring(r.arrows) .. tostring(r.off) .. tostring(r.sel)
+        end
+    end
+    for _, c in ipairs(model.cats) do sig[#sig + 1] = c.text .. tostring(c.sel) end
+    local ok, mode = pcall(sk_apply, model, table.concat(sig, "\2"))
+    if not ok or mode == nil then
+        if not ok and not SK.err then SK.err = true log("sheets ERR " .. tostring(mode)) end
+        if SK.gui then pcall(sk_restore) end
+        return draw_paper(title, items, is_confirm)
+    end
+    -- Where the rows are, for the mouse.
+    local w, h = screen()
+    local k = h / 1080
+    local ox = (w - 1920 * k) / 2
+    local G = SK_GEOM[mode] or SK_GEOM.ingame
+    local hit = { a = {}, b = {}, more = {}, page_n = fit_n, sel_n = #selectable }
+    for i = 1, #SK_LEFT do
+        if CATS[cfirst + i - 1] then
+            hit.a[#hit.a + 1] = { ox + G.ax1 * k, (G.ay + G.ah * (i - 1)) * k, ox + G.ax2 * k, (G.ay + G.ah * i) * k, cfirst + i - 1 }
+        end
+    end
+    for i = 1, fit_n do
+        local ai = first + i - 1
+        local it = all[ai]
+        if it and not it.info then
+            local ii = ai - off
+            hit.b[#hit.b + 1] = { ox + G.bx1 * k, (G.by + G.bh * (i - 1)) * k, ox + G.bx2 * k, (G.by + G.bh * i) * k, ii, sidx[ii],
+                it.on ~= nil or it.off ~= nil or it.right == nil }
+        end
+    end
+    M.hit = hit
+    -- Under the sheets, like the game's own line: what the highlighted thing does, then the keys.
+    local it = chosen and items[chosen]
+    local hint
+    if M.focus == "A" and not is_confirm then
+        local c = CATS[cat]
+        hint = c.page == nil and "Back to the game." or ("Open " .. c.label .. ".")
+    else
+        hint = it and ((it.off and ("Not now: " .. tostring(it.off))) or it.hint) or ""
+    end
+    local hint_color = 0xFFE6E6E6
+    if M.msg and os.clock() - M.msg_t < 6 then hint, hint_color = M.msg, M.msg_color end
+    -- Small, like the game's own line under its sheets (which this covers).
+    hint = fit(hint or "", w - 120, "small")
+    local band = 2 * line_h("small") + 14
+    local gy = h - band - math.floor(h * 0.01)
+    pcall(draw.filled_rect, 0, gy - 8, w, band + 8 + math.floor(h * 0.01), 0xD8000000)
+    text(hint, (w - text_w(hint, "small")) / 2, gy, hint_color, "small")
+    local controls = (M.focus == "A" and not is_confirm)
+        and ("Up/Down: choose    Right / Enter / F / A: open    Esc / B: close    " .. menu_key().name .. " / L3+R3: close")
+        or "Up/Down: choose    Left/Right: change    Enter / F / A: select    Esc / Backspace / B: back"
+    local mo = M.mouse
+    if mo and os.clock() - (mo.t or -100) < 20 then
+        controls = "Mouse: point to choose    Click: select    Right click: back    (the keys and the controller work too)"
+    end
+    if #all > fit_n then
+        controls = string.format("Rows %d-%d of %d    ", first, math.min(#all, first + fit_n - 1), #all) .. controls
+    end
+    controls = fit(controls, w - 120, "small")
+    text(controls, (w - text_w(controls, "small")) / 2, gy + line_h("small"), 0xFF9A9A9A, "small")
+    -- Who you're playing with, top right (the drawn sheets had it at the foot of sheet A).
+    local pl = party_line()
+    local inv = pending_invite and safe(pending_invite)
+    if inv then pl = inv.name .. " invited you: Friends" end
+    local px0 = w - text_w(pl, "small") - 28
+    pcall(draw.filled_rect, px0 - 12, 14, text_w(pl, "small") + 24, line_h("small") + 8, 0xB0000000)
+    text(pl, px0, 18, (inv or #linked_members() > 0) and 0xFF7FFF8C or 0xFFBFBFBF, "small")
+    if mo and mo.x and os.clock() - (mo.t or -100) < 4 then
+        pcall(draw.filled_circle, mo.x, mo.y, 6, 0xFFFFFFFF, 16)
+        pcall(draw.outline_circle, mo.x, mo.y, 7, 0xFF000000, 16)
+    end
+end
+function coop_menu_sheets_off() if SK.gui then pcall(sk_restore) end end
+
 -- The CO-OP row on the title screen's tape recorder (v0.41, worked out live 2026-11-09). The
 -- title menu (app.TitleSubMenu on GUI_menu) lists its rows from _StepParam; its scroll list
 -- (_MainList._Element, a via.gui.ScrollList) shows ItemMax of them, three at a time, each slot
@@ -1922,8 +2358,14 @@ local function draw_prompts(now)
     if L.state == "open" and not i_host() and not L.ready then
         lines[#lines + 1] = { host_name() .. "'s lobby is waiting: " .. how .. " to get ready", 0xFF7FFF8C }
     end
-    if i_host() and L.state == "open" and #members() > 0 and start_blocker() == nil then
-        lines[#lines + 1] = { "Everyone's ready: " .. how .. ", then Start", 0xFF7FFF8C }
+    -- v0.54: only on the title screen (the lobby is there whenever a friend is connected, so in play this line
+    -- would never go away), and the friend's side says who starts.
+    if on_title() and i_host() and L.state == "open" and #members() > 0 and start_blocker() == nil then
+        lines[#lines + 1] = { "Your friend is here: " .. how .. ", Lobby, then Start", 0xFF7FFF8C }
+    elseif on_title() and L.state == "open" and not i_host() and L.ready then
+        lines[#lines + 1] = { host_name() .. " is setting up the game: it starts when they press Start", 0xFF7FFF8C }
+    elseif on_title() and L.state == nil and #linked_members() > 0 then
+        lines[#lines + 1] = { "Your friend is connected: " .. how .. ", Lobby, to start the game together", 0xFF7FFF8C }
     end
     if on_title() then
         if TITLE.selected then
@@ -2114,6 +2556,8 @@ re.on_frame(function()
             if M.table_mode then pcall(title_table, false) end
         end
         if not M.open then
+            -- The game's Options sheet goes back to the game as soon as our screen is closed (v0.54).
+            if SK.gui then pcall(sk_restore) end
             -- Watchdog: nothing of ours may stay held while the menu is closed.
             if M.locked then hold_game(false) end
             M.hit = nil
@@ -2161,7 +2605,7 @@ re.on_frame(function()
         end
         if M.open then
             local t2, items2, c2 = current_items()
-            draw_paper(t2, items2, c2)
+            draw_sheets(t2, items2, c2)
         end
     end)
     -- Each different error once (v0.42: only the first was, so a second kind went unseen).

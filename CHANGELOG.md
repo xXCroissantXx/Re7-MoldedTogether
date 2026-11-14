@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.54 (2026-11-14)
+The co-op screen is on the game's own paper, and you can start from the lobby as soon as a friend connects.
+
+- **The game's own sheets.** On the title screen the co-op screen is drawn on RE7's real Options paper (sheet A,
+  the sections; sheet B, the rows), with the game's own highlight and arrows, on the Options table. In play it uses
+  the game's own in-game Options screen. Closing it gives the sheet back to the game untouched. The old drawn
+  sheets are still there with `"menu_sheets": false` in coop_settings.json.
+- **A shorter Options page.** Only what changes how the game plays and the experimental settings are left (Share
+  supplies, dropping discarded items, joining scripted moves, bumping, healing your friend, the friend's flashlight,
+  and the new **Cutscenes wait for both**). The rest is simply on; those settings still work from
+  coop_settings.json and the REFramework window.
+- **Start from the lobby once a friend connects.** Opening the Lobby with a friend connected sets it up (no "Host a
+  lobby" step), friends are ready by default, and the host can press **Start** straight away, **from the title
+  screen too**: each game answers Continue's "Load most recent saved data?" itself, loads, and then goes to the
+  chosen chapter (a game with no save starts a New Game first).
+- **New Game together**: a new lobby start, from the opening, for everyone at once.
+- Lobby messages now reach a friend who's still on the title screen (they used to wait until a save was loaded,
+  so the lobby only worked once everyone was already playing).
+- Fixed: after a start, the lobby could say "The lobby's host left" and "... is setting up the game" over and over
+  (a moment when the connection details read as empty made the host forget it was the host).
+- The status lines and your friend's nameplate no longer draw over the co-op screen.
+- **Debug: what the scripts do** (by Kingkiller1195): REFramework menu > Molded Together > Show developer tools
+  lists every part of the mod, what it runs on, looks at and changes, and with **Measure** ticked how often it
+  runs and how long it takes. **Save report and copy it** writes coop_debug_report.txt to share with us.
+
+## v0.53 (2026-11-13)
+Cutscenes start closer together, and VHS tapes' own scenes are shared.
+
+- **Cutscenes start together.** Your friend's game now starts your cutscene about half a second after yours
+  (it was about 2 seconds): it checks for waiting scenes 4 times a second instead of once, and waits only a
+  moment for a story step that may start the same scene.
+- **VHS tapes stay in step.** The tapes' own cutscenes (their scripted NPC moments) are now shared like the
+  main story's; before, each game played them on its own clock.
+- **Experimental: wait for each other.** With `"scene_ready": true` in coop_settings.json, a cutscene you start
+  waits (at most 8 s) until your friend's game is ready and then starts for both at the same moment, and a VHS
+  tape waits for your friend's game to follow before either goes in. It's off by default: in one bot test a
+  held scene was set up but didn't play in time.
+- The bots stepped through the rest of the story together (Chapter 4 on the ship and after, and the first
+  tape), both games at the same step every time; every kind of interaction in those areas is shared.
+
 ## v0.52 (2026-11-13)
 Chapter 1 in co-op, after a playtest of it. Every fix was tested with two copies of the game playing each other.
 

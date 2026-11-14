@@ -53,14 +53,16 @@ local function arr_items(arr)
     end
     return out
 end
-local STORY_NAME = "^c%d%de%d%d_%d%d$"
+-- v0.53: tape scenes too ("c01f01_00", FF000's opening): they were never shared, so the tape's scripted
+-- moments ran in each game on its own clock.
+local STORY_NAME = "^c%d%d[ef]%d%d_%d%d$"
 -- Jack's scripted moments (breaking through the hatch-room wall, 2026-11-02) are events too,
 -- named em3000_*; they follow the same rules (same chapter, friend within NEAR).
 local SCRIPTED_NAME = "^em3%d%d%d_"
 local function is_story_event(name) return name:match(STORY_NAME) ~= nil or name:match(SCRIPTED_NAME) ~= nil end
 -- A story scene's sequence and its place in it (v0.39): "c03e00_02" -> "c03e00", 2.
 local function seq_of(name)
-    local grp, idx = tostring(name):match("^(c%d%de%d%d)_(%d%d)$")
+    local grp, idx = tostring(name):match("^(c%d%d[ef]%d%d)_(%d%d)$")
     return grp, tonumber(idx)
 end
 
@@ -191,6 +193,139 @@ end
 
 -- Our side ---------------------------------------------------------------------------
 local ec = sdk.find_type_definition("app.GameEventController")
+-- Starting cutscenes together (v0.53). A scene of ours that the friend will join is held for a moment at its
+-- setup: the friend's game brings its player over and loads the scene, answers "ready <name>", and both start
+-- it in the same moment (one network trip apart) instead of the friend's starting seconds later. VHS tapes'
+-- scenes too, so a tape's scripted NPCs run in step. Held at most SCENE_READY_MAX s; a scene that follows on
+-- from one of ours (the next part of a sequence) isn't held. "scene_ready": false in coop_settings.json: off.
+SCENE_READY_MAX = 8
+ss.held = ss.held or {}
+local function hold_scene(name, ch)
+    -- Opt-in (settings.scene_ready = true): in one bot case (a scene asked for twice in the same moment) the held
+    -- scene was set up but never played in time. Off, the friend's game starts it within about half a second.
+    if not (settings and settings.scene_ready == true) or settings.scene_pull == false then return false end
+    if ss.scene_pass == name or ss.held[name] then return false end
+    if ss.running[name] then return false end   -- set up already (a second request for it)
+    -- Already asked for by another path (a second request for the same scene): left alone.
+    local em0 = event_mgr()
+    local okq, same = pcall(em0.call, em0, "isSameEventRequested(System.String)", sdk.create_managed_string(name))
+    if okq and same == true then return false end
+    if ours("ev:" .. name) or (ss.played_chapter == ch and ss.played[name]) then return false end
+    if coop_my_phone_t and os.clock() - coop_my_phone_t < 15 then return false end   -- a phone call: theirs to hear
+    -- The friend is holding this one for us (their "story <name> hold" came first): we start, they follow.
+    if ss.ready_for and ss.ready_for[name] then return false end
+    local smp = coop_friend_sample and coop_friend_sample()
+    if smp == nil then
+        -- A tape we've just gone into together (v0.53): its first scene waits for whoever is still loading in.
+        local into = math.max(coop_tape_sent_t or -1000, coop_tape_follow_t or -1000)
+        if TAPE_CHAPTERS and TAPE_CHAPTERS[ch] and os.clock() - into < 120 and not ss.tape_scene_held then
+            if next(ss.running) ~= nil then return false end
+            ss.tape_scene_held = true
+            return true, nil, TAPE_READY_MAX
+        end
+        return false
+    end
+    if rawget(_G, "friend_cutscene") == true then return false end
+    if revive and revive.down_slots and revive.down_slots[1] then return false end
+    if next(ss.running) ~= nil or os.clock() - (ss.cut_end_t or -100) < 3 then return false end   -- mid-sequence
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local pl = om and om:get_field("PlayerObj")
+    local pp = pl and pl:call("get_Transform"):call("get_Position")
+    if pp == nil then return false end
+    local d = math.sqrt((smp.pos.x - pp.x) ^ 2 + (smp.pos.y - pp.y) ^ 2 + (smp.pos.z - pp.z) ^ 2)
+    return d <= SCENE_PULL_MAX, d
+end
+-- Held at the request (GameEventManager.requestEvent), the game's normal way in, and asked again the same way:
+-- a replayed requestSetup (the first try) was only taken up 26 s later in the bot test. The friend answers as
+-- it asks for the scene itself, so both games load it side by side and start it together.
+ss.held_sent = ss.held_sent or {}
+local function release_scene(name, why)
+    local h = ss.held[name]
+    if h == nil then return end
+    ss.held[name] = nil
+    local em = event_mgr()
+    -- Set up or asked for meanwhile by another path: not asked for a second time (that one waited behind it).
+    local okq, same = pcall(em.call, em, "isSameEventRequested(System.String)", sdk.create_managed_string(name))
+    if ss.running[name] or (okq and same == true) then
+        log(string.format("scene %s: %s; it was already starting here (held %.1f s)", name, why, os.clock() - h.t))
+        return
+    end
+    ss.scene_pass = name
+    local ok, err = pcall(em.call, em, "requestEvent(System.String, via.Transform, System.Boolean)",
+        sdk.create_managed_string(name), h.tr, h.flag == true)
+    ss.scene_pass = nil
+    -- The caller's callbacks (on the Handle it got while held) go onto the real request.
+    if ok and err and h.handle then
+        local tok, terr = pcall(h.handle.call, h.handle, "transferTo", err)
+        if not tok then log("scene " .. name .. ": couldn't move its callbacks onto the real request (" .. tostring(terr) .. ")") end
+    end
+    log(string.format("scene %s: %s, starting it (held %.1f s)%s", name, why, os.clock() - h.t, ok and "" or (" ERR " .. tostring(err))))
+end
+function coop_story_scene_ready(name, from_slot)
+    if ss.held[name] then release_scene(name, "your friend is ready") end
+end
+dbg_note{ feature = "Story cutscenes", name = "Release held scenes (Cutscenes wait for both) when the friend is late",
+    when = "every frame",
+    reads = "the scenes held for the friend and how long each has waited; our chapter",
+    writes = "requests a held scene for real after its wait (8 s, 30 s into a tape); forgets the one-per-tape hold outside the tapes" }
+re.on_frame(function()
+    local now = os.clock()
+    for name, h in pairs(ss.held) do
+        if now - h.t > (h.max or SCENE_READY_MAX) then release_scene(name, "your friend didn't answer in time") end
+    end
+    -- One held first scene per tape: cleared once we're out of the tapes again.
+    if ss.tape_scene_held and not (TAPE_CHAPTERS and TAPE_CHAPTERS[chapter()]) then ss.tape_scene_held = nil end
+end)
+do
+    local emt = sdk.find_type_definition("app.GameEventManager")
+    local rq = emt and emt:get_method("requestEvent(System.String, via.Transform, System.Boolean)")
+    if rq then
+        -- requestEvent returns a GameEventManager.Handle (an object its caller may hang start/end callbacks on). A
+        -- held call gets a fresh Handle of its own (a skipped call handed back an undefined one: an exception in the
+        -- bot suite), and when the scene is really requested its callbacks are moved onto the real one (transferTo).
+        -- (Swapping in a name no scene has instead blocked the game's queue: the real scene then waited 24 s.)
+        local HANDLE_T = sdk.find_type_definition("app.GameEventManager.Handle")
+        local held_ret = nil
+        dbg_note{ feature = "Story cutscenes", name = "Hold a scene of ours until the friend is ready (Cutscenes wait for both)",
+            when = "when the game calls GameEventManager.requestEvent (a scene is asked for); only with scene_ready on",
+            reads = "the scene's name; whether the friend is near and not in a scene; tape entry time",
+            writes = "skips the request and returns a stand-in Handle; sends 'story <scene> <chapter> hold'" }
+        sdk.hook(rq, function(args)
+            local skip = false
+            held_ret = nil
+            pcall(function()
+                local so = sdk.to_managed_object(args[3])
+                local n0 = so and tostring(so:call("ToString"))
+                if n0 == nil or not is_story_event(n0) then return end
+                local ch0 = chapter()
+                local hold, d, max = hold_scene(n0, ch0)
+                if hold then
+                    local tr = args[4] and sdk.to_managed_object(args[4]) or nil
+                    if tr then tr:add_ref() end
+                    local hd = HANDLE_T and sdk.create_instance("app.GameEventManager.Handle")
+                    if hd then pcall(hd.call, hd, ".ctor") hd:add_ref() end
+                    ss.held[n0] = { tr = tr, flag = (sdk.to_int64(args[5]) & 0xff) ~= 0, t = os.clock(), max = max, handle = hd }
+                    held_ret = hd
+                    ss.held_sent[n0] = true
+                    send(string.format("story %s %d hold", n0, ch0))
+                    log(string.format("scene %s: held until your friend is ready (%s)", n0,
+                        d and string.format("%.0f m away", d) or "they're still loading into the tape"))
+                    skip = true
+                end
+            end)
+            if skip and held_ret then return sdk.PreHookResult.SKIP_ORIGINAL end
+        end, function(r)
+            if held_ret then
+                local hd = held_ret
+                held_ret = nil
+                return sdk.to_ptr(hd)
+            end
+            return r
+        end)
+    else
+        log("scene hold: GameEventManager.requestEvent not found; cutscenes start as before")
+    end
+end
 dbg_note{ feature = "Story cutscenes", name = "A scene is being set up here: tell the friend",
     when = "when the game calls GameEventController.requestSetup (a cutscene or scripted moment starts here)",
     reads = "the scene's event name; whether it is a story scene; our chapter; whether it is the friend's scene or our own phone call",
@@ -215,6 +350,8 @@ sdk.hook(ec:get_method("requestSetup(app.GameEventSetting, via.Transform)"), fun
         if ss.played_chapter ~= ch then ss.played, ss.played_chapter = {}, ch end
         local first = not ss.played[name]
         mark_played(name, ch)
+        -- Our game started a scene the friend is holding for us, by itself or on their word (v0.53): both go now.
+        if coop_story_started_for_friend then coop_story_started_for_friend(name) end
         -- The sequence our game is in now (v0.39), and when each scene started (for its end).
         local grp = seq_of(name)
         if grp then ss.last_seq = { grp = grp, t = os.clock(), ch = ch } end
@@ -224,7 +361,9 @@ sdk.hook(ec:get_method("requestSetup(app.GameEventSetting, via.Transform)"), fun
         -- A scene our own phone started (coop_world notes the moment we answer): told apart from a real
         -- cutscene, so the friend's game gives it to our body instead of playing it on the friend.
         local tag = (coop_my_phone_t and os.clock() - coop_my_phone_t < 15) and " phone" or ""
-        if first and not ours("ev:" .. name) then send(string.format("story %s %d%s", name, ch, tag)) end
+        -- A held scene was announced when it was held ("story <name> <ch> hold"): not twice.
+        if first and not ours("ev:" .. name) and not ss.held_sent[name] then send(string.format("story %s %d%s", name, ch, tag)) end
+        ss.held_sent[name] = nil
     end)
 end, function(r) return r end)
 
@@ -596,7 +735,33 @@ local function busy_here()
     return nil
 end
 
-local function apply_story(name, ch, phone)
+local apply_story_body
+-- v0.53: a scene the friend's game is holding for us ("story <name> <ch> hold"): it starts there when we answer
+-- "sready" (sent as ours starts, see the pending loop), or at once on "snoready" when we won't join it.
+local function apply_story(name, ch, phone, hold)
+    ss.ready_for = ss.ready_for or {}
+    if hold then ss.ready_for[name] = os.clock() end
+    local joined = apply_story_body(name, ch, phone)
+    -- A tape scene held for us while we're still on our way into that tape (v0.53): kept, and answered when our own
+    -- game starts it there (the requestSetup hook), so the first one in waits for the second.
+    local into = math.max(coop_tape_sent_t or -1000, coop_tape_follow_t or -1000)
+    if hold and not joined and ch ~= chapter() and TAPE_CHAPTERS and TAPE_CHAPTERS[ch] and os.clock() - into < 120 then
+        log("friend's " .. name .. ": held for us in the tape; it starts there when we arrive")
+        return
+    end
+    if hold and not joined then
+        ss.ready_for[name] = nil
+        send("snoready " .. name)
+    end
+end
+-- Our game starts a scene the friend is holding for: tell them, so both start now.
+function coop_story_started_for_friend(name)
+    if ss.ready_for and ss.ready_for[name] then
+        ss.ready_for[name] = nil
+        send("sready " .. name)
+    end
+end
+apply_story_body = function(name, ch, phone)
     coop_scene_t = os.clock()   -- the friend's scene is starting: no bumping for a while (v0.34)
     -- The latest scene group the friend has reached (v0.49, see sequence_open).
     local fg = ch == chapter() and seq_of(name) or nil
@@ -675,14 +840,19 @@ local function apply_story(name, ch, phone)
         log("friend's " .. start .. " waits: you're " .. busy)
     elseif setting_loaded(start) then
         -- Not at once (v0.48): a scene the friend's story step started comes with that step ("prog"), and the
-        -- step played it here a second time (the morgue scene twice in a bot test). It waits 1.5 s, and while
+        -- step played it here a second time (the morgue scene twice in a bot test). It waits a moment, and while
         -- a step is queued; the step plays it, and if the step doesn't, it plays after (the loop below).
-        ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1, hold_until = os.clock() + 1.5, instead = instead }
+        -- v0.53: 0.5 s (was 1.5): the step comes before or with the scene (events arrive in order, read 5 times a
+        -- second), and the "a step is queued" wait below still covers it; the friend's scene now starts here about
+        -- half a second after theirs instead of two.
+        ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1, hold_until = os.clock() + 0.5, instead = instead }
     else
         -- After a pull the area streams in around us: allow it longer to load (PENDING_PULLED).
         ss.pending[start] = { ch = ch, t = os.clock(), slot = coop_event_slot or 1, instead = instead, pulled = pulled }
         log("waiting for " .. start .. " to load here")
     end
+    ss.pending[start].friend_name = name
+    return true
 end
 
 -- Together: in step, or the friend within NEAR m (v0.31). Progress and finished events that
@@ -939,16 +1109,80 @@ function coop_story_settle(why)
     for k in pairs(ss.pending) do ss.pending[k] = nil n = n + 1 end
     if n > 0 then log(string.format("%s: %d of your friend's waiting scene(s) dropped (they were for before the load)", why, n)) end
 end
+-- Into a VHS tape together (v0.53). Putting a tape in the deck changes chapter; the friend's game followed only
+-- after ours was in, then loaded on its own, and the tape's scripted NPCs ran ahead in ours. Now, when we've
+-- just used a tape (coop_world sets coop_tape_sent_t) and the friend is with us, our chapter change waits until
+-- their game says it's on its way ("tapejump", coop_dummy's tape follow) or TAPE_HOLD_MAX s pass; both games
+-- then load the tape at the same time, and its first scene waits for both (hold_scene, TAPE_READY_MAX).
+TAPE_HOLD_MAX = 6
+TAPE_READY_MAX = 30
+ss.tape_hold = nil
+local function tape_hold_applies()
+    -- Opt-in with the scene hold (settings.scene_ready = true): not tried on a real tape deck yet.
+    if not (settings and settings.scene_ready == true) then return false end
+    if ss.tape_pass or ss.tape_hold then return false end
+    if settings and settings.follow_tapes == false then return false end
+    if not (coop_tape_sent_t and os.clock() - coop_tape_sent_t < 15) then return false end
+    return coop_friend_sample ~= nil and coop_friend_sample() ~= nil
+end
+local function release_tape(why)
+    local h = ss.tape_hold
+    if h == nil then return end
+    ss.tape_hold = nil
+    ss.tape_pass = true
+    local gm = sdk.get_managed_singleton("app.GameManager")
+    local ok, err
+    if h.key then
+        ok, err = pcall(gm.call, gm, "chapterJumpRequest(System.String, System.Boolean, System.String)", h.key, h.flag, h.extra or "")
+    else
+        ok, err = pcall(gm.call, gm, "nextChapterJumpRequest")
+    end
+    ss.tape_pass = false
+    log(string.format("into the tape: %s (held %.1f s)%s", why, os.clock() - h.t, ok and "" or (" ERR " .. tostring(err))))
+end
+function coop_story_tape_jump()
+    if ss.tape_hold then release_tape("your friend is on the way too") end
+end
+dbg_note{ feature = "VHS tapes", name = "Let a held tape jump go when the friend's game doesn't follow",
+    when = "every frame",
+    reads = "the tape jump held for the friend and how long it has waited",
+    writes = "asks the game for that chapter jump after TAPE_HOLD_MAX (6 s)" }
+re.on_frame(function()
+    if ss.tape_hold and os.clock() - ss.tape_hold.t > TAPE_HOLD_MAX then release_tape("your friend's game didn't follow in time") end
+end)
+local function managed_text(ptr)
+    local ok, s = pcall(function() local o = sdk.to_managed_object(ptr) return o and o:call("ToString") end)
+    return ok and s ~= nil and tostring(s) or nil
+end
 do
     local gmt = sdk.find_type_definition("app.GameManager")
     for _, mname in ipairs({ "newGameRequest", "newGameRequest_Chapter7",
-        "chapterJumpRequest(System.String, System.Boolean, System.String)" }) do
+        "chapterJumpRequest(System.String, System.Boolean, System.String)", "nextChapterJumpRequest" }) do
         local m = gmt and gmt:get_method(mname)
+        local short = mname:match("^[%w_]+")
         dbg_note{ feature = "Loads and the black screen", name = "A load or new game started: drop the friend's waiting scenes",
-            when = "when the game calls GameManager." .. mname:match("^[%w_]+") .. " (a New Game or chapter jump begins)",
-            reads = "the table of the friend's waiting scenes",
-            writes = "starts the 12 s settle time (nothing of the friend's is started meanwhile) and forgets the waiting scenes" }
-        if m then pcall(sdk.hook, m, function(args) pcall(coop_story_settle, "a load started (" .. mname:match("^[%w_]+") .. ")") end, function(r) return r end) end
+            when = "when the game calls GameManager." .. short .. " (a New Game or chapter jump begins)",
+            reads = "the table of the friend's waiting scenes; whether we're going into a VHS tape with the friend",
+            writes = "starts the 12 s settle time (nothing of the friend's is started meanwhile) and forgets the waiting scenes; holds a tape's chapter jump until the friend's game follows (TAPE_HOLD_MAX)" }
+        if m then
+            pcall(sdk.hook, m, function(args)
+                local hold = false
+                pcall(function()
+                    if (short == "chapterJumpRequest" or short == "nextChapterJumpRequest") and tape_hold_applies() then
+                        local h = { t = os.clock() }
+                        if short == "chapterJumpRequest" then
+                            h.key, h.flag, h.extra = managed_text(args[3]), (sdk.to_int64(args[4]) & 0xff) ~= 0, managed_text(args[5])
+                        end
+                        if short == "nextChapterJumpRequest" or h.key then
+                            ss.tape_hold, hold = h, true
+                            log("into the tape: waiting for your friend's game to follow (" .. tostring(h.key or "next chapter") .. ")")
+                        end
+                    end
+                    if not hold then coop_story_settle("a load started (" .. short .. ")") end
+                end)
+                if hold then return sdk.PreHookResult.SKIP_ORIGINAL end
+            end, function(r) return r end)
+        end
     end
     -- A save load settles too: from on_load (one hook on loadLevelUsingLoadData).
 end
@@ -1303,7 +1537,17 @@ function coop_story_on_event(text)
         return true
     end
     local name, ch, stag = text:match("^story (%S+) (%-?%d+) ?(%a*)")
-    if name then pcall(apply_story, name, tonumber(ch), stag == "phone") return true end
+    if name then pcall(apply_story, name, tonumber(ch), stag == "phone", stag == "hold") return true end
+    -- v0.53: the friend's game is ready for a scene ours is holding (or won't join it): start it now.
+    if text:match("^tapejump") then
+        if coop_story_tape_jump then pcall(coop_story_tape_jump) end
+        return true
+    end
+    local rname = text:match("^sready (%S+)") or text:match("^snoready (%S+)")
+    if rname then
+        if coop_story_scene_ready then pcall(coop_story_scene_ready, rname) end
+        return true
+    end
     local h, v, pch = text:match("^prog (%x+) (%-?%d+) (%-?%d+)")
     if h then pcall(apply_prog, tonumber(h, 16), tonumber(v), tonumber(pch)) return true end
     local eh, ech = text:match("^evend (%x+) (%-?%d+)")
@@ -1367,7 +1611,7 @@ dbg_note{ feature = "Story cutscenes", name = "Play the friend's scenes that wer
     writes = "starts the scene here (play) once it is loaded and we are free; gives up after a while" }
 re.on_frame(function()
     local now = os.clock()
-    if now - ss.pend_t < 1 then return end
+    if now - ss.pend_t < 0.25 then return end   -- v0.53: 4 times a second (was once): a scene starts sooner
     ss.pend_t = now
     local busy = busy_here()
     for name, p in pairs(ss.pending) do
@@ -1402,6 +1646,9 @@ re.on_frame(function()
                 log("friend's " .. name .. ": not started here: " .. tostring(why))
             elseif setting_loaded(name) and not busy then
                 ss.pending[name] = nil
+                -- A scene the friend is holding for us (v0.53): both start now.
+                coop_story_started_for_friend(p.friend_name or name)
+                if p.instead then coop_story_started_for_friend(p.instead) end
                 play(name)
             end
         end

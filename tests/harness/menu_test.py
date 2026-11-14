@@ -56,17 +56,19 @@ B.execute('settings.menu_welcomed = true')
 # 2. The host hosts a lobby.
 A.execute('open_cat("Lobby")')
 A.execute('check(coop_menu.page == "lobby" and coop_menu.focus == "B", "Lobby opens on sheet B")')
-A.execute('choose("Host a lobby")')
-A.execute('check(coop_lobby.state == "open" and coop_lobby.host == T.me, "hosting a lobby")')
+# v0.54: with a friend connected, opening the Lobby sets it up (no "Host a lobby" step).
+A.execute('frames(0.1)')
+A.execute('check(coop_lobby.state == "open" and coop_lobby.host == T.me, "with a friend connected, opening the Lobby hosts it")')
 step(3)
 print('ok   presence set for friends' if taken(A, 'presence lobby') else 'FAIL presence not set')
 fails_extra = 0 if taken(A, 'presence lobby') else 1
 
 # 3. The friend sees it and gets ready.
 B.execute('check(coop_lobby.state == "open" and coop_lobby.host == T.peer, "the friend sees the host\'s lobby")')
-B.execute('T.texts = {} frames(0.1) check(drew("lobby is waiting"), "the friend is told to get ready (menu closed)")')
-B.execute('press("f9") open_cat("Lobby") choose("Ready")')
-B.execute('check(coop_lobby.ready, "the friend is ready")')
+# v0.54: the friend is ready by default (the host can start as soon as they're connected).
+B.execute('check(coop_lobby.ready, "the friend is ready without doing anything")')
+B.execute('press("f9") open_cat("Lobby")')
+B.execute('check(coop_lobby.ready and coop_lobby.host == T.peer, "opening the Lobby as the friend keeps the host\'s lobby")')
 step(3)
 A.execute('local i = coop_lobby.info[1] check(i and i.ready and i.where == "game", "the host sees the friend ready, in the game")')
 
@@ -86,18 +88,13 @@ B.execute('check(coop_lobby.state == "started" and coop_lobby.go and coop_lobby.
 A.execute('''
 local t, items = coop_menu_debug_items()
 for _, it in ipairs(items) do if it.text == "Where to start" and it.left then
-    for _ = 1, 3 do it.right() local t2, i2 = coop_menu_debug_items() for _, x in ipairs(i2) do if x.text == "Where to start" and x.left then it = x end end
+    for _ = 1, 6 do it.right() local t2, i2 = coop_menu_debug_items() for _, x in ipairs(i2) do if x.text == "Where to start" and x.left then it = x end end
         if coop_lobby.start == "Chapter3_Start" then break end end
 end end
 check(coop_lobby.start == "Chapter3_Start", "the host picks Chapter 3")
 ''')
 step(3)
-B.execute('check(coop_lobby.start == "Chapter3_Start" and not coop_lobby.ready, "the friend sees Chapter 3 and isn\'t ready for it yet")')
-B.execute('''
-local t, items = coop_menu_debug_items()
-for _, it in ipairs(items) do if it.text == "Ready" then it.on() end end
-check(coop_lobby.ready, "the friend is ready for Chapter 3")
-''')
+B.execute('check(coop_lobby.start == "Chapter3_Start" and coop_lobby.ready and coop_lobby.ready_for == "Chapter3_Start", "the friend sees Chapter 3 and is ready for it at once")')
 step(3)
 A.execute('''
 local t, items = coop_menu_debug_items()
@@ -127,7 +124,8 @@ coop_menu_set_open(true)
 coop_menu.page = "lobby"
 local t, items = coop_menu_debug_items()
 for _, it in ipairs(items) do if (it.text == "Start" or it.text == "Start again") and it.left == nil then why = it.off end end
-check(why ~= nil and why:find("title screen", 1, true) ~= nil, "a friend on the title screen holds the jump: " .. tostring(why))
+-- v0.54: their game loads its save (or starts a New Game) first, then jumps.
+check(why == nil, "a friend on the title screen doesn't hold a chapter start: " .. tostring(why))
 coop_menu_set_open(false)
 ''')
 
@@ -161,7 +159,7 @@ step(3)
 A.execute('''
 local t, items = coop_menu_debug_items()
 local row
-for _, it in ipairs(items) do if it.text:find("Friend:", 1, true) and it.on then row = it end end
+for _, it in ipairs(items) do if it.text:find("Remove ", 1, true) == 1 and it.on then row = it end end
 check(row ~= nil, "the host can pick a player's row")
 if row then row.on() coop_menu.confirm.fn() end
 coop_menu_set_open(false)
@@ -203,6 +201,7 @@ C.execute('frames(0.1) check(TM.cam == 2 and coop_menu.table_mode, "the camera g
 C.execute('press("back") check(not coop_menu.open, "Back closes it again")')
 C.execute('frames(0.1) check(TM.cam == 3 and not coop_menu.table_mode, "and back to the tape recorder")')
 C.execute('frames(2.5) check(#TM.steps == 8, "the row is added once, not again")')
+C.execute('coop_lobby.state = nil coop_lobby.host = nil')   # (opening the menu above set a lobby of our own up)
 C.execute('coop_event_slot = 1 coop_menu_on_event("lobby go 76561198000000001 1 here 5") coop_event_slot = nil frames(1.5)')
 C.execute('check(TM.selected == 1, "Continue from the lobby highlights CONTINUE")')
 C.execute('check(TM.step_change == TM.steps[2].f.Step, "and asks the title menu for its own Continue step")')
@@ -272,8 +271,8 @@ coop_menu_set_open(true)
 open_cat("Options")
 local t, items = coop_menu_debug_items()
 local v
-for _, it in ipairs(items) do if it.text == "Your friend's voice" then v = it end end
-check(v ~= nil and v.value == "On", "Options: Your friend's voice, on by default")
+for _, it in ipairs(items) do if it.text == "Bump into your friend" then v = it end end
+check(v ~= nil and v.value == "On", "Options: Bump into your friend, on by default")
 coop_menu_set_open(false)
 ''')
 
@@ -351,13 +350,13 @@ local b = coop_menu.hit.b[2]
 MX, MY = (b[1] + b[3]) / 2, (b[2] + b[4]) / 2 frames(0.1)
 check(coop_menu.sel[coop_menu.page] == b[6], "pointing at a row highlights it")
 local vr
-for _, h in ipairs(coop_menu.hit.b) do if items[h[5]] and items[h[5]].text == "Your friend's voice" then vr = h end end
-check(vr ~= nil, "Your friend's voice is on screen")
+for _, h in ipairs(coop_menu.hit.b) do if items[h[5]] and items[h[5]].text == "Bump into your friend" then vr = h end end
+check(vr ~= nil, "Bump into your friend is on screen")
 if vr then
-    local before = settings.friend_voice ~= false
+    local before = settings.bump_friend ~= false
     MX, MY = (vr[1] + vr[3]) / 2, (vr[2] + vr[4]) / 2 frames(0.1)
     MDOWN = true frames(0.05) MDOWN = false frames(0.05)
-    check((settings.friend_voice ~= false) ~= before, "a click on it changes it")
+    check((settings.bump_friend ~= false) ~= before, "a click on it changes it")
     MDOWN = true frames(0.05) MDOWN = false frames(0.05)
 end
 check(drew("Right click: back"), "the controls line tells the mouse buttons")

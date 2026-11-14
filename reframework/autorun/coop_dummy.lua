@@ -2689,6 +2689,9 @@ local function follow_forced(now)
     jump_to_chapter(target)
     F.msg = tostring(chapters.last)
     log("follow: " .. F.msg)
+    -- v0.53: the friend's game holds its own way into the tape until ours is on the way too (coop_story).
+    if coop_send_event then coop_send_event("tapejump " .. tostring(F.ch)) end
+    coop_tape_follow_t = os.clock()   -- and the tape's first scene waits for whichever of us arrives second
     return true
 end
 coop_note{ feature = "Follow into VHS tapes", name = "Did the friend go into a tape? Follow them",
@@ -4371,7 +4374,7 @@ re.on_frame(function()
         local p = safe(function() return dummy:call("get_Transform"):call("get_Position") end)
         if p then
             -- Nameplate over the other player's head (their Steam name; "Bot" in bot mode).
-            if not ghost_hidden and #parts > 0 and settings and settings.nameplate ~= false then
+            if not ghost_hidden and #parts > 0 and settings and settings.nameplate ~= false and not (coop_menu and coop_menu.open) then   -- (not over the co-op screen, v0.54)
                 local kv = net.kv or {}
                 local name = (kv.mode == "bot" and SLOT == 1) and (bot_test_name and BOT_TEST_NAME or "Bot")
                     or (peer_name(kv) or ("Friend " .. SLOT))
@@ -4721,6 +4724,8 @@ coop_note{ feature = "On-screen status (HUD)", name = "Draw the status lines in 
     writes = "draw.text lines on screen only (builds a new table and several strings each frame)" }
 on_frame_1(function()
     if not (settings and settings.hud) then return end
+    -- Not over the co-op screen (v0.54): it is the game's own Options sheet now, and these lines sat on its title.
+    if coop_menu and coop_menu.open then return end
     local ok, err = pcall(function()
         -- In the co-op menu's font, with a shadow, when it's loaded (v0.40); else the default one.
         local lh = coop_ui_line_h and coop_ui_line_h("small") or 18

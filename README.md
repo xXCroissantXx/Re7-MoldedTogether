@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.52; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.54; formerly coop-re7)
 Created by xXCroissantXx & Kingkiller1195
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
@@ -101,16 +101,20 @@ The Lobby then says "Full character models: installed".
    **Accept**.
 5. The top-left corner shows **Co-op: connected to <name> - <ping> ms**, and they appear with their name over
    their head.
-6. **Lobby**: one of you **hosts**. The host picks where to start:
-   - **Continue: everyone's own latest save**: whoever is on the title screen loads their latest save, whoever is
-     playing carries on (best with matching saves);
+6. **Lobby**: once you're connected, open the co-op menu (or **CO-OP** on the title screen's tape recorder) and
+   pick **Lobby**: whoever opens it first is the host, and everyone else is in it and ready by themselves. The
+   host picks where to start:
+   - **Continue (own saves)**: whoever is on the title screen loads their latest save, whoever is playing carries
+     on (best with matching saves);
+   - **New Game**: everyone starts a new game together, from the opening;
    - **The host's chapter**: everyone else goes to the start of the host's chapter;
    - **Chapter 1** (the guest house), **Chapter 3** (the Baker house, from the dinner) or **Chapter 4** (the ship).
 
-   Everyone else marks themselves **Ready**; the host presses **Start**, and every game goes there at once. A
-   chapter start needs everyone to have loaded a save first (**Continue** on the title screen): the menu says who
-   it's waiting for. Saving switches off for a chapter jump; switch it back on in Options if you want to keep
-   progress. Friends can also join a host directly: a friend hosting a lobby is marked in **Friends** (**Join**).
+   The host presses **Start**, and every game goes there at once, **from the title screen too**: a game on the
+   title screen loads its latest save first (or starts a New Game if it has none) and then goes to the chapter.
+   Anyone can set **Ready** to No to hold the start back. Saving switches off for a chapter jump or a New Game;
+   switch it back on in Options if you want to keep progress. Friends can also join a host directly: a friend
+   hosting a lobby is marked in **Friends** (**Join**).
 7. **Quick messages** (in the menu, or F5-F8): "Over here", "Come here", "Wait for me", "Go on ahead", "Help!",
    and (in the menu) "I need ammo" and "I need healing": your friend is told to give you some under **Give
    items**, which then has you picked, with your health.
@@ -185,33 +189,27 @@ backed up automatically (at every launch and when you turn this on; the last 20 
 `reframework\data\save_backups`). Co-op and normal RE7 use the same saves (Steam Cloud too). When one of you saves,
 the others see "Your friend saved" so you can all save at the same point.
 
-**Options** (co-op menu > Options). Options marked *same for everyone* change for the whole group when any of you
-changes them.
+**Options** (co-op menu > Options). Only the settings that change how the game plays, and the experimental ones,
+are here; the rest of co-op (shared story, doors and interactions, phones, pushed objects, bosses, one Molded for
+everyone, enemies chasing both players, following into tapes) is simply on. Options marked *same for everyone*
+change for the whole group when any of you changes them.
 
 | Option | Default | What it does |
 |---|---|---|
-| **Share story** (same for everyone) | On | Story progress and cutscenes count for everyone (see *What's shared*). |
 | **Share supplies** (same for everyone) | Off | One copy of ammo and healing for everyone: what one picks up disappears for the others. A harder game. |
-| **Share interactions** (same for everyone) | On | Fridges, switches, locks, chains and puzzles one of you does are done for all (never saving, tapes or item boxes). |
-| **Share phone calls** (same for everyone) | On | When one of you answers a phone, the others' call is answered too (also when they get there later). |
+| **Drop discarded items for your friend** (same for everyone) | On | An item you discard in the inventory also lands on your friend's ground to pick up (supplies only). |
 | **Join your friend's scripted moves** | Off | Off: a phone, fridge or pot your friend uses plays on their character and you keep control. On: you're put through it too. Cutscenes always play for everyone. |
-| **Share pushed objects** (same for everyone) | On | Loose props one of you moves are moved in the other games too. |
-| **Share boss fights** (same for everyone) | On | Mia's fights are one fight for everyone. |
-| **One boss for both** (same for everyone) | On | Jack and Mia are run by the nearest player's game and can hurt any of you. Off: each game runs its own; health and defeat are shared. |
-| **One Molded for both** (same for everyone) | On | Each Molded is one for everyone, in the same place on every screen (see *What's shared*). Off: each game runs its own; health and deaths are shared. |
-| **Molded go after any of you** (same for everyone) | On | Only with "One Molded for both" off: a fighting Molded goes for the nearest of you in every game. |
 | **Bump into your friend** | On | You can't walk through each other (lets go in scripted scenes and when you're stuck). |
-| **Follow your friend into VHS tapes** | On | When your friend goes into a tape, your game follows a few seconds later (saving is switched off first). Never back out: finish the tape. |
 | **Heal your friend** | Off | Use a healing item next to your friend (within about 2.5 m) and it heals them instead of you. |
-| **Show your friend's weapon** | On | The weapon or item your friend holds appears in their character's hand. |
-| **Hide your friend on ladders** | Off | Your friend climbs with the game's own ladder animation; on hides them while they climb instead. |
-| **Nameplate over your friend** | On | Their Steam name, health and distance above their character; when they're off screen, a pointer at the screen edge. |
-| **Friend's footsteps** | On | Hear your friend's footsteps where they walk. |
-| **Your friend's voice** | On | Their grunts, screams and getting back up, in your own character's voice, from where they are. |
 | **Your friend's flashlight** (experimental) | Off | In the dark, their flashlight shines where they look (a copy of your own light, so yours has to have been on once). |
-| **One game leads the story** (same for everyone) | On | The host's story scenes play for everyone wherever you are, and the host's progress counts for all. |
-| **Enemies chase both players** (same for everyone) | On | Up close, an enemy turns on whichever of you is nearer. |
-| **On-screen status** | On | The top-left status lines (connection, ping, chapter, your friend's health, the last quick message, saving, what your friend just did). |
+| **Cutscenes wait for both** (experimental) | Off | A cutscene or VHS tape you start waits a moment for your friend's game, then starts for both together. Each of you sets it. |
+| **Menu text size** | Large | Normal, Large or Extra large. |
+| **Key for this menu** | F9 | F9, F10, F11, Home or End. |
+| **Allow saving** | Off | Saving is off during co-op so a friend's game can't overwrite yours; switch it on to keep progress. |
+
+The settings that left this page still work: they're in `coop_settings.json` (co-op folder, `reframework\data`)
+and in REFramework's **Molded Together** window, with the same names as before (the nameplate, footsteps, voice,
+your friend's weapon in hand, ladders, on-screen status and the shared switches).
 
 **Help:**
 
@@ -237,9 +235,12 @@ changes them.
 
 ## Known limits
 
-- **Played in co-op up to the Chapter 3 yard.** Two real sessions and the bot suite cover Chapter 1, the Baker
-  house, the basement and the yard. Later chapters (the old house, the ship, the mines) use the same sharing but
-  nobody has played them together yet: please send a bug report from there.
+- **Played in co-op up to the Chapter 3 yard.** Real sessions cover Chapter 1, the Baker house, the basement and
+  the yard. The bots have stepped through the rest of the story together (all of Chapter 3, Chapter 4 on the
+  ship and after, and the first tape) with both games at the same step every time, and every kind of interaction
+  in those areas is shared, but nobody has played the later chapters together yet: please send a bug report.
+- **Later bosses** (the old house, the ship and the end of the game) share their health and defeat, but each
+  game runs its own copy of the fight; only Jack and Mia are run by one game for both so far.
 - **Bosses and Molded** are run by the nearest player's game and copied to the others. The copies were checked by
   bots (the same place to within about a metre, usually a few centimetres); a fast lunge can look a little behind on
   the other screen. A Molded's grab and Mia's attacks on a friend haven't been seen in a real session yet.
@@ -247,8 +248,8 @@ changes them.
   checked in a real session. Keys and story items are picked up by each player separately (you're told when your
   friend takes one), because some scripted events follow that player's own pickup. If a cutscene ever hangs and you
   can't move, restart the game and load again (with saving off, nothing is lost).
-- **Animations:** your friend's character copies the moves RE7 plays on their body. In VHS tapes the character may
-  slide instead of walking.
+- **Animations:** your friend's character copies the moves RE7 plays on their body. In a grab RE7 mostly moves the
+  camera, not the body, so a grabbed friend looks like they're standing still.
 - **Characters:** Mia (non-ship) has a gap on her left side and dark eyes, even with the full-model mod. Joe's
   hands are found by trying likely file names; he may still have none.
 - **Deaths:** going down has no fall animation (you crouch). The 90-second limit for being down is untested in a
@@ -283,7 +284,7 @@ changes them.
 | An extra mouse pointer on screen | The REFramework menu is open: close it with Insert (or your menu key, see *No Insert key*) |
 | The co-op menu's text is too small (or too big) | Options > **Menu text size**: Normal, Large (the default) or Extra large. It also follows your screen's size, and the on-screen status lines use it too |
 | F9 opens REFramework's menu too | F9 is your REFramework menu key: pick another for the co-op menu (Options > **Key for this menu**) |
-| The lobby's Start says "waiting" | It names who it waits for: everyone **Ready**, and for a chapter start everyone in the game (not the title screen) |
+| The lobby's Start says "waiting" | It names who it waits for: a friend who hasn't been heard from yet (wait a few seconds) or who set **Ready** to No |
 | Pause menu won't open | Wait 5 seconds out of any cutscene (the mod clears a stuck video flag), or restart |
 | You see the inside of a head in first person | The full-model mod's files are in place but not set up: close the game and run **Install.cmd** again |
 | The Lobby says "Full character models: not installed" | Download **Third Person Full Model Placeholders RT (2022)** from [Nexus](https://www.nexusmods.com/residentevil7/mods/86?tab=files) into Downloads and run **Install.cmd** again |

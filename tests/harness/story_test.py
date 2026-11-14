@@ -69,12 +69,13 @@ frames(2)
 check(not requested("c03e01_01"), "its next scene is ours to reach (we're in the sequence now)")
 ''',
 'far away: nothing is started': r'''
+-- v0.52 rule: a cutscene pulls in everyone within SCENE_PULL_MAX (200 m); beyond that nothing is started.
 T.scenes = { "c03e02_00" }
-T.ghost = { x = 40, y = 0, z = 0 }
+T.ghost = { x = 300, y = 0, z = 0 }
 reset_requests()
 friend("story c03e02_00 5")
 frames(2)
-check(not requested("c03e02_00"), "a friend 40 m away doesn't pull us into their scene")
+check(not requested("c03e02_00"), "a friend 300 m away doesn't pull us into their scene")
 T.ghost = { x = 3, y = 0, z = 0 }
 ''',
 'loading an earlier save': r'''

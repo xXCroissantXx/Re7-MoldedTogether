@@ -804,6 +804,9 @@ do
                     -- called from here): coop_story tags the call's scene with it.
                     if mname == "successInteract" and is_phone(c) then coop_my_phone_t = os.clock() end
                     if TRACKED_TYPES[tn] and mname == "successInteract" then return end
+                    -- Look triggers (v0.52 audit): fire when a player looks at something long enough (LookTimerMax),
+                    -- a voice line or message for that player; what they start in the story comes with its step.
+                    if tn == "app.InteractAutoSendFsm" then return end
                     local key = mname .. ":" .. tn .. ":" .. tostring(id_of(c) or intr_names(c))
                     if seen[key] then return end
                     seen[key] = true
@@ -1868,7 +1871,10 @@ local function poll_iuse(now)
         elseif why then
             log("used " .. u.id .. " on " .. key .. ": not shared (" .. why .. ")")
             -- A tape in the video deck: the friend's game follows us into it (coop_dummy, coop_follow_tape).
-            if u.id:find("^FoundFootage") then send(string.format("tape %s %d", u.id, chapter())) end
+            if u.id:find("^FoundFootage") then
+                send(string.format("tape %s %d", u.id, chapter()))
+                coop_tape_sent_t = os.clock()   -- v0.53: our chapter change into it waits for the friend (coop_story)
+            end
         elseif not (settings and settings.share_item_gimmicks == false) then
             send(string.format("iuse %s %s %d %s", key, state, chapter(), u.id))
         end

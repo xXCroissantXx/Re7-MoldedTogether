@@ -781,7 +781,7 @@ local function read_events()
     -- CoopNet restarted (it deletes the file and counts from 1 again).
     if max_n < es.ev_in_last then es.ev_in_last = 0 end
     for _, l in ipairs(lines) do
-        if l[1] > es.ev_in_last then
+        if l[1] > es.ev_in_last and not (es.early and es.early[l[1]]) then
             -- Friends 2 and 3 (v0.29): "@2 <text>" / "@3 <text>". coop_event_slot says whose
             -- event is being handled (1 for friend 1), for the handlers that care.
             local body, slot = l[2], 1
@@ -808,6 +808,65 @@ local function read_events()
         end
     end
     if max_n > es.ev_in_last then es.ev_in_last = max_n end
+    es.early = nil   -- everything up to max_n is handled now
+end
+
+-- Lobby messages on the title screen (v0.54). Everything a friend sends waits in the file while this game is
+-- on the title screen or loading (above, v0.32: world changes can't be applied there), and that held the
+-- lobby's own messages back too: a friend on the title screen never heard the host's lobby or its Start, so
+-- "start the game from the lobby" only ever worked for players already in a game (bot test 2026-11-14: two
+-- copies on the title screen, the host's lobby open, the guest's log had the messages and did nothing). Those
+-- messages (and only those) are now read there too; each is remembered so it isn't handled a second time
+-- when the rest is read.
+local EARLY_KINDS = { lobby = true }
+local function read_early_events()
+    if es.ev_in_last < 0 or game_ready() then return end
+    local text = fs.read("coopnet_ev_in.txt")
+    if text == nil or text == "" then return end
+    es.early = es.early or {}
+    local max_n = -1
+    local todo = {}
+    for line in text:gmatch("[^\n]+") do
+        local n, at, body = line:match("^(%d+)\t(%d+)\t(.*)$")
+        if n == nil then n, body = line:match("^(%d+)\t(.*)$") end
+        n = tonumber(n)
+        if n then
+            if n > max_n then max_n = n end
+            todo[#todo + 1] = { n, body, tonumber(at) }
+        end
+    end
+    if max_n < es.ev_in_last then es.ev_in_last, es.early = 0, {} end   -- CoopNet restarted
+    for _, l in ipairs(todo) do
+        if l[1] > es.ev_in_last and not es.early[l[1]] then
+            local body, slot = l[2], 1
+            local sk, rest = body:match("^@([23]) (.*)$")
+            if sk then slot, body = tonumber(sk), rest end
+            if EARLY_KINDS[body:match("^(%S+)") or ""] then
+                es.early[l[1]] = true
+                -- A lobby message from before this game was even on the title screen is old news.
+                if not (l[3] and os.time() - l[3] > 20) then
+                    coop_event_slot = slot
+                    local ok, err = pcall(on_event, body)
+                    coop_event_slot = 1
+                    if not ok then log("event ERR " .. tostring(err)) end
+                end
+            end
+        end
+    end
+end
+do
+    local t = 0
+    dbg_note{ feature = "Lobby", name = "Read the friend's lobby messages on the title screen and while loading",
+        when = "every frame; reads the file every 0.3 s, and only while on the title screen or loading",
+        reads = "coopnet_ev_in.txt (the friend's messages); only 'lobby' ones are handled here",
+        writes = "the lobby state (coop_menu_on_event); marks those lines handled (es.early) so the normal read skips them" }
+    _G.re.on_frame(function()
+        local now = os.clock()
+        if now - t < 0.3 then return end
+        t = now
+        local ok, err = pcall(read_early_events)
+        if not ok and not es.early_err then es.early_err = true log("early events ERR " .. tostring(err)) end
+    end)
 end
 
 -- Enemy movement (step 3) -----------------------------------------------------------
