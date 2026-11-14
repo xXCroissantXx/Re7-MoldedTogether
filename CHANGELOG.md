@@ -1,7 +1,42 @@
 # Changelog
 
+## v0.52 (2026-11-13)
+Chapter 1 in co-op, after a playtest of it. Every fix was tested with two copies of the game playing each other.
+
+- **No more black screen when you connect early.** You no longer have to wait until both of you have pressed
+  New Game and watched the opening before connecting. The black screen came from your friend's cutscene being
+  started in your game while it was still loading (New Game, Continue or a chapter change). Now nothing of
+  your friend's starts while your game loads or in its first seconds after, and a cutscene that was waiting
+  for you is dropped when a load starts. If the screen is ever left black anyway, it fades back in by itself
+  after 25 seconds.
+- **The guest house's back door waits for everyone.** It slams shut and locks behind whoever goes in first. Now
+  it stays open until everyone is through, then shuts and locks. If it had already locked with someone
+  outside, it opens again for them.
+- **Cutscenes bring everyone in.** When one of you starts a cutscene, everyone else in the chapter (up to 200 m
+  away) is brought next to them and sees it too, as soon as it has loaded. Before, a friend more than 30 m away
+  usually missed it. (Options: switch off with `"scene_pull": false` in coop_settings.json.)
+- **Into Chapter 3 together.** When Jack knocks Ethan out at the end of Chapter 1, the other player's game
+  follows into Chapter 3 by itself (it used to stay behind, and loading a save was the only way out). The same
+  goes for every chapter change: the guest follows the host after 12 seconds.
+- **VHS tapes follow faster.** Your friend follows you into a tape after 1 second (was 6) and keeps trying for 5
+  minutes if their game is busy (was 90 seconds). Nobody is pulled back into a tape they've already played.
+- **No extra Ethan after small interactions.** After your friend shook the fence, pressed a button or opened
+  the van door, a second, frozen Ethan stayed inside their character on your screen. It's gone.
+- **Bigger co-op menu text** (Kingkiller1195): a **Menu text size** option in Options.
+
 ## v0.51 (2026-11-12)
-One-click Steam install, smoother frame rate, and Mia's fights fixed after a Chapter 1 playtest.
+One-click Steam install, smoother frame rate and lower ping, items you drop for your friend, and Mia's fights fixed
+after a Chapter 1 playtest. By xXCroissantXx and Kingkiller1195 (now credited as Molded Together's developers).
+
+- **Full character models from the installer** (Kingkiller1195). Install.cmd now sets up "Third Person Full Model
+  Placeholders RT (2022)" by AfroJackX itself: it opens the Nexus page, waits while you click Manual download and
+  carries on when the zip is in Downloads (or goes straight ahead if it's already there). "Use full models.cmd" is
+  gone. The installer also no longer stops when the download was unzipped inside RE7's folder.
+- **Discard to drop for your friend** (Kingkiller1195). A supply you discard in the inventory lands on the ground in
+  front of you in both games, so your friend can pick it up (Options: "Drop discarded items for your friend").
+- **Lower ping, steadier link** (Kingkiller1195). The network plugin sends each message at once instead of batching
+  it, and hands what arrives to the game within 2 ms instead of up to 33 ms. The friend's head no longer leans
+  sideways when they look up or down while turning, and the logs are kept smaller.
 
 - **One installer, straight into Steam.** **Install.cmd** now puts the mod into RE7's own Steam folder: press
   **Play** in Steam and it loads. No second copy of the game and no shortcut any more. If the .NET 10 runtime is

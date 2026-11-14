@@ -310,7 +310,11 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 ## 24. New in v0.51
 
 - [ ] **Install**: unzip, double-click **Install.cmd**, press Play in Steam: the mod loads (status line at the top
-      left). Without .NET 10, the installer offers to install it.
+      left). Without .NET 10, the installer offers to install it. It offers the full character models too: the
+      Lobby then says "Full character models: installed".
+- [ ] **Drop for your friend**: discard a supply in the inventory: it lands in front of you, and your friend sees
+      it there and can pick it up.
+- [ ] **Look**: your friend looks up or down while turning: their head doesn't lean sideways.
 - [ ] **Frame rate**: play 15 minutes with saving off, then look at `reframework\data` in RE7's Steam folder:
       `coop_saveguard_log.txt` stays small (repeats counted as "x123"), and `re2_framework_log.txt` has no
       stream of "Internal game exception ... get_GameObject" lines.
@@ -320,6 +324,20 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
       plays the move (no T-pose) and neither of you is thrown out of the map.
 - [ ] If Mia only ever goes for one of you, make a bug report on both PCs: the enemy log now says why her other
       game couldn't run her ("your friend's game can't run Em2000: ...").
+
+## 25. New in v0.52
+
+- [ ] **Connect early**: connect on the title screen, then both press New Game at about the same time: both
+      see the opening and get to the car, no black screen.
+- [ ] **Back door**: at the guest house, one of you goes in through the back door while the other stays
+      outside: the door stays open; the second one walks in and it shuts and locks behind them.
+- [ ] **Cutscenes**: stand far apart (another room or outside); one of you starts a cutscene: the other is
+      brought over and sees it too.
+- [ ] **Chapter 3**: Jack knocks Ethan out at the end of Chapter 1: within about 15 seconds both of you are on
+      the way to the dinner (Chapter 3).
+- [ ] **Small interactions**: your friend shakes the fence or presses the gate button: afterwards there is only
+      one Ethan where they stand.
+- [ ] **VHS tape**: one of you puts in the tape: the other follows within a few seconds.
 
 ## Afterwards
 
