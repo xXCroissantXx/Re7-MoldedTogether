@@ -12,6 +12,11 @@ local function safe(f, ...)
     return nil
 end
 
+-- Debug registry (v0.52, coop_dummy.lua): dbg_note describes the callback or hook registered on the next lines, dbg_task
+-- gives a function its own row in the Debug section. Both are tail calls so the registry sees this file's line.
+local function dbg_note(info) if coop_note then return coop_note(info) end end
+local function dbg_task(feature, name, f, info) if coop_task then return coop_task(feature, name, f, info) end return f end
+
 local function components_of(go)
     local out = {}
     local comps = safe(go.call, go, "get_Components")
@@ -23,6 +28,10 @@ local function components_of(go)
     return out
 end
 
+dbg_note{ feature = "Probe (research)", name = "Record the player's objects, components, position and chapter",
+    when = "every frame, but it only works every 2 s",
+    reads = "GameManager chapter / title / mode, SaveDataManager loading state, ObjectManager.PlayerObj and its components",
+    writes = "coop_probe.txt (a read-only research log)" }
 re.on_frame(function()
     local now = os.clock()
     if now - last < 2.0 then return end

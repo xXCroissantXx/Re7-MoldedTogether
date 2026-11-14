@@ -35,6 +35,11 @@ world_sync = {
 }
 local ws = world_sync
 
+-- Debug registry (v0.52, coop_dummy.lua): dbg_note describes the callback or hook registered on the next lines, dbg_task
+-- gives a function its own row in the Debug section. Both are tail calls so the registry sees this file's line.
+local function dbg_note(info) if coop_note then return coop_note(info) end end
+local function dbg_task(feature, name, f, info) if coop_task then return coop_task(feature, name, f, info) end return f end
+
 -- Lines are collected and appended once a second (was a full read + rewrite per line).
 local log_buf, log_t, log_tail = {}, 0, nil
 -- v0.52: repeated lines are limited and the file written by coop_dummy.lua's coop_log_gate / coop_log_flush.
@@ -42,6 +47,10 @@ local function log(s)
     if coop_log_gate and not coop_log_gate("world", s) then return end
     log_buf[#log_buf + 1] = os.date("%H:%M:%S ") .. tostring(s)
 end
+dbg_note{ feature = "Logging", name = "Write the world script's log file",
+    when = "every frame; writes to disk only when 1 to 5 s have passed since the last write",
+    reads = "this script's log lines in memory",
+    writes = "coop_world_log.txt" }
 re.on_frame(function()
     if coop_log_flush then log_buf, log_t = coop_log_flush("world", "coop_world_log.txt", log_buf, log_t) return end
     -- without coop_dummy.lua: the v0.51 writer
@@ -273,6 +282,10 @@ do
     local m = sdk.find_type_definition("app.DoorPush"):get_method(
         "requestAutoClose(System.Single, via.curve.EaseType, System.Boolean, System.Boolean)")
     if m then
+        dbg_note{ feature = "Doors", name = "Keep an auto-locking door open while the friend is on its other side",
+            when = "when the game calls DoorPush.requestAutoClose (every door closing by itself)",
+            reads = "whether the door locks as it closes and is an auto-lock door; our and each friend's side of it and their distance",
+            writes = "SKIPS the close (the door stays open) while the friend is on the other side or in the doorway; shows a message" }
         sdk.hook(m, function(args)
             local hold = false
             pcall(function()
@@ -361,6 +374,10 @@ ws.door_touch = {}
 do
     local m = sdk.find_type_definition("app.DoorPush"):get_method("setInteract(via.GameObject, System.Boolean, System.Boolean)")
     if m then
+        dbg_note{ feature = "Doors", name = "Notice when OUR player uses a door's handle",
+            when = "when the game calls DoorPush.setInteract (our player or anything else using a door)",
+            reads = "ObjectManager.PlayerObj and the user argument: is the user our player?",
+            writes = "ws.door_touch[door] = now (so a close by hand is told apart from a door shutting by itself)" }
         pcall(sdk.hook, m, function(args)
             pcall(function()
                 local om = sdk.get_managed_singleton("app.ObjectManager")
@@ -774,6 +791,10 @@ do
     for _, m in ipairs(td and td:get_methods() or {}) do
         local mname = m:get_name()
         if mname == "successInteract" or mname == "startInteract" then
+            dbg_note{ feature = "Props: boxes, drawers, switches", name = "Notice an interaction we have no sharing for yet (" .. mname .. ")",
+                when = "when the game calls InteractObjectBase." .. mname .. " (every interaction of every kind: doors, pickups, switches, phones, locks...)",
+                reads = "the object's type, name and id; our own phone call (coop_my_phone_t)",
+                writes = "marks our own phone calls; logs each unshared interaction once ('not shared yet: ...')" }
             local ok = pcall(sdk.hook, m, function(args)
                 pcall(function()
                     local c = sdk.to_managed_object(args[2])
@@ -1675,6 +1696,10 @@ do
     local m = sdk.find_type_definition("app.ItemSelectReaction")
     m = m and m:get_method("tryUseItem")
     if m then
+        dbg_note{ feature = "Key items and puzzles", name = "A key item was used on something (key in a lock, tape in the VCR)",
+            when = "when the game calls ItemSelectReaction.tryUseItem (before and after the call)",
+            reads = "the item's name and the object it was used on; the result of the use",
+            writes = "on success: remembers the use (ws.used) and queues it; the 'iuse' event is sent from the next poll, not from inside the game's call" }
         pcall(sdk.hook, m, function(args)
             pcall(function()
                 local so = sdk.to_managed_object(args[3])
@@ -2350,6 +2375,10 @@ local function on_give_reply(token, ok, val)
     note(ws.give_msg.text)
 end
 
+dbg_note{ feature = "Giving items", name = "Time out a give the friend's game never answered",
+    when = "every frame (walks the small table of gives still waiting)",
+    reads = "ws.gives (in memory only)",
+    writes = "after 10 s: forgets the give and shows 'didn't answer: nothing was given'" }
 re.on_frame(function()
     local now = os.clock()
     for token, g in pairs(ws.gives) do
@@ -2463,6 +2492,10 @@ do
         local td = sdk.find_type_definition("app.InventoryMenu")
         local m = td and td:get_method("discardItem(app.Item)")
         if m then
+            dbg_note{ feature = "Discarded items drop for the friend too", name = "Watch our own inventory discards",
+                when = "when the game calls InventoryMenu.discardItem (before and after)",
+                reads = "the item's id and stack count; whether the discard went through",
+                writes = "queues the discard (ws.drop_q); nothing is created in or taken from an inventory here" }
             pcall(sdk.hook, m, function(args)
                 ws.drop_pre = nil
                 pcall(function()
@@ -2502,6 +2535,10 @@ do
         send(string.format("drop %s %s %d %.2f %.2f %.2f %d", token, d.id, d.n, x, y, z, chapter()))
     end
 
+    dbg_note{ feature = "Discarded items drop for the friend too", name = "Put our discard on the ground and tell the friend",
+        when = "every frame (returns at once when nothing is waiting); a discard is handled 0.2 s after it happened",
+        reads = "ws.drop_q (discards the hook saw), our player's pose",
+        writes = "ItemManager.createDropItemInstance on the ground in front of us; sends 'drop ...'; after 10 s without an answer shows a message" }
     re.on_frame(function()
         if #ws.drop_q == 0 and next(ws.drop_out) == nil then return end
         local now = os.clock()
@@ -2679,6 +2716,104 @@ function coop_world_on_event(text)
     return false
 end
 
+-- Each piece of the world scheduler below gets its own row (runs per second shows its real cadence).
+refresh_doors = dbg_task("Doors", "Scan the scene for doors", refresh_doors, {
+    when = "every 3 s (from the world callback)",
+    reads = "app.DoorPush components in the whole scene (a scene query, can return a few hundred); per NEW door: doorState and isLocked",
+    writes = "ws.doors (the door table); forgets doors that left the scene" })
+stream_door_angles = dbg_task("Doors", "Send the angle of a door being pushed", stream_door_angles, {
+    when = "every frame, gated to 10 times a second",
+    reads = "doors whose state was 2 or 3 in the last 0.3 s: get_currentAngle and IsOpenFront",
+    writes = "sends 'dang <door> <angle> <side>' when the angle moved 3 degrees or more" })
+poll_doors = dbg_task("Doors", "Watch every door for open / close / unlock", poll_doors, {
+    when = "4 times a second (every 0.25 s)",
+    reads = "the scene's DoorPush list again (a second scene query), then for EACH door: isLocked and doorState (two game calls per door); player and ghost positions near doors",
+    writes = "sends 'open' / 'close' / 'unlock' events; pauseAutoMoving while the friend stands in a doorway; re-unlocks and retries opens that did not take; closes a door once you step out of it" })
+glide_doors = dbg_task("Doors", "Move doors the friend is pushing toward their angle", glide_doors, {
+    when = "every frame (walks the door table; only acts on doors with a pushed target)",
+    reads = "ws.doors targets (in memory)",
+    writes = "DoorPush.requestPush(side, angle) each frame on a door being pushed by the friend" })
+refresh_items = dbg_task("Items", "Scan the scene for pickups", refresh_items, {
+    when = "every 2 s (from the world callback)",
+    reads = "app.Item components in the whole scene (a scene query, usually many); for new ones the GameObject, state and position; the boxes' drop items",
+    writes = "ws.items; applies pickups the friend made before this area loaded (Item.disableFromScene, only with Share supplies on)" })
+poll_items = dbg_task("Items", "Watch pickups for being taken", poll_items, {
+    when = "4 times a second (every 0.25 s)",
+    reads = "getItemState of EVERY pickup in the scene (one game call each), our position for reach",
+    writes = "sends 'took <id> <chapter> <name>' when a supply goes from in-scene to gone" })
+refresh_props = dbg_task("Props: boxes, drawers, switches", "Scan the scene for props", refresh_props, {
+    when = "every 3 s (from the world callback)",
+    reads = "one scene query per prop type (breakable boxes, drawers, switches, interaction points...) plus the breakable-object scan; state of new ones",
+    writes = "ws.props and ws.dbox" })
+poll_props = dbg_task("Props: boxes, drawers, switches", "Watch every prop's state", poll_props, {
+    when = "4 times a second (every 0.25 s)",
+    reads = "the state of EVERY prop (one call each), distance to drawers; calls the box / drawer / retarget checks",
+    writes = "sends 'break' / 'drawer' / 'switch' / 'intr' events; may re-throw a drawer that did not move" })
+poll_dbox = dbg_task("Props: boxes, drawers, switches", "Watch breakable objects", poll_dbox, {
+    when = "4 times a second (called by the prop watch)",
+    reads = "dbox_broken of each breakable object",
+    writes = "sends 'dbreak <key>' when one breaks here" })
+check_drawers = dbg_task("Props: boxes, drawers, switches", "Check a drawer we changed really moved", check_drawers, {
+    when = "4 times a second (called by the prop watch); only does work 2.5 s after a drawer change",
+    reads = "the drawer's parent state machine (current state name)",
+    writes = "throws the switch again, up to 3 times" })
+coop_world_check_drawers = check_drawers   -- poll_props calls it by this global name
+refresh_phys = dbg_task("Pushed objects", "Scan the scene for movable objects", refresh_phys, {
+    when = "every 3 s (from the world callback)",
+    reads = "app.Havok.RigidBodyDynamics in the whole scene (a scene query; can be hundreds); for new ones GameObject name and position",
+    writes = "ws.phys (skips characters' own ragdoll pieces)" })
+poll_phys = dbg_task("Pushed objects", "Watch movable objects for being pushed", poll_phys, {
+    when = "4 times a second (every 0.25 s); not at all when Share pushed objects is off",
+    reads = "the rigid-body list of the scene again (a second scene query) and, for EVERY known object, its Transform position (two game calls each); our position",
+    writes = "sends 'phys <key> <pos> <rot>' (at most 4 a second per object) for objects within 12 m that moved 0.15 m by our hand" })
+check_phys_moves = dbg_task("Pushed objects", "Log whether an applied push really moved the object", check_phys_moves, {
+    when = "every frame (a list check; only the first 10 applied pushes of a session are checked, 0.5 s after)",
+    reads = "the object's position after the push",
+    writes = "one log line per checked push" })
+apply_pending = dbg_task("World changes while apart", "Apply changes the friend made before this area loaded", apply_pending, {
+    when = "every 3 s (from the world callback)",
+    reads = "the pending unlocks, props and the door and prop tables",
+    writes = "unlocks doors, sets drawers / boxes as the friend left them once their area is loaded here" })
+poll_locks = dbg_task("Lockpicks and chains", "Watch lockpick locks the friend picked", poll_locks, {
+    when = "4 times a second (every 0.25 s)",
+    reads = "only the locks being watched (empty most of the time): lock state, state machine name",
+    writes = "opens the lock by hand if the game did not open it" })
+poll_chains = dbg_task("Lockpicks and chains", "Watch chains the friend cut", poll_chains, {
+    when = "4 times a second (every 0.25 s)",
+    reads = "only the chains being watched (empty most of the time)",
+    writes = "cuts the chain by hand if the game's own change did not" })
+poll_used = dbg_task("Key items and puzzles", "Watch key items used, puzzles, trays and kicks", poll_used, {
+    when = "4 times a second (every 0.25 s); it calls the five checks below",
+    reads = "see each check",
+    writes = "see each check; forgets used-item records after 10 minutes" })
+poll_iuse = dbg_task("Key items and puzzles", "Send key items we used (key in a lock, tape in the VCR)", poll_iuse, {
+    when = "4 times a second (every 0.25 s); works only when an item use was queued",
+    reads = "the used item's reaction settings (success state)",
+    writes = "sends 'iuse <key> <state> <chapter> <item>'" })
+poll_puzzles = dbg_task("Key items and puzzles", "Watch the shadow puzzle", poll_puzzles, {
+    when = "twice a second (every 0.5 s); not when Share item gimmicks is off",
+    reads = "app.InteractShadowPuzzle components in the scene (a scene query) and their state machines",
+    writes = "sends 'iuse ... ShadowPuzzle' when it is solved here" })
+poll_gimmicks = dbg_task("Key items and puzzles", "Watch puzzle gimmicks' state machines", poll_gimmicks, {
+    when = "twice a second (every 0.5 s); not when Share item gimmicks is off",
+    reads = "the state machine's current state of every puzzle gimmick (a scene query then one call each)",
+    writes = "sends 'gstate <key> <state>' when a state changes here" })
+poll_trays = dbg_task("Key items and puzzles", "Watch serving trays and similar", poll_trays, {
+    when = "twice a second (every 0.5 s); not when interaction sharing is off",
+    reads = "the tray list (cached) and each tray's state machine state",
+    writes = "sends 'tray <name> <state>' when a tray changes here" })
+poll_kicks = dbg_task("Key items and puzzles", "Watch for our kick on the morgue's body bags", poll_kicks, {
+    when = "4 times a second (every 0.25 s)",
+    reads = "our player's EventActionController isActive and the owner object's components",
+    writes = "sends 'kick <x> <y> <z>' when our kick starts" })
+coop_world_on_event = dbg_task("Friend's events", "Apply a door / item / prop / puzzle event from the friend", coop_world_on_event, {
+    when = "when the friend's game sends an event (door, item, prop, puzzle, push, drop...); how often shows in runs per second",
+    reads = "the event text; the door, item and prop tables",
+    writes = "opens / closes / unlocks doors, takes items, smashes boxes, moves drawers and objects, pulls puzzle states, puts a dropped item on the ground" })
+dbg_note{ feature = "World scheduler", name = "The world callback (calls everything above on its own timers)",
+    when = "every frame; the timers inside it: scans every 2 to 3 s, polls every 0.25 s",
+    reads = "see the rows above",
+    writes = "see the rows above; waits (does nothing) while a scene is swapping objects in and out" }
 re.on_frame(function()
     local now = os.clock()
     -- A scene is swapping objects in and out (v0.36): no object calls, then refresh everything

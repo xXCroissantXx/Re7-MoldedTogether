@@ -70,3 +70,8 @@ game's script parses them in its `on_event`. Options that must match in every ga
   before _00 in both games)`. The code's history lives in these comments and in docs/NOTES.md.
 - Player-facing text (on screen, menus, README, changelog) is plain English for players, not programmers.
 - Each script logs through its own `log()`; a line a bug report will need says what happened and why.
+- Every `re.on_frame` / `re.on_draw_ui` / `re.on_(pre_)application_entry` callback and every `sdk.hook` has a `dbg_note{ feature, name,
+  when, reads, writes }` just above it (a function a callback runs on its own timer can be wrapped with `dbg_task(feature, name, fn,
+  info)`, so it gets its own row). They fill the "Debug: what the scripts do" section of the Molded Together window (REFramework menu >
+  Show developer tools), which lists what each feature runs on, looks at and changes, and, with Measure ticked, how often and how long.
+  `tools/check.py` fails on a callback or hook without a note. Say in `when` whether it works every frame or on a timer or an event.

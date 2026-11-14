@@ -36,6 +36,11 @@ enemy_sync = {
 }
 local es = enemy_sync
 
+-- Debug registry (v0.52, coop_dummy.lua): dbg_note describes the callback or hook registered on the next lines, dbg_task
+-- gives a function its own row in the Debug section. Both are tail calls so the registry sees this file's line.
+local function dbg_note(info) if coop_note then return coop_note(info) end end
+local function dbg_task(feature, name, f, info) if coop_task then return coop_task(feature, name, f, info) end return f end
+
 -- Lines are collected and appended once a second (was a full read + rewrite per line).
 local log_buf, log_t, log_tail = {}, 0, nil
 -- v0.52: repeated lines are limited and the file written by coop_dummy.lua's coop_log_gate / coop_log_flush.
@@ -43,6 +48,10 @@ local function log(s)
     if coop_log_gate and not coop_log_gate("enemies", s) then return end
     log_buf[#log_buf + 1] = os.date("%H:%M:%S ") .. tostring(s)
 end
+dbg_note{ feature = "Logging", name = "Write the enemies script's log file",
+    when = "every frame; writes to disk only when 1 to 5 s have passed since the last write",
+    reads = "this script's log lines in memory",
+    writes = "coop_enemies_log.txt" }
 re.on_frame(function()
     if coop_log_flush then log_buf, log_t = coop_log_flush("enemies", "coop_enemies_log.txt", log_buf, log_t) return end
     -- without coop_dummy.lua: the v0.51 writer
@@ -133,6 +142,10 @@ local BOSS_FOLLOW = { Em2000 = true, Em2100 = true }
 -- other games show the copy. When two games both run him (after a scene, where nobody sends), the
 -- host keeps him.
 BOSS_HANDOFF = {}
+dbg_note{ feature = "One boss for both players", name = "Switch Jack and Mia hand-off on or off",
+    when = "every frame (a few table writes and, for the garage fight, a story-stage check)",
+    reads = "Options: Share the Jack fight; jack_boss_fight() (story stage of the garage fight)",
+    writes = "BOSS_HANDOFF / BOSS_FOLLOW tables (in memory); one log line when it changes" }
 re.on_frame(function()
     local on = settings ~= nil and settings.share_jack_fight ~= false
     BOSS_HANDOFF.Em8000 = on or nil
@@ -338,6 +351,10 @@ local function flush_events()
     es.ev_dirty = false
     fs.write("coopnet_ev_out.txt", table.concat(es.ev_out, "\n") .. "\n")
 end
+dbg_note{ feature = "Link to your friend's game", name = "Write the events we sent to the plugin",
+    when = "every frame, but it writes only in a frame where an event was sent",
+    reads = "the outgoing event list (last 150 lines)",
+    writes = "coopnet_ev_out.txt (the whole list is rewritten each time; the plugin reads it 30 times a second)" }
 re.on_frame(function() pcall(flush_events) end)
 
 local function send_event(text)
@@ -1505,6 +1522,10 @@ end
 -- they're taken over again afterwards.
 local prep = sdk.find_type_definition("app.EnemySave"):get_method("prepareToSave")
 if prep then
+    dbg_note{ feature = "Enemy movement", name = "Give followed enemies their own AI back before a save",
+        when = "when the game calls EnemySave.prepareToSave (a save is being prepared)",
+        reads = "the followed-enemy table",
+        writes = "returns every followed (puppet) enemy to its own AI and pauses following for 4 s" }
     sdk.hook(prep, function(args)
         pcall(function()
             local now = os.clock()
@@ -1643,6 +1664,10 @@ do
     end
     local st_m = sdk.find_type_definition("app.EnemyThinkBase"):get_method("setTarget")
     if st_m then
+        dbg_note{ feature = "One Molded for both", name = "Block the Molded's own target change",
+            when = "when the game calls EnemyThinkBase.setTarget (the AI picks who to chase; can be many times a second)",
+            reads = "the aim-hold table (empty unless an enemy is held on a friend): which player the AI wants",
+            writes = "SKIPS the game's setTarget when the enemy is held on the friend it was given" }
         sdk.hook(st_m, function(args)
             local ok, skip = pcall(function()
                 local want = held(args)
@@ -1659,6 +1684,10 @@ do
         local m = td and td:get_method("updateTarget")
         if m and not hooked[m] then
             hooked[m] = true
+            dbg_note{ feature = "One Molded for both", name = "Block the Molded's own target search",
+                when = "when the game calls updateTarget on the enemy AI (every AI tick of every enemy)",
+                reads = "the aim-hold table (empty unless an enemy is held on a friend)",
+                writes = "SKIPS the game's updateTarget for the enemy that is held on a friend" }
             sdk.hook(m, function(args)
                 local ok, want = pcall(held, args)
                 if ok and want then return sdk.PreHookResult.SKIP_ORIGINAL end
@@ -2005,6 +2034,58 @@ local function update_movement(now)
     end
 end
 
+scan = dbg_task("Enemy kills and damage", "Scan the enemies here", scan, {
+    when = "4 times a second (every 0.25 s), plus once after a scene settles",
+    reads = "ObjectManager.ManagedObjects: the enemy list (the list is re-picked every 5 s by reading the name of EVERY managed object); for each enemy: Update flag, position, isDead, spawn-point ids",
+    writes = "es.tracked (the enemy table); sends 'kill <id> ...' when one dies here; applies kills the friend made earlier; puts a Molded back in its pool when it is asleep again" })
+read_events = dbg_task("Link to your friend's game", "Read the friend's events", read_events, {
+    when = "5 times a second (every 0.2 s)",
+    reads = "coopnet_ev_in.txt (fs.read of the whole file each time); waits while loading",
+    writes = "hands each new line to on_event" })
+on_event = dbg_task("Friend's events", "Dispatch one event from the friend to the right script", on_event, {
+    when = "once per event the friend's game sends (talk, menu, story, world, gun sounds, revive, kills...); runs per second shows how chatty the link is",
+    reads = "the event text",
+    writes = "kills / hurts / hands over enemies here; everything else goes to the script that owns the event" })
+update_movement = dbg_task("Enemy movement", "Share where enemies are (the whole movement update)", update_movement, {
+    when = "every frame (from the enemies callback)",
+    reads = "pause state, the cutscene flag, the enemy table; the friend's enemy snapshots; the friend's data age",
+    writes = "calls the tasks below; drives or releases enemies the friend runs; takes back enemies that went quiet" })
+write_snapshot = dbg_task("Enemy movement", "Send the enemies we run", write_snapshot, {
+    when = "15 times a second (every 1/15 s)",
+    reads = "for each enemy we run that is awake: Transform position and rotation, motion layer 0 (bank, id, frame, speed), held weapon (about ten game calls per enemy)",
+    writes = "coopnet_es_out.txt (fs.write, the plugin sends it)" })
+read_snapshot = dbg_task("Enemy movement", "Read the enemies the friend runs", read_snapshot, {
+    when = "30 times a second (every 1/30 s), once for each friend slot (1 to 3); not during our cutscenes except to keep up",
+    reads = "coopnet_es_in*.txt (fs.read of the file each time)",
+    writes = "the enemy position history used to move copies" })
+puppetize = dbg_task("Enemy movement", "Turn an enemy into a copy of the friend's", puppetize, {
+    when = "once per enemy when the friend's game takes it over (and again after it was given back)",
+    reads = "the enemy's Update flag and pool state",
+    writes = "wakes the body if it was asleep (set_UpdateSelf / set_DrawSelf), forces it visible, switches its own AI off (set_brain), registers it as a copy" })
+drive = dbg_task("Enemy movement", "Move a copied enemy to the friend's position and play their animation", drive, {
+    when = "every frame, for each enemy the friend runs (a copy)",
+    reads = "the enemy's position history from the snapshots (interpolated, 'MOVE_DELAY' behind), its MovementController and motion layer 0 (to check frame drift); the spawn-point body list",
+    writes = "MovementController.warp to the interpolated spot; changes the Motion clip and frame to the owner's; asks for a missing animation bank; wakes a copy the game put to sleep" })
+check_handoffs = dbg_task("Enemy movement", "Hand enemies to whoever is nearer", check_handoffs, {
+    when = "twice a second (every 0.5 s)",
+    reads = "the position of every enemy, our player and each friend's ghost",
+    writes = "sends 'own <id> ...' and turns the enemy into a copy when it is clearly nearer to the friend" })
+aim_regulars = dbg_task("One Molded for both", "Aim each Molded at the nearest player", aim_regulars, {
+    when = "every frame for the held targets; the full pass 3 times a second (every 0.3 s)",
+    reads = "each enemy's AI Think component and Target; the friends' ghost positions; our position",
+    writes = "EnemyThink.setTarget so a Molded goes for the nearer player; releases the hold when it is not needed" })
+coop_enemy_check_skips = dbg_task("Enemy movement", "Check a handed-over enemy was really picked up", coop_enemy_check_skips, {
+    when = "once a second (called with the snapshot send)",
+    reads = "the table of handed-over enemies and who has them",
+    writes = "takes an enemy back if the friend's game cannot run it" })
+watch_pause = dbg_task("Enemy movement", "Tell the friend when we pause", watch_pause, {
+    when = "every frame (from the movement update)",
+    reads = "the game's pause state (is_paused)",
+    writes = "sends 'pause 1' / 'pause 0' when it changes" })
+dbg_note{ feature = "Enemy scheduler", name = "The enemies callback (calls the movement update, event reader and scan)",
+    when = "every frame; its timers: the movement update every frame, events every 0.2 s, the scan every 0.25 s",
+    reads = "see the rows above",
+    writes = "see the rows above; waits while a scene is swapping characters" }
 re.on_frame(function()
     if not es.enabled then return end
     local now = os.clock()

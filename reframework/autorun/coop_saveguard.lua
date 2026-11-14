@@ -38,6 +38,11 @@ local WRITES = { "saveSingle()", "saveSingle(System.Int32)", "saveSlotDialog()" 
 -- write the whole log on every line, and while saving is blocked the game retries its own save (dataSaveD)
 -- about 100 times a second: the 2026-11-12 playtest's log reached 650 KB, rewritten 100 times a second.
 local lines, log_dirty, log_t, rep = {}, false, 0, nil
+-- Debug registry (v0.52, coop_dummy.lua): dbg_note describes the callback or hook registered on the next lines, dbg_task
+-- gives a function its own row in the Debug section. Both are tail calls so the registry sees this file's line.
+local function dbg_note(info) if coop_note then return coop_note(info) end end
+local function dbg_task(feature, name, f, info) if coop_task then return coop_task(feature, name, f, info) end return f end
+
 local function log_line(s)
     if rep and rep.s == s then
         rep.n = rep.n + 1
@@ -53,6 +58,10 @@ local function log_line(s)
     end
     log_dirty = true
 end
+dbg_note{ feature = "Save guard", name = "Write the save guard's log file",
+    when = "every frame; writes only when a line was added and 2 s have passed",
+    reads = "the log lines in memory",
+    writes = "coop_saveguard_log.txt (the whole file is rewritten each time)" }
 re.on_frame(function()
     if not log_dirty or os.clock() - log_t < 2 then return end
     log_t, log_dirty = os.clock(), false
@@ -92,6 +101,10 @@ for _, name in ipairs(REQUESTS) do
     if m == nil then
         log_line("ERROR method not found: " .. name)
     else
+        dbg_note{ feature = "Save guard", name = "Block a save request",
+            when = "when the game calls a SaveDataManager save request (see the method name)",
+            reads = "settings, re-read from coop_settings.json at most every 2 s (json.load_file); the saving mode",
+            writes = "SKIPS the save unless Allow saving is on" }
         sdk.hook(m, function(args)
             refresh()
             if allow or (mode == "write" and name ~= MENU_REQUEST) then
@@ -112,6 +125,10 @@ for _, sig in ipairs(WRITES) do
     if m == nil then
         log_line("ERROR write method not found: " .. sig .. " (falling back to strict blocking)")
     else
+        dbg_note{ feature = "Save guard", name = "Block a disk write (write mode only)",
+            when = "when the game calls a SaveService disk-write method (see the method name)",
+            reads = "settings (re-read at most every 2 s), the saving mode",
+            writes = "SKIPS the write in write mode and reports it as done" }
         sdk.hook(m, function(args)
             refresh()
             if allow or mode ~= "write" then skipping = false return sdk.PreHookResult.CALL_ORIGINAL end
@@ -131,6 +148,10 @@ local internal_hooked = 0
 for _, name in ipairs(INTERNAL) do
     local m = t:get_method(name)
     if m then
+        dbg_note{ feature = "Save guard", name = "Block an internal save (the game's own autosave steps)",
+            when = "when the game calls an internal SaveDataManager save method (see the method name)",
+            reads = "settings (re-read at most every 2 s)",
+            writes = "SKIPS the save unless Allow saving is on" }
         sdk.hook(m, function(args)
             refresh()
             if allow then return sdk.PreHookResult.CALL_ORIGINAL end
@@ -148,8 +169,16 @@ log_line(string.format("guard active: %d/%d save requests, %d/%d disk writes hoo
     hooked, #REQUESTS, write_hooked, #WRITES))
 refresh()
 
+dbg_note{ feature = "Save guard", name = "Re-read the saving setting",
+    when = "every frame, but it only reads the file every 2 s",
+    reads = "coop_settings.json (json.load_file): allow_saving and save_block_mode",
+    writes = "the guard's allow / mode flags" }
 re.on_frame(function() refresh() end)
 
+dbg_note{ feature = "Save guard", name = "The save guard line in the REFramework menu",
+    when = "every frame the REFramework menu is open",
+    reads = "the guard's flags",
+    writes = "one text line" }
 re.on_draw_ui(function()
     imgui.text(string.format("coop_saveguard: %d+%d hooks, saves %s", hooked, write_hooked,
         allow and "ALLOWED" or ("BLOCKED (" .. mode .. ")")))

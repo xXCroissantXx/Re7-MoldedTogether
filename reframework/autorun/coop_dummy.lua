@@ -19,12 +19,285 @@
 -- moments and for 1 s after (GameManager.IsSceneLoading, measured: true for the ~10 s of a load, the
 -- player object swapped in the middle), and every co-op script's frame work waits for it (the
 -- re.on_frame wrapper at the top of each script). A stuck flag gives up after 3 minutes.
+-- Debug registry (v0.52). The "Debug: what the scripts do" section of the Molded Together window (REFramework menu >
+-- Show developer tools) lists every piece of work the scripts do, how it is triggered (every frame, on a timer, when
+-- the friend's game sends an event, when the game calls a method), what it reads, what it changes, and, with
+-- "Measure" ticked, how often it ran and how long it took. This is so the cost of each feature can be read off and
+-- cut. Three parts:
+--  * re.on_frame / re.on_draw_ui / re.on_(pre_)application_entry / sdk.hook are wrapped here (this script loads
+--    first), so EVERY callback and hook is listed and timed by the file and line that registered it, described or
+--    not. Nothing in the other scripts has to change for that, and with Measure off a wrapped callback only runs
+--    one extra function call and a flag check.
+--  * coop_note{ feature, name, when, reads, writes } on the line(s) above a registration says what that callback is.
+--  * coop_task(feature, name, fn, info) wraps one function that a callback calls on its own timer (the door scan,
+--    the enemy scan...) so it gets its own row: runs per second shows its real cadence.
+-- os.clock may only tick every millisecond or so on Windows: the runs per second are exact; the milliseconds are
+-- good for ranking, not for the last digit. A task inside a callback is already part of that callback's time.
+if coop_dbg == nil then
+    coop_dbg = { measure = false, rows = {}, order = {}, t0 = os.clock(), note = nil }
+end
+do
+    local D = coop_dbg
+    -- Frames that are only the scripts' own registration wrappers (their `re` tables, on_frame_1, the dbg_* shims).
+    local SKIP = { on_frame = true, on_frame_1 = true, on_draw_ui = true, on_draw_ui_1 = true, dbg_note = true, dbg_task = true }
+
+    -- File and line of whoever registered something: the first frame up the stack that is not a wrapper. (A wrapper
+    -- that ends in `return _G.re.on_frame(...)` is a tail call and is not on the stack at all.) Level 1 is this
+    -- function, 2 the wrapped registration, 3 its caller.
+    -- Without the debug library (or without a frame to read) the "line" is a running number instead: callbacks are
+    -- still told apart and a note still belongs to the next registration, they just have no real file and line.
+    local counter = 0
+    local function site()
+        if debug ~= nil and debug.getinfo ~= nil then
+            for lv = 3, 12 do
+                local i = debug.getinfo(lv, "nSl")
+                if i == nil then break end
+                if i.what ~= "C" and not (i.name and SKIP[i.name]) then
+                    return tostring(i.short_src or "?"):match("[^/\\]+$") or "?", i.currentline or 0
+                end
+            end
+        end
+        counter = counter + 1
+        return "?", counter
+    end
+
+    local function row_for(key)
+        local r = D.rows[key]
+        if r == nil then
+            r = { key = key, n = 0, total = 0, max = 0, inst = 0 }
+            D.rows[key] = r
+            D.order[#D.order + 1] = r
+        end
+        return r
+    end
+    local function describe(r, info)
+        r.feature = info.feature or r.feature
+        r.name = info.name or r.name
+        r.when, r.reads, r.writes = info.when or r.when, info.reads or r.reads, info.writes or r.writes
+    end
+    -- The note written just above a registration belongs to it (same file, at most 14 lines on); anything else drops it.
+    local function claim(src, line)
+        local n = D.note
+        D.note = nil
+        if n and n.src == src and line >= n.line and line - n.line <= 14 then return n end
+        return nil
+    end
+
+    -- A run that throws still counts (a call that fails on every frame is exactly what this is for): the call goes
+    -- through pcall while measuring, is counted with its time and as an error, and the same error is thrown again.
+    local function finish(r, t0, count, ok, ...)
+        local dt = os.clock() - t0
+        if count then r.n = r.n + 1 end
+        r.total = r.total + dt
+        if dt > r.max then r.max = dt end
+        if not ok then
+            r.errs = (r.errs or 0) + 1
+            error((...), 0)
+        end
+        return ...
+    end
+    local function timed(r, f, ...)
+        if not D.measure then return f(...) end
+        return finish(r, os.clock(), true, pcall(f, ...))
+    end
+    local function timed_post(r, f, ...)   -- a hook's second half: its time counts, it is not another call
+        if not D.measure then return f(...) end
+        return finish(r, os.clock(), false, pcall(f, ...))
+    end
+
+    function coop_note(info)
+        if type(info) ~= "table" then return end
+        info.src, info.line = site()
+        D.note = info
+    end
+
+    -- A function the callbacks call on their own timer, with its own row. Returns fn itself when it can't be wrapped.
+    function coop_task(feature, name, fn, info)
+        if type(fn) ~= "function" then return fn end
+        local r = row_for("task|" .. tostring(feature) .. "|" .. tostring(name))
+        info = info or {}
+        r.feature, r.name, r.kind = feature, name, "called from a callback"
+        r.when, r.reads, r.writes = info.when, info.reads, info.writes
+        r.inst = r.inst + 1
+        return function(...) return timed(r, fn, ...) end
+    end
+
+    local ok, err = pcall(function()
+        local re_ = _G.re
+        for _, nm in ipairs({ "on_frame", "on_draw_ui" }) do
+            local orig = re_ and re_[nm]
+            if type(orig) == "function" then
+                re_[nm] = function(f, ...)
+                    if type(f) ~= "function" then return orig(f, ...) end
+                    local src, line = site()
+                    local r = row_for(nm .. "|" .. src .. ":" .. line)
+                    r.src, r.line, r.inst = src, line, r.inst + 1
+                    r.kind = nm == "on_frame" and "every frame" or "every frame the REFramework window is drawn"
+                    local info = claim(src, line)
+                    if info then describe(r, info) end
+                    return orig(function(...) return timed(r, f, ...) end, ...)
+                end
+            end
+        end
+        for _, nm in ipairs({ "on_application_entry", "on_pre_application_entry" }) do
+            local orig = re_ and re_[nm]
+            if type(orig) == "function" then
+                re_[nm] = function(entry, f, ...)
+                    if type(f) ~= "function" then return orig(entry, f, ...) end
+                    local src, line = site()
+                    local r = row_for(nm .. "|" .. tostring(entry) .. "|" .. src .. ":" .. line)
+                    r.src, r.line, r.inst = src, line, r.inst + 1
+                    r.kind = string.format("every frame, %s the game's %s step", nm == "on_pre_application_entry" and "just before" or "just after", tostring(entry))
+                    local info = claim(src, line)
+                    if info then describe(r, info) end
+                    return orig(entry, function(...) return timed(r, f, ...) end, ...)
+                end
+            end
+        end
+        local sdk_ = _G.sdk
+        local orig_hook = sdk_ and sdk_.hook
+        if type(orig_hook) == "function" then
+            sdk_.hook = function(m, pre, post, ...)
+                local src, line = site()
+                local mn = "?"
+                pcall(function() mn = tostring(m:get_declaring_type():get_full_name()) .. "." .. tostring(m:get_name()) end)
+                local r = row_for("hook|" .. src .. ":" .. line .. "|" .. mn)
+                r.src, r.line, r.inst = src, line, r.inst + 1
+                r.kind = "when the game calls " .. mn
+                local info = claim(src, line)
+                if info then describe(r, info) end
+                if r.name == nil then r.name = mn end
+                local pre2 = type(pre) == "function" and function(...) return timed(r, pre, ...) end or pre
+                local post2 = type(post) == "function" and function(...) return timed_post(r, post, ...) end or post
+                return orig_hook(m, pre2, post2, ...)
+            end
+        end
+    end)
+    if not ok then D.patch_err = tostring(err) end
+
+    function coop_dbg_reset()
+        for _, r in ipairs(D.order) do r.n, r.total, r.max, r.errs = 0, 0, 0, nil end
+        D.t0 = os.clock()
+    end
+    function coop_dbg_set_measure(on)
+        if on and not D.measure then coop_dbg_reset() end
+        D.measure = on == true
+    end
+
+    -- The rows as { feature name -> list } in order of first appearance, plus the ones nobody described.
+    local function grouped()
+        local feats, order, plain = {}, {}, {}
+        for _, r in ipairs(D.order) do
+            if r.feature then
+                if feats[r.feature] == nil then feats[r.feature] = {} order[#order + 1] = r.feature end
+                local l = feats[r.feature]
+                l[#l + 1] = r
+            else
+                plain[#plain + 1] = r
+            end
+        end
+        return feats, order, plain
+    end
+    local function seconds() return math.max(os.clock() - D.t0, 0.001) end
+    local function where(r) return r.src and string.format("%s:%d", r.src, r.line) or "" end
+    local function stat_text(r)
+        if not D.measure then return "(Measure is off)" end
+        if r.n == 0 then return "has not run" end
+        local secs = seconds()
+        return string.format("%.1f runs/s, avg %.3f ms, max %.2f ms, %.2f ms per second%s", r.n / secs, r.total / r.n * 1000, r.max * 1000, r.total / secs * 1000,
+            r.errs and string.format(", %d of them THREW AN ERROR", r.errs) or "")
+    end
+    local function title_of(r)
+        return string.format("%s%s", r.name or r.kind or "?", r.inst > 1 and string.format(" (x%d copies)", r.inst) or "")
+    end
+    local function lines_of(r)
+        local out = { title_of(r) .. "   " .. stat_text(r) }
+        out[#out + 1] = "    when: " .. tostring(r.when or r.kind or "?") .. (where(r) ~= "" and ("   [" .. where(r) .. "]") or "")
+        if r.reads then out[#out + 1] = "    looks at: " .. r.reads end
+        if r.writes then out[#out + 1] = "    changes: " .. r.writes end
+        return out
+    end
+
+    -- The whole thing as text (the Save report button: written to a file and copied, to paste into a chat).
+    function coop_dbg_report()
+        local feats, order, plain = grouped()
+        local out = { string.format("Molded Together: what the scripts do (measured for %.0f s: %s)", seconds(), D.measure and "Measure on" or "Measure off") }
+        for _, f in ipairs(order) do
+            out[#out + 1] = ""
+            out[#out + 1] = "== " .. f
+            for _, r in ipairs(feats[f]) do
+                for _, l in ipairs(lines_of(r)) do out[#out + 1] = l end
+            end
+        end
+        if #plain > 0 then
+            out[#out + 1] = ""
+            out[#out + 1] = "== Not described yet"
+            for _, r in ipairs(plain) do out[#out + 1] = string.format("%s   %s   [%s]   %s", title_of(r), r.kind or "?", where(r), stat_text(r)) end
+        end
+        return table.concat(out, "\n")
+    end
+
+    local function wrapped(s)
+        if imgui.text_wrapped then imgui.text_wrapped(s) else imgui.text(s) end
+    end
+    function coop_dbg_ui()
+        local c, v = imgui.checkbox("Measure (adds a little work to every callback; off records nothing)", D.measure)
+        if c then coop_dbg_set_measure(v) end
+        imgui.same_line()
+        if imgui.button("Reset numbers##dbg") then coop_dbg_reset() end
+        imgui.same_line()
+        if imgui.button("Save report and copy it##dbg") then
+            local text = coop_dbg_report()
+            pcall(fs.write, "coop_debug_report.txt", text)
+            if sdk.copy_to_clipboard then pcall(sdk.copy_to_clipboard, text) end
+            D.saved_msg = "saved to reframework/data/coop_debug_report.txt and copied"
+        end
+        if D.saved_msg then imgui.text(D.saved_msg) end
+        if D.patch_err then imgui.text("could not wrap the game callbacks: " .. D.patch_err) end
+        wrapped("Every frame callback and hook is listed and timed by the file and line that registered it. Times: os.clock may tick only about once a millisecond, so runs/s are exact and the milliseconds are for ranking. A task that a callback calls is already part of that callback's time.")
+        local feats, order, plain = grouped()
+        if D.measure then
+            local top, total = {}, 0
+            for _, r in ipairs(D.order) do
+                if r.kind ~= "called from a callback" and r.kind ~= "every frame the REFramework window is drawn" then total = total + r.total end
+                if r.n > 0 then top[#top + 1] = r end
+            end
+            table.sort(top, function(a, b) return a.total > b.total end)
+            imgui.text(string.format("All callbacks and hooks together: %.2f ms per second of play (%.1f%% of the time)", total / seconds() * 1000, total / seconds() * 100))
+            if imgui.tree_node("Heaviest first (top 25)##dbg") then
+                for i = 1, math.min(25, #top) do
+                    local r = top[i]
+                    imgui.text(string.format("%s: %s   %s", r.feature or "(not described)", title_of(r), stat_text(r)))
+                end
+                imgui.tree_pop()
+            end
+        end
+        for _, f in ipairs(order) do
+            if imgui.tree_node(f .. "##dbgf") then
+                for _, r in ipairs(feats[f]) do
+                    for _, l in ipairs(lines_of(r)) do wrapped(l) end
+                end
+                imgui.tree_pop()
+            end
+        end
+        if #plain > 0 and imgui.tree_node(string.format("Not described yet (%d)##dbgp", #plain)) then
+            for _, r in ipairs(plain) do
+                imgui.text(string.format("%s   [%s]   %s", title_of(r), where(r), stat_text(r)))
+            end
+            imgui.tree_pop()
+        end
+    end
+end
 coop_busy_state = { busy = false, since = nil, hold_until = 0, addr = nil, n = 0 }
 do
     local function flag(gm, name)
         local ok, v = pcall(gm.get_field, gm, name)
         return ok and v == true
     end
+    coop_note{ feature = "Loading guard", name = "Is the game loading or swapping the player?",
+        when = "every frame",
+        reads = "GameManager IsSceneLoading / RequestChapterJump / RequestPlayerChange; ObjectManager.PlayerObj (its address)",
+        writes = "coop_busy_state only (no game change). Every other script's frame work is skipped while it says busy, and for 1 s after" }
     re.on_frame(function()
         local B, now = coop_busy_state, os.clock()
         local gm = sdk.get_managed_singleton("app.GameManager")
@@ -167,6 +440,10 @@ end
 local function vlog(s)
     if settings and settings.verbose_log == true then log(s) end
 end
+coop_note{ feature = "Logging", name = "Write this script's log file",
+    when = "every frame; writes to disk only when 1 to 5 s have passed since the last write (longer as the file grows)",
+    reads = "this script's log lines waiting in memory",
+    writes = "coop_dummy_log.txt (the whole kept tail is rewritten each time)" }
 re.on_frame(function()
     log_buf, log_t = coop_log_flush(LOG_WHO, LOG_FILE, log_buf, log_t)
 end)
@@ -1918,6 +2195,34 @@ end
 
 -- Finish parts a few frames after spawning (components aren't ready at once),
 -- then keep them glued to the main dummy's position.
+record_player = coop_task("Friend's body (ghost)", "Remember where our player was", record_player, {
+    when = "every frame (called from the main ghost callback)",
+    reads = "our player's Transform position and rotation",
+    writes = "our own position history (kept for a few seconds, used for the 'go to my friend' warp)" })
+net_io = coop_task("Link to your friend's game", "Send our state / read theirs", net_io, {
+    when = "every frame, but it gates itself: reads the friend's file at 60/s, writes ours at 30/s",
+    reads = "our player's position, rotation, stance, chapter and look (about a dozen game calls per write); the friend's file coopnet_in.txt (fs.read)",
+    writes = "coopnet_out.txt (fs.write, each time: the plugin sends it); the friend's sample history (net.history)" })
+poll_clips = coop_task("Friend's body (ghost)", "Wait for the animation bank to load, then list its clips", poll_clips, {
+    when = "called every frame by the main ghost callback; it returns at once unless the ghost is still waiting for its clips, then it asks once a second (for up to 20 s)",
+    reads = "the ghost's Motion component: active bank count and bank count, then the clip list",
+    writes = "the clip list (anim.clips) and the walk / jog / crouch / idle set; starts the first clip" })
+verify_playback = coop_task("Friend's body (ghost)", "Check a clip really started (1 s after each play)", verify_playback, {
+    when = "called every frame by the main ghost callback; it returns at once except 1 s (and again 0.5 s) after a clip was started",
+    reads = "the ghost's Motion layer 0: end frame and current frame",
+    writes = "if the clip did not bind or froze: rebuilds the layer, retires that clip and plays a fallback idle; once bound, stops the dummy's own state machine" })
+auto_animate = coop_task("Friend's body (ghost)", "Choose walk / jog / crouch / idle from how the friend moves", auto_animate, {
+    when = "called every frame by the main ghost callback; it works 10 times a second",
+    reads = "the friend's velocity (look-ahead from the sample buffer) and stance flags",
+    writes = "plays the matching clip on the ghost's Motion (changeMotion), its speed and the walk direction" })
+ghost_action = coop_task("Friend's body (ghost)", "Play the friend's action moves (swing, grab, climb, lie down...)", ghost_action, {
+    when = "every frame while the ghost has a Motion (called from the main ghost callback)",
+    reads = "the friend's action fields from their samples (net.peer_action...); the ghost's Motion TargetBankType (read every frame to see whether it still matches)",
+    writes = "sets the Motion's TargetBankType, plays the action clip on a layer, adds the friend's extra motion banks to the ghost" })
+coop_note{ feature = "Friend's body (ghost)", name = "Main ghost callback: move and animate the friend's body",
+    when = "every frame",
+    reads = "the friend's sample history (position, rotation, look, stance flags); the ghost's Transform",
+    writes = "ghost position and rotation (set_Position / set_Rotation), the head-look targets, and coop_follow_state.txt every 120 frames (a debug file write)" }
 re.on_frame(function()
     if SLOT == 1 then record_player() end
     local nok, nerr = pcall(net_io)
@@ -2386,6 +2691,10 @@ local function follow_forced(now)
     log("follow: " .. F.msg)
     return true
 end
+coop_note{ feature = "Follow into VHS tapes", name = "Did the friend go into a tape? Follow them",
+    when = "every frame, but it only looks once a second",
+    reads = "our chapter and the friend's chapter (from their samples), whether we are in a cutscene, Options: Follow my friend into VHS tapes",
+    writes = "after the friend has been in a tape chapter for a moment and we are in control: jumps our game to that tape chapter (jump_to_chapter), gives up after 30 s" }
 on_frame_1(function()
     local now = os.clock()
     if now - (follow.check_t or 0) < 1 then return end
@@ -2431,6 +2740,10 @@ end)
 CHAPTER_ORDER_V = { [2] = 1, [4] = 2, [13] = 3, [5] = 4, [14] = 5, [6] = 6 }
 FOLLOW_CH_AFTER = 12
 local chf = { want = nil, since = nil, try_t = 0, tries = 0, done = nil }
+coop_note{ feature = "Follow the host into the next chapter", name = "Did the host go on to a later chapter? Jump after them",
+    when = "every frame, but it only looks once a second; only in the guest's game",
+    reads = "our chapter and the host's chapter (from their samples), whether we are in a cutscene, Options: follow chapters, the chapter jump list",
+    writes = "after the host has been in a later chapter for 12 s: jumps our game to it (jump_to_chapter), retrying every 3 s while the game is busy" }
 on_frame_1(function()
     local now = os.clock()
     if now - (chf.check_t or 0) < 1 then return end
@@ -2468,6 +2781,10 @@ on_frame_1(function()
     jump_to_chapter(target)
 end)
 
+coop_note{ feature = "Link to your friend's game", name = "Read the Steam friends list file",
+    when = "every frame, but it only reads the file every 2 s",
+    reads = "coopnet_friends.txt (fs.read): your Steam friends, who is in RE7, who has co-op, invites, lobbies",
+    writes = "the friends list in memory (feeds the invite line and the menus)" }
 on_frame_1(function()
     read_friends()   -- also feeds the on-screen invite line
 end)
@@ -2673,6 +2990,10 @@ function jump_to_chapter(e)
     log("chapters: " .. chapters.last)
 end
 
+coop_note{ feature = "Chapter jumps", name = "Run a chapter jump that was asked for",
+    when = "every frame (a flag check; does nothing unless a jump is waiting)",
+    reads = "chapters.pending (set by the lobby, the chapter switcher or the tape follow)",
+    writes = "when due: asks the game to jump to that chapter" }
 on_frame_1(function()
     if chapters.pending and os.clock() >= chapters.pending_t then
         local e = chapters.pending
@@ -2996,6 +3317,10 @@ local function show_held()
 end
 function show_friend_weapon_again() show_held() end
 
+coop_note{ feature = "Held weapon", name = "Which weapon are we holding / which one shows on the friend",
+    when = "every frame, but it only works 4 times a second",
+    reads = "our held weapon (local_weapon), the friend's weapon from the link",
+    writes = "sends 'weapon <path>' when ours changes (and every 20 s); builds the weapon copy on the ghost's hand (show_held), drops the old copy first" }
 re.on_frame(function()
     local now = os.clock()
     if now - (held.check_t or 0) < 0.25 then return end   -- was 1 s: the healing bottle showed late
@@ -3050,6 +3375,10 @@ end)
 
 -- Which weapon animation set our body uses (Motion.TargetBankType), checked 10 times a
 -- second: a swing follows a weapon switch quickly.
+coop_note{ feature = "Held weapon", name = "Which animation set our body uses",
+    when = "every frame, but it only works 10 times a second",
+    reads = "our player's Motion component: TargetBankType",
+    writes = "sends 'bank <n>' when it changes (and every 20 s)" }
 on_frame_1(function()
     local now = os.clock()
     if now - (held.bank_t or 0) < 0.1 then return end
@@ -3075,6 +3404,10 @@ end)
 -- changes and every 15 s while there are any: the friend's game adds them to our character
 -- (add_ghost_banks) and plays the moves we play from them.
 local dyn_share = { t = 0, sig = "", sent_t = -100 }
+coop_note{ feature = "Held weapon", name = "Share the animation banks the game added to our body",
+    when = "every frame, but it only works twice a second",
+    reads = "our player's Motion component: the list of dynamically added motion banks",
+    writes = "sends 'mbank ...' when the list changes, and every 15 s while there are any" }
 on_frame_1(function()
     local now = os.clock()
     if now - dyn_share.t < 0.5 then return end
@@ -3164,6 +3497,10 @@ function coop_lobby_on_event(text)
     return true
 end
 
+coop_note{ feature = "Link to your friend's game", name = "Send our look; redress the ghost once we know the model files",
+    when = "every frame (cheap checks); sends the look when it changes and every 15 s",
+    reads = "the plugin status (kv.fullModels), whether a friend is linked, the freshest sample time",
+    writes = "'look <character>' event; rebuilds the ghost's outfit (build_ethan) at most every 5 s, and only once after a script reset" }
 re.on_frame(function()
     local kv = net.kv or {}
     -- Right after a script reset the status isn't read yet, so a ghost dressed then used the
@@ -3351,6 +3688,10 @@ local function draw_testing()
     end
 end
 
+coop_note{ feature = "Co-op window (REFramework)", name = "The Molded Together window",
+    when = "every frame the REFramework menu is open (draws nothing otherwise)",
+    reads = "link state, settings, lobby, friends list (each section only while it is expanded)",
+    writes = "settings when a box is ticked (save_settings writes coop_settings.json)" }
 on_draw_ui_1(function()
     local ok, err = pcall(function()
         local c, v = imgui.checkbox("Show the Molded Together window", coop_window.open)
@@ -3371,7 +3712,11 @@ on_draw_ui_1(function()
             -- Bot tests and research tools, hidden unless asked for.
             local dc, dv = imgui.checkbox("Show developer tools", settings.dev_tools == true)
             if dc then settings.dev_tools = dv save_settings() end
-            if settings.dev_tools then section("Developer tools", draw_testing) end
+            if settings.dev_tools then
+                section("Developer tools", draw_testing)
+                -- v0.52: every feature with how it runs and what it costs (the registry at the top of this script)
+                if coop_dbg_ui then section("Debug: what the scripts do", coop_dbg_ui) end
+            end
         end)
         if not ok and not coop_window.err then coop_window.err = true log("window ERR " .. tostring(err)) end
     end
@@ -3387,6 +3732,10 @@ BOT_TEST_NAME = "Тест 测试 テスト 테스트 Ünï"
 -- in: for HOLD_S s after it the player is put back at the target whenever they drop more than 1 m below it.
 WARP_HOLD_S = 6
 local warp_hold = nil
+coop_note{ feature = "Go to my friend (warp)", name = "Hold the player at the target while the floor streams in",
+    when = "every frame (a flag check); works only for 6 s after a long warp",
+    reads = "our player's position (every frame while held), local_cutscene()",
+    writes = "MovementController.warp back to the target when the player dropped more than 1 m below it; gives up after 60 corrections" }
 re.on_frame(function()
     local h = warp_hold
     if h == nil then return end
@@ -3461,6 +3810,10 @@ local function draw_connect_panel()
     end
 end
 
+coop_note{ feature = "Co-op window (REFramework)", name = "Developer panel: the ghost body test",
+    when = "every frame the REFramework menu is open, only with Show developer tools ticked",
+    reads = "the ghost, animation and link state",
+    writes = "only when a control is used" }
 on_draw_ui_1(function()
     if not (settings and settings.dev_tools) then return end
     if not imgui.tree_node("coop_dummy (ghost body test)") then return end
@@ -3648,6 +4001,10 @@ local function player_is_ethan(player)
 end
 
 local watch = { addr = nil, t = 0 }
+coop_note{ feature = "Friend's body (ghost)", name = "Has our player object changed? Rebuild the ghost",
+    when = "every frame, but it only works twice a second",
+    reads = "ObjectManager.PlayerObj address; the ghost's first piece (get_Name) to see if it was destroyed",
+    writes = "when the player changed or the ghost was destroyed: respawn_ghost (tears the ghost down and builds it again)" }
 re.on_frame(function()
     local now = os.clock()
     if now - watch.t < 0.5 then return end
@@ -3723,6 +4080,10 @@ function start_reload_test()
     reload_note(string.format("start: %d rounds, one every %d s", reload.total, reload.every))
 end
 
+coop_note{ feature = "Developer tools", name = "Reload test (10 loads in a row)",
+    when = "every frame (a flag check; does nothing unless the test is running)",
+    reads = "only while running: the ghost's pieces, animation and the link",
+    writes = "only while running: asks the game to load the save every 45 s and logs pass / fail to coop_reload_test.txt" }
 on_frame_1(function()
     if not reload.running then return end
     local now = os.clock()
@@ -3774,6 +4135,10 @@ function fast_forward(on)
     ff.on = on
     log("fast-forward: " .. (on and "on" or "off"))
 end
+coop_note{ feature = "Developer tools", name = "Fast-forward cutscenes (test option)",
+    when = "every frame (asks whether a cutscene is playing, even when the option is off)",
+    reads = "local_cutscene(): the game's running event controllers",
+    writes = "only with the option on: scene TimeScale 8x during a cutscene, back to 1x after" }
 on_frame_1(function()
     local playing = local_cutscene()
     if ff.on and not playing then fast_forward(false)
@@ -3784,6 +4149,10 @@ end)
 -- "full-screen movie playing" flag on, and with it on the pause menu never opens. Clear it
 -- once nothing has been playing and the player has been in control for 5 s.
 local movie_flag = { since = nil }
+coop_note{ feature = "Stuck movie fix", name = "Clear a stuck 'full-screen movie' flag",
+    when = "every frame",
+    reads = "MenuManager.get_IsPlayInGameFullScreenMovie and isCanInteract (two game calls every frame), local_cutscene()",
+    writes = "after 5 s of the flag being stuck with the player in control: clears it, so the pause menu opens again" }
 on_frame_1(function()
     local mm = sdk.get_managed_singleton("app.MenuManager")
     local stuck = mm ~= nil and safe(mm.call, mm, "get_IsPlayInGameFullScreenMovie") == true
@@ -3804,6 +4173,10 @@ CUTSCENE_DEBOUNCE = 0.5   -- s an event must run before the ghost hides (no flic
 ghost_hidden = false
 cutscene_now = false      -- our own cutscene state, also sent to the other player (STANCE_CUTSCENE)
 local cs = { since = nil, check_t = 0 }
+coop_note{ feature = "Friend's body (ghost)", name = "Cutscene state; hide or show the ghost",
+    when = "every frame; asks about our cutscene 10 times a second, re-applies the ghost's visibility twice a second",
+    reads = "local_cutscene(), the newest sample's flags (their cutscene, their ladder), the ghost's data age",
+    writes = "set_DrawSelf on every ghost piece (and the held weapon) when hidden/shown changes and twice a second; cutscene_now (sent to the friend as a flag)" }
 re.on_frame(function()
     -- Our own cutscene state (checked 10x a second, debounced).
     local now = os.clock()
@@ -3895,6 +4268,10 @@ function friend_marker(name, p)
     end
 end
 
+coop_note{ feature = "Friend's body (ghost)", name = "Build the ghost (wait, standby, spawn, dress, done)",
+    when = "every frame; does real work only while the ghost is being built (after a load or a player change), then just counts frames",
+    reads = "VrManager.DummyPlayerPrefab and its Ready flag, our player's position and folder, Shadow* meshes of our player",
+    writes = "instantiates the dummy prefab, sets its meshes, materials, parents and draw flags; dump_tree logs the part tree" }
 re.on_frame(function()
     frames = frames + 1
     if phase == "wait" then
@@ -4043,6 +4420,10 @@ end
 -- it before drawing; v3 below is the one that works. See NOTES.md, "Head look v2".)
 
 -- What the Head joint holds once drawing starts (after our v3 write).
+coop_note{ feature = "Friend's head look", name = "Diagnostic: what the Head joint holds at render time",
+    when = "every frame, just after the game's PrepareRendering step; logs only every 60 s",
+    reads = "the ghost Motion's Head joint rotation (only when the 60 s are up)",
+    writes = "one log line" }
 re.on_application_entry("PrepareRendering", function()
     if not (look.enabled and look2.list and anim.motion) then return end
     local now = os.clock()
@@ -4061,6 +4442,10 @@ end)
 -- (readback matches) but by render time the Head joint is back to the plain
 -- animated pose: Motion writes its own result into the skeleton afterwards.
 -- So the hook only counts; the write happens at PrepareRendering (below).
+coop_note{ feature = "Friend's head look", name = "Count UpdateMotion steps (diagnostic)",
+    when = "every frame, just after the game's UpdateMotion step",
+    reads = "nothing",
+    writes = "a counter (look2.fired), reported once in the log" }
 re.on_application_entry("UpdateMotion", function()
     look2.fired = look2.fired + 1
 end)
@@ -4098,6 +4483,10 @@ local function apply_look_render()
     end
 end
 
+coop_note{ feature = "Friend's head look", name = "Turn the ghost's neck and head to where the friend looks",
+    when = "every frame, just before drawing (PrepareRendering), while the ghost's animation is ready",
+    reads = "the ghost Motion: parent joint world rotation and the freshly calculated local rotation of neck and head; the eased look yaw and pitch",
+    writes = "set_LocalRotation on the ghost's neck and head joints (the last write before the frame is drawn)" }
 re.on_pre_application_entry("PrepareRendering", function()
     if not (look.enabled and net.enabled and follow and anim.ready) then return end
     local ok, err = pcall(apply_look_render)
@@ -4161,6 +4550,10 @@ end
 -- the sheet metal: the anchor's body appeared when the interaction started and was still drawn after it ended).
 -- The friend's visible body is its own parts, so the anchor is put back out of sight whenever it shows up.
 local anchor_guard = { t = 0, n = 0 }
+coop_note{ feature = "Scripted interactions on the friend's body", name = "Keep the hidden anchor body out of sight",
+    when = "every frame, but it only looks 4 times a second",
+    reads = "the anchor's get_DrawSelf",
+    writes = "set_DrawSelf false on the anchor when an interaction turned it on; logs the first 5 times" }
 re.on_frame(function()
     local now = os.clock()
     if now - anchor_guard.t < 0.25 or dummy == nil or #parts == 0 then return end
@@ -4172,6 +4565,10 @@ re.on_frame(function()
     end
 end)
 
+coop_note{ feature = "Scripted interactions on the friend's body", name = "Copy the hidden anchor body's pose onto the visible ghost",
+    when = "every frame, just before drawing; works only while a scripted interaction of the friend's runs on the anchor (up to 90 s)",
+    reads = "the hidden anchor's EventActionController isActive and its joints' rotations (all joints, every frame)",
+    writes = "set_LocalRotation on each matching ghost joint (and position for Hip / Null_Offset)" }
 re.on_pre_application_entry("PrepareRendering", function()
     if os.clock() >= ghost_event.until_t then return end
     local ok, err = pcall(mirror_event_pose)
@@ -4181,6 +4578,10 @@ re.on_pre_application_entry("PrepareRendering", function()
     end
 end)
 
+coop_note{ feature = "Friend's head look", name = "Log once how often the UpdateMotion step fired",
+    when = "every frame; does its one log line 3 s after start",
+    reads = "the UpdateMotion counter",
+    writes = "one log line" }
 re.on_frame(function()
     if not look2.reported and os.clock() - look2.t0 > 3 then
         look2.reported = true
@@ -4198,6 +4599,10 @@ STEP_STRIDE = { walk = 0.75, jog = 1.05, crouch = 0.6 }
 STEP_TARGET = { walk = 0, jog = 1, crouch = 2 }   -- SETriggerTargetEnum Player/PlayerJog/PlayerCrouch
 local steps = { last = nil, dist = 0, left = true, err = false }
 
+coop_note{ feature = "Friend's footsteps", name = "A step sound each stride the ghost walks",
+    when = "every frame while the ghost is shown (Options: Footsteps)",
+    reads = "the ghost's position (get_Transform:get_Position, every frame), our player's FootEffectController",
+    writes = "one stride in: sets SETarget, plays callSE (the game's footstep sound at the ghost's feet), puts SETarget back" }
 re.on_frame(function()
     if not (settings and settings.footsteps ~= false) or dummy == nil or ghost_hidden or #parts == 0 then
         steps.last = nil
@@ -4310,6 +4715,10 @@ local function hud_lines()
     return out
 end
 
+coop_note{ feature = "On-screen status (HUD)", name = "Draw the status lines in the top-left corner",
+    when = "every frame (draws every frame; the text is rebuilt every frame)",
+    reads = "link state, friends' health, chapter names, messages from every script's *_hud() function, settings",
+    writes = "draw.text lines on screen only (builds a new table and several strings each frame)" }
 on_frame_1(function()
     if not (settings and settings.hud) then return end
     local ok, err = pcall(function()
@@ -4353,6 +4762,10 @@ local function bump_quiet(now)
     return nil
 end
 
+coop_note{ feature = "Bumping the ghost", name = "Push our player out if it walks into the friend's body",
+    when = "every frame while the ghost exists (Options: Bump into my friend)",
+    reads = "our player's MovementController isMove, our and the ghost's positions, cutscene state",
+    writes = "when overlapping: MovementController.warp to a spot just outside the ghost; lets go after 0.6 s of touching" }
 re.on_frame(function()
     if not (collide.enabled and follow and dummy) or #parts == 0 then return end
     if settings and settings.bump_friend == false then return end

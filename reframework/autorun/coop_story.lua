@@ -31,6 +31,11 @@ story_sync = {
 }
 local ss = story_sync
 
+-- Debug registry (v0.52, coop_dummy.lua): dbg_note describes the callback or hook registered on the next lines, dbg_task
+-- gives a function its own row in the Debug section. Both are tail calls so the registry sees this file's line.
+local function dbg_note(info) if coop_note then return coop_note(info) end end
+local function dbg_task(feature, name, f, info) if coop_task then return coop_task(feature, name, f, info) end return f end
+
 -- A managed array's items (v0.49): get_elements, or item by item when the game hands back an array
 -- without it (about one read in 50, and every read on the title screen). A failed read used to be taken
 -- for an empty list: an enemy's AI looked missing for good, a joint list came back empty.
@@ -131,6 +136,10 @@ local function log(s)
     if coop_log_gate and not coop_log_gate("story", s) then return end
     log_buf[#log_buf + 1] = os.date("%H:%M:%S ") .. tostring(s)
 end
+dbg_note{ feature = "Logging", name = "Write the story script's log file",
+    when = "every frame; writes to disk only when 1 to 5 s have passed since the last write",
+    reads = "this script's log lines in memory",
+    writes = "coop_story_log.txt" }
 re.on_frame(function()
     if coop_log_flush then log_buf, log_t = coop_log_flush("story", "coop_story_log.txt", log_buf, log_t) return end
     -- without coop_dummy.lua: the v0.51 writer
@@ -182,6 +191,10 @@ end
 
 -- Our side ---------------------------------------------------------------------------
 local ec = sdk.find_type_definition("app.GameEventController")
+dbg_note{ feature = "Story cutscenes", name = "A scene is being set up here: tell the friend",
+    when = "when the game calls GameEventController.requestSetup (a cutscene or scripted moment starts here)",
+    reads = "the scene's event name; whether it is a story scene; our chapter; whether it is the friend's scene or our own phone call",
+    writes = "coop_scene_t (marks a scripted moment, so bumping and enemy sharing wait); sends 'story <scene> <chapter>'; hands the player part of a friend's phone call to the friend's body" }
 sdk.hook(ec:get_method("requestSetup(app.GameEventSetting, via.Transform)"), function(args)
     pcall(function()
         local st = sdk.to_managed_object(args[3])
@@ -221,6 +234,10 @@ ss.running, ss.stuck_said = ss.running or {}, ss.stuck_said or {}
 do
     local m = ec:get_method("doOnDestroy")
     if m then
+        dbg_note{ feature = "Story cutscenes", name = "A scene ended here",
+            when = "when the game calls GameEventController.doOnDestroy",
+            reads = "the scene's event name, how long it ran",
+            writes = "coop_scene_end_t; forgets the scene as running; gives a retargeted player part back; one log line" }
         pcall(sdk.hook, m, function(args)
             pcall(function()
                 coop_scene_end_t = os.clock()   -- for teleport_to_friend (v0.49)
@@ -237,6 +254,10 @@ do
         end, function(r) return r end)
     end
 end
+dbg_note{ feature = "Story cutscenes", name = "Warn about a scene that has run for 5 minutes",
+    when = "every frame, but it only looks every 30 s",
+    reads = "the table of running scenes (in memory)",
+    writes = "one log line per stuck scene" }
 re.on_frame(function()
     local now = os.clock()
     if now - (ss.stuck_t or 0) < 30 then return end
@@ -251,6 +272,10 @@ re.on_frame(function()
 end)
 
 local gf = sdk.find_type_definition("app.GameFlowFsmManager")
+dbg_note{ feature = "Story progress", name = "The story took a step here: tell the friend",
+    when = "when the game calls GameFlowFsmManager.setProgressiveNo (every story-flow step, in bursts around scenes)",
+    reads = "the stage hash and value; our chapter",
+    writes = "coop_scene_t (marks a scripted moment); remembers the stage hash for the story clock; sends 'prog <hash> <value> <chapter>' unless the friend's step caused it" }
 sdk.hook(gf:get_method("setProgressiveNo(System.UInt32, System.Int32)"), function(args)
     pcall(function()
         local h, v = u32(args[3]), i32(args[4])
@@ -266,6 +291,10 @@ sdk.hook(gf:get_method("setProgressiveNo(System.UInt32, System.Int32)"), functio
         end
     end)
 end, function(r) return r end)
+dbg_note{ feature = "Story progress", name = "Save the list of story stages seen",
+    when = "every frame (a flag check); writes the file at most every 5 s and only when a new stage was seen",
+    reads = "ss.prog_dirty",
+    writes = "the played-scenes file (save_played)" }
 re.on_frame(function()
     if ss.prog_dirty and os.clock() - (ss.prog_save_t or 0) > 5 then
         ss.prog_dirty, ss.prog_save_t = false, os.clock()
@@ -278,6 +307,10 @@ end)
 do
     local mb = gf:get_method("sendBattleEnded(System.UInt32)")
     if mb then
+        dbg_note{ feature = "Story progress", name = "A fight ended here: tell the friend",
+            when = "when the game calls GameFlowFsmManager.sendBattleEnded",
+            reads = "the fight's hash",
+            writes = "sends 'btlend <hash> <chapter>' unless the friend's game caused it" }
         pcall(sdk.hook, mb, function(args)
             pcall(function()
                 local h = u32(args[3])
@@ -286,6 +319,10 @@ do
         end, function(r) return r end)
     end
 end
+dbg_note{ feature = "Story progress", name = "A story event ended here: tell the friend",
+    when = "when the game calls GameFlowFsmManager.sendEventEnded",
+    reads = "the event's hash",
+    writes = "sends 'evend <hash> <chapter>' unless the friend's game caused it" }
 sdk.hook(gf:get_method("sendEventEnded(System.UInt32)"), function(args)
     pcall(function()
         local h = u32(args[3])
@@ -327,6 +364,10 @@ local function in_step()
     return os.clock() < ss.in_step_until
 end
 -- Keep the window open while the shared cutscene plays, even when no message comes in.
+dbg_note{ feature = "Story cutscenes", name = "Keep the 'copy their progress' window open during a shared scene",
+    when = "every frame (a flag and a cutscene check)",
+    reads = "ss.in_step_until, local_cutscene()",
+    writes = "pushes in_step_until forward (in memory)" }
 re.on_frame(function()
     if ss.in_step_until and os.clock() < ss.in_step_until and local_cutscene and local_cutscene() then
         ss.in_step_until = math.max(ss.in_step_until, os.clock() + IN_STEP)
@@ -649,11 +690,19 @@ end
 ss.missed = ss.missed or {}
 -- Our own cutscene, and when the last one ended (v0.32).
 ss.cut_on, ss.cut_end_t = false, -100
+dbg_note{ feature = "Story cutscenes", name = "Note when our own cutscene starts and ends",
+    when = "every frame",
+    reads = "local_cutscene(): the game's list of running event controllers",
+    writes = "ss.cut_on and the time the last cutscene ended (in memory)" }
 re.on_frame(function()
     local on = local_cutscene and local_cutscene() or false
     if ss.cut_on and not on then ss.cut_end_t = os.clock() end
     ss.cut_on = on
 end)
+dbg_note{ feature = "Story cutscenes", name = "Bring us next to the friend after their scene moved them",
+    when = "every frame (timers in memory)",
+    reads = "the regroup timer; the distance to the friend's ghost; the retargeted-scene list",
+    writes = "when due: teleport_to_friend (warps our player); gives a scene part back after 15 minutes" }
 re.on_frame(function()
     local now = os.clock()
     if ss.regroup_t and now >= ss.regroup_t then
@@ -750,6 +799,10 @@ local function apply_prog(hash, value, ch)
     q.list[#q.list + 1] = value
     table.sort(q.list)
 end
+dbg_note{ feature = "Story progress", name = "Copy the friend's story steps one at a time",
+    when = "every frame (returns at once with nothing queued); works every 0.5 s while steps are queued",
+    reads = "the queue of the friend's steps, GameFlowFsmManager.getProgressiveNo, whether we are together and not in a scene",
+    writes = "steps the story forward (step_story) one step per pass, 1.5 s apart" }
 re.on_frame(function()
     if next(ss.steps) == nil then return end
     local now = os.clock()
@@ -825,6 +878,10 @@ local sdm = sdk.find_type_definition("app.SaveDataManager")
 local function hook_save(method_name, kind)
     local m = sdm:get_method(method_name)
     if m == nil then log("save hook missing: " .. method_name) return end
+    dbg_note{ feature = "Saving together", name = "Tell the friend when our game really saves (" .. kind .. ")",
+        when = "when the game calls SaveDataManager." .. method_name,
+        reads = "Options: Allow saving",
+        writes = "sends 'saved " .. kind .. " <chapter>' (only when saving is allowed; the save guard blocks it otherwise)" }
     sdk.hook(m, function(args)
         pcall(function()
             if settings and settings.allow_saving then send(string.format("saved %s %d", kind, chapter())) end
@@ -856,6 +913,10 @@ do
     local function hook_load(mname)
         local m = sdm:get_method(mname)
         if m == nil then return false end
+        dbg_note{ feature = "Saving together", name = "A save is loading (" .. mname .. ")",
+            when = "when the game calls SaveDataManager." .. mname .. " (Continue, Load Game or a retry after dying)",
+            reads = "ObjectManager.PlayerObj address",
+            writes = "starts the 8 s wait for the new player (ss.load); one log line" }
         return pcall(sdk.hook, m, function(args) pcall(on_load, mname) end, function(r) return r end)
     end
     if not hook_load("loadLevelUsingLoadData") then
@@ -883,11 +944,19 @@ do
     for _, mname in ipairs({ "newGameRequest", "newGameRequest_Chapter7",
         "chapterJumpRequest(System.String, System.Boolean, System.String)" }) do
         local m = gmt and gmt:get_method(mname)
+        dbg_note{ feature = "Loads and the black screen", name = "A load or new game started: drop the friend's waiting scenes",
+            when = "when the game calls GameManager." .. mname:match("^[%w_]+") .. " (a New Game or chapter jump begins)",
+            reads = "the table of the friend's waiting scenes",
+            writes = "starts the 12 s settle time (nothing of the friend's is started meanwhile) and forgets the waiting scenes" }
         if m then pcall(sdk.hook, m, function(args) pcall(coop_story_settle, "a load started (" .. mname:match("^[%w_]+") .. ")") end, function(r) return r end) end
     end
     -- A save load settles too: from on_load (one hook on loadLevelUsingLoadData).
 end
 -- A new player object (the game swapped it in a load) restarts the settle time too.
+dbg_note{ feature = "Loads and the black screen", name = "A new player object means a load: restart the settle time",
+    when = "every frame",
+    reads = "ObjectManager.PlayerObj address (two game calls every frame)",
+    writes = "ss.settle_until (in memory)" }
 re.on_frame(function()
     local om = sdk.get_managed_singleton("app.ObjectManager")
     local p = om and om:get_field("PlayerObj")
@@ -929,6 +998,10 @@ end
 -- A black screen that never clears (v0.51): with a friend connected, faded to black for FADE_STUCK_S s while
 -- nothing plays (no cutscene, no movie, not loading, not paused) and the player is there, it's faded back in.
 FADE_STUCK_S = 25
+dbg_note{ feature = "Loads and the black screen", name = "Fade back in from a black screen that never clears",
+    when = "every frame, but it only works once a second, and only with a friend linked",
+    reads = "the FadeControl 'Black' fade state (the component is searched for in the scene every 5 s until found), cutscene, loading and player state",
+    writes = "after 25 s of black with nothing playing: FadeControl.requestFadeIn (at most once a minute)" }
 re.on_frame(function()
     local now = os.clock()
     if now - (fade.check_t or 0) < 1 then return end
@@ -972,6 +1045,10 @@ local function after_load()
     if known and coop_talk_rewind then pcall(coop_talk_rewind, ch, clock) end
     send(string.format("rewind %d %d", ch, clock))
 end
+dbg_note{ feature = "Saving together", name = "After loading a save: wait for the new player, then reset the story record",
+    when = "every frame (a flag check; works only for 8 s after a load starts)",
+    reads = "ObjectManager.PlayerObj address",
+    writes = "after the new player has been there 8 s: counts scenes after the save as unplayed, drops waiting scenes and kept progress, rewinds the catch-up list" }
 re.on_frame(function()
     local L = ss.load
     if L == nil then return end
@@ -1016,6 +1093,10 @@ end
 -- most every 3 minutes. Last session nobody could tell their stories had split until the
 -- wall didn't break.
 local drift = { t = 0, said_t = -1000 }
+dbg_note{ feature = "Story progress", name = "Are we ahead of or behind the friend in the story?",
+    when = "every frame, but it only looks every 20 s",
+    reads = "GameFlowFsmManager.getProgressiveNo for each stage the friend has sent",
+    writes = "ss.drift and, at most every 3 minutes, an on-screen message" }
 re.on_frame(function()
     local now = os.clock()
     if now - drift.t < 20 then return end
@@ -1077,6 +1158,10 @@ local function check_difficulty(k)
     note(string.format("%s plays on %s and you on %s: enemies won't match. Play on the same difficulty.",
         k == 1 and "Your friend" or ("Friend " .. k), DIFF_NAMES[theirs] or "?", DIFF_NAMES[mine] or "?"))
 end
+dbg_note{ feature = "Story progress", name = "Tell the friend where we are in the story",
+    when = "every frame, but it only works every 10 s",
+    reads = "our chapter, the story clock, the difficulty",
+    writes = "sends 'spos <chapter> <clock> <difficulty>'" }
 re.on_frame(function()
     local now = os.clock()
     if now - (ss.spos_t or 0) < 10 or not coop_send_event then return end
@@ -1126,6 +1211,10 @@ local function active_objectives()
     return set
 end
 ss.obj_prev, ss.obj_t, ss.obj_busy_n, ss.obj_ch = nil, 0, nil, nil
+dbg_note{ feature = "Story progress", name = "Share objectives checked off",
+    when = "every frame, but it only works once a second",
+    reads = "the game's active objectives list (ObjectiveManager); compares with the last second's",
+    writes = "sends 'objdone <id> <chapter>' for one that disappeared here; checks off ones the friend finished" }
 re.on_frame(function()
     local now = os.clock()
     if now - ss.obj_t < 1 then return end
@@ -1223,6 +1312,10 @@ function coop_story_on_event(text)
 end
 
 -- Kept story steps: applied once we're together (same chapter); dropped on a chapter change.
+dbg_note{ feature = "Story progress", name = "Apply story steps and scene ends that were kept while apart",
+    when = "every frame (returns at once with nothing kept); works once a second",
+    reads = "ss.missed (in memory), our chapter, whether we are together and not in a scene",
+    writes = "applies the kept steps (story progress, finished events and fights)" }
 re.on_frame(function()
     if next(ss.missed) == nil then return end
     local now = os.clock()
@@ -1250,6 +1343,10 @@ end)
 
 -- The friend moved on to the next chapter and our game didn't follow within 40 s (v0.32):
 -- tell the player how to get out of a stuck black screen.
+dbg_note{ feature = "Story cutscenes", name = "Warn when the friend moved to the next chapter and we did not follow",
+    when = "every frame (a flag check; works only after the friend's chapter changed)",
+    reads = "our chapter",
+    writes = "an on-screen message every 30 s after 40 s" }
 re.on_frame(function()
     local m = ss.moved_on
     if m == nil then return end
@@ -1264,6 +1361,10 @@ re.on_frame(function()
 end)
 
 -- Cutscenes the friend started before their area loaded here.
+dbg_note{ feature = "Story cutscenes", name = "Play the friend's scenes that were waiting for their area to load here",
+    when = "every frame, but it only works once a second",
+    reads = "the waiting scenes, the distance to the friend's ghost, whether the scene's setting is loaded (EventSettings)",
+    writes = "starts the scene here (play) once it is loaded and we are free; gives up after a while" }
 re.on_frame(function()
     local now = os.clock()
     if now - ss.pend_t < 1 then return end
@@ -1337,4 +1438,8 @@ function story_sync_bot_next()
     return "the bot triggers " .. names[1]
 end
 
+coop_story_on_event = dbg_task("Friend's events", "Apply a story event from the friend (scene, step, fight end, objective)", coop_story_on_event, {
+    when = "when the friend's game sends a story event ('story', 'prog', 'evend', 'btlend', 'objdone', 'spos', 'rewind'...)",
+    reads = "the event text, our played-scenes record, our chapter and the distance to the friend",
+    writes = "plays the friend's scene here, queues or applies story steps, ends events and fights, checks off objectives" })
 log("coop_story loaded")
