@@ -40,6 +40,11 @@ local re = setmetatable({ on_frame = function(f)
     return _G.re.on_frame(function() if coop_busy and coop_busy() then return end return f() end)
 end }, { __index = _G.re })
 
+-- Debug registry (v0.52, coop_dummy.lua): dbg_note describes the callback or hook registered on the next lines, dbg_task
+-- gives a function its own row in the Debug section. Both are tail calls so the registry sees this file's line.
+local function dbg_note(info) if coop_note then return coop_note(info) end end
+local function dbg_task(feature, name, f, info) if coop_task then return coop_task(feature, name, f, info) end return f end
+
 local TRIGGERS = {
     shot = 3908091806,     -- SND_DF_WP_SE_SHOT
     swing = 1824153269,    -- SND_DF_WP_SE_CUTTING
@@ -97,6 +102,10 @@ local function log(s)
     if coop_log_gate and not coop_log_gate("gunsound", s) then return end
     log_buf[#log_buf + 1] = os.date("%H:%M:%S ") .. tostring(s)
 end
+dbg_note{ feature = "Logging", name = "Write the gun sound script's log file",
+    when = "every frame; writes to disk only when 1 to 5 s have passed since the last write",
+    reads = "this script's log lines in memory",
+    writes = "coop_gunsound_log.txt" }
 re.on_frame(function()
     if coop_log_flush then log_buf, log_t = coop_log_flush("gunsound", "coop_gunsound_log.txt", log_buf, log_t) return end
     -- without coop_dummy.lua: the v0.51 writer
@@ -175,6 +184,10 @@ do
     local m = sdk.find_type_definition("app.EPVExpertGunSmoke")
     m = m and m:get_method("play")
     if m then
+        dbg_note{ feature = "Friend's gunshots", name = "Count our own shots (gun smoke fires once per shot)",
+            when = "when the game calls EPVExpertGunSmoke.play (every gun's shot; fires for every weapon object, ours or not)",
+            reads = "the smoke component's GameObject: is it our held gun?",
+            writes = "gs.pending counter" }
         sdk.hook(m, function(args)
             pcall(function()
                 local smoke = sdk.to_managed_object(args[2])
@@ -198,11 +211,19 @@ do
     end
     for _, name in ipairs({ "shoot(via.Ray, System.Boolean, System.Boolean)" }) do
         local m = td and td:get_method(name)
+        dbg_note{ feature = "Friend's gunshots", name = "Count our own shots (WeaponGun.shoot, for guns with no smoke)",
+            when = "when the game calls WeaponGun.shoot",
+            reads = "the weapon's GameObject: is it our held gun?",
+            writes = "gs.shoots counter" }
         if m then pcall(sdk.hook, m, function(args) pcall(function() if ours(args) then gs.shoots = gs.shoots + 1 end end) end,
             function(r) return r end) end
     end
     for _, name in ipairs({ "reload(app.Inventory)", "reload(app.Inventory, System.Int32)" }) do
         local m = td and td:get_method(name)
+        dbg_note{ feature = "Friend's gunshots", name = "Count our own reloads",
+            when = "when the game calls WeaponGun.reload",
+            reads = "the weapon's GameObject: is it our held gun?",
+            writes = "gs.reloads counter" }
         if m then pcall(sdk.hook, m, function(args) pcall(function() if ours(args) then gs.reloads = gs.reloads + 1 end end) end,
             function(r) return r end) end
     end
@@ -232,6 +253,10 @@ end
 
 -- Melee swings: the held weapon's app.Weapon.IsAttacking turning on, for weapons without gun smoke.
 local swing = { was = false }
+dbg_note{ feature = "Friend's gunshots", name = "Notice our own melee swings",
+    when = "every frame while we hold a weapon",
+    reads = "the held weapon's app.Weapon.IsAttacking (and whether it has gun smoke: two component lookups each frame)",
+    writes = "gs.swings counter" }
 re.on_frame(function()
     local go = held and held.local_go
     if go == nil then swing.was = false return end
@@ -243,6 +268,10 @@ re.on_frame(function()
     swing.was = att and true or false
 end)
 
+dbg_note{ feature = "Friend's gunshots", name = "Send the shots, swings and reloads we counted",
+    when = "every frame (returns at once when nothing was counted); sends in the frame after the shot",
+    reads = "the counters, the held weapon's name; the weapon's sound container paths (once per weapon)",
+    writes = "sends 'gshot' / 'gswing' / 'greload <weapon>' (at most 3 shots per frame); the first time per weapon also 'gsnd' and 'gfx'" }
 re.on_frame(function()
     if (gs.pending == 0 and gs.swings == 0 and gs.shoots == 0 and gs.reloads == 0) or not coop_send_event then return end
     local n, sw, rl = math.max(gs.pending, gs.shoots), gs.swings, gs.reloads
@@ -403,6 +432,10 @@ local function shoot_fx(key, pos, slot)
     end
 end
 
+dbg_note{ feature = "Friend's gunshots", name = "Restart the muzzle flash and smoke effects",
+    when = "every frame (walks the small effect table)",
+    reads = "gs.fxparts (in memory)",
+    writes = "EffectPlayer.set_Action(1) on an effect that was asked to play again" }
 re.on_frame(function()
     for _, fp in pairs(gs.fxparts) do
         for _, part in ipairs({ fp.flash or false, fp.smoke or false }) do
@@ -470,6 +503,10 @@ local function play(key, kind, no_fx)
     part.queue[#part.queue + 1] = { t = os.clock(), kind = kind, slot = coop_event_slot or 1, fx = not no_fx }
 end
 
+dbg_note{ feature = "Friend's gunshots", name = "Play the friend's shot / swing / reload sounds",
+    when = "every frame (walks the weapon sound objects; works when a sound is queued)",
+    reads = "each weapon's sound object: ready? queued sounds; the friend's hand position (friend_hand)",
+    writes = "moves the sound object to the friend's hand and triggers the weapon's sound (a Wwise trigger); plays the flash and smoke" }
 re.on_frame(function()
     for key, part in pairs(gs.parts) do
         pcall(settle, key, part)
@@ -500,6 +537,10 @@ re.on_frame(function()
 end)
 
 -- Shots that came in a moment before their weapon's files: played once the files are there.
+dbg_note{ feature = "Friend's gunshots", name = "Play shots that arrived before their weapon's sound files",
+    when = "every frame (returns at once with nothing waiting); keeps a shot for up to 2 s",
+    reads = "gs.early (in memory), gs.paths",
+    writes = "plays the shot once the files are known" }
 re.on_frame(function()
     if #gs.early == 0 then return end
     local keep = {}
@@ -638,6 +679,10 @@ local function pv_send(kind)
 end
 coop_voice_send = pv_send
 coop_voice_state = pv   -- read only: what was sent and played (tests, the session page)
+dbg_note{ feature = "Friend's voice", name = "Note when our player object changes (a load)",
+    when = "every frame",
+    reads = "ObjectManager.PlayerObj address (two game calls every frame)",
+    writes = "pv.spawn_t (so our own voice hooks stay quiet for a moment after a load)" }
 re.on_frame(function()
     local om = sdk.get_managed_singleton("app.ObjectManager")
     local p = om and om:get_field("PlayerObj")
@@ -651,6 +696,10 @@ do
         local m = td and td:get_method(h[2])
         if m then
             local kind = h[3]
+            dbg_note{ feature = "Friend's voice", name = "Our player's sounds (hurt, guard, land, climb...) for the friend to hear",
+                when = "when the game calls the player's damage / guard / land / climb method (one hook each: see the method name)",
+                reads = "the component's GameObject: is it our player?",
+                writes = "sends 'pv <kind>' to the friend" }
             local ok = pcall(sdk.hook, m, function(args)
                 pcall(function()
                     local c = sdk.to_managed_object(args[2])
@@ -669,6 +718,10 @@ end
 
 -- Healing: our health going up while a healing item is (or just was) in the hand.
 local HEAL_WORDS = { "antiseptic", "remedy", "herb", "medic", "firstaid", "first_aid" }
+dbg_note{ feature = "Friend's voice", name = "Notice our health going up while a healing item is in hand",
+    when = "every frame, but it only works 5 times a second",
+    reads = "our PlayerDamageController health and max health; the held item",
+    writes = "sends 'pv heal' when health went up with a healing item out" }
 re.on_frame(function()
     local h = pv.heal
     local now = os.clock()
@@ -810,6 +863,10 @@ local function measure(light)
     end
 end
 
+dbg_note{ feature = "Flashlight", name = "Is our flashlight on? Send it, learn how it is set up",
+    when = "every frame, but it only works 4 times a second",
+    reads = "our player's hand light: get_isHandLightOn and its light component",
+    writes = "sends 'light 1' / 'light 0' when it changes (and every 15 s while on); remembers the light as a template; measures where the camera looks once" }
 re.on_frame(function()
     local now = os.clock()
     if now - FL.poll_t < 0.25 then return end
@@ -897,6 +954,10 @@ local function head_pos(g)
     return { x = gp.x, y = gp.y + 1.6, z = gp.z }
 end
 
+dbg_note{ feature = "Flashlight", name = "Show the friend's flashlight on their body",
+    when = "every frame (Options: Show my friend's flashlight); for each friend slot",
+    reads = "the friend's ghost, hidden flag, look angles, head position (Transform reads every frame while the light is on); our folder (to notice an area change)",
+    writes = "builds a light object from our own light's settings once, then set_Position / set_Rotation / set_Enabled on it every frame while shown" }
 re.on_frame(function()
     if FL.broken then return end
     local ok, err = pcall(function()
@@ -955,6 +1016,10 @@ end)
 -- and the knife, and the hash of each name.
 do
     local checked = false
+    dbg_note{ feature = "Friend's voice", name = "Check once, 10 s in, that the sound ids match the game's",
+        when = "every frame, but it does its work once, 10 s after start",
+        reads = "the game's TRIGGER_SND_EVENTLIST constants and the hash of each name",
+        writes = "one log line" }
     re.on_frame(function()
         if checked or os.clock() < 10 then return end
         checked = true
@@ -998,4 +1063,8 @@ do
     end)
 end
 
+coop_gunsound_on_event = dbg_task("Friend's events", "Play a gun sound, swing, reload or voice event from the friend", coop_gunsound_on_event, {
+    when = "when the friend's game sends 'gshot', 'gswing', 'greload', 'gsnd', 'gfx', 'pv ...' or 'light ...'; a burst of gunfire shows here",
+    reads = "the event text, the weapon's sound files",
+    writes = "queues the sound or effect to play at the friend's hand; builds the weapon's sound object the first time; switches the friend's light" })
 log("coop_gunsound loaded")

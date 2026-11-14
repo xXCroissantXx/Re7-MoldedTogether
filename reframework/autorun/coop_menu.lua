@@ -42,10 +42,19 @@ local LOCK_KEY = "coop_re7_menu"
 -- Log ---------------------------------------------------------------------------------------
 local log_buf, log_t, log_tail = {}, 0, nil
 -- v0.52: repeated lines are limited and the file written by coop_dummy.lua's coop_log_gate / coop_log_flush.
+-- Debug registry (v0.52, coop_dummy.lua): dbg_note describes the callback or hook registered on the next lines, dbg_task
+-- gives a function its own row in the Debug section. Both are tail calls so the registry sees this file's line.
+local function dbg_note(info) if coop_note then return coop_note(info) end end
+local function dbg_task(feature, name, f, info) if coop_task then return coop_task(feature, name, f, info) end return f end
+
 local function log(s)
     if coop_log_gate and not coop_log_gate("menu", s) then return end
     log_buf[#log_buf + 1] = os.date("%H:%M:%S ") .. tostring(s)
 end
+dbg_note{ feature = "Logging", name = "Write the menu script's log file",
+    when = "every frame; writes to disk only when 1 to 5 s have passed since the last write",
+    reads = "this script's log lines in memory",
+    writes = "coop_menu_log.txt" }
 re.on_frame(function()
     if coop_log_flush then log_buf, log_t = coop_log_flush("menu", "coop_menu_log.txt", log_buf, log_t) return end
     -- without coop_dummy.lua: the v0.51 writer
@@ -2031,6 +2040,42 @@ end
 
 -- Every frame -------------------------------------------------------------------------------
 local was_title = nil
+pump_commands = dbg_task("In-game co-op menu", "Send the next queued command to the plugin", pump_commands, {
+    when = "every frame (returns at once with nothing queued); at most one command every 0.15 s",
+    reads = "the command queue; coopnet_command.txt (fs.read, only while commands are waiting)",
+    writes = "coopnet_command.txt (fs.write)" })
+pump_lobby = dbg_task("Lobby", "Keep the lobby alive and tell friends about it", pump_lobby, {
+    when = "every frame; sends every 2 s while hosting or in a lobby",
+    reads = "the lobby state and who is a member (the link)",
+    writes = "sends 'lobby open ...' (host) and 'lobby me ...' (everyone) every 2 s; closes the lobby when the host is gone for 15 s" })
+pump_party = dbg_task("Lobby", "Keep the list of players and the invite state", pump_party, {
+    when = "every frame, but it only works every 2 s",
+    reads = "coopnet_friends.txt (read_friends), the members' data age",
+    writes = "the recent-friends list in the settings, the invite state, drops a player who has been silent for 30 s" })
+pump_stats = dbg_task("In-game co-op menu", "Count time together and send our session numbers", pump_stats, {
+    when = "every frame; sends every 20 s while a friend is here",
+    reads = "who is linked and fresh",
+    writes = "our together-time counter; sends 'stats ...'" })
+title_row = dbg_task("In-game co-op menu", "Add the CO-OP row to the title screen's tape recorder menu", title_row, {
+    when = "every frame; returns at once when not on the title screen",
+    reads = "on the title screen: TitleMenu's step list and main list, its slots' text and selection, the scene's component list",
+    writes = "adds and keeps the eighth row (CO-OP), sets its text, moves the camera for the table; can ask the title menu to continue" })
+read_actions = dbg_task("In-game co-op menu", "Read the keys and the pad for the co-op menu", read_actions, {
+    when = "every frame (when the REFramework window is not open)",
+    reads = "the keyboard (a dozen key checks) and the pad (sticks and buttons)",
+    writes = "the actions up / down / ok / back for this frame" })
+read_mouse = dbg_task("In-game co-op menu", "Read the mouse for the co-op menu", read_mouse, {
+    when = "every frame (when the REFramework window is not open)",
+    reads = "the mouse position and buttons",
+    writes = "hover and click actions for this frame" })
+draw_prompts = dbg_task("In-game co-op menu", "Draw the hint lines when the menu is closed", draw_prompts, {
+    when = "every frame while the menu is closed (Options: on-screen status)",
+    reads = "invites, the lobby, the title screen row",
+    writes = "draw.text hint lines at the top of the screen" })
+dbg_note{ feature = "In-game co-op menu", name = "The menu callback: input, the title row, the open menu, drawing",
+    when = "every frame; when the menu is open it also builds the current page's items twice and draws the whole sheet every frame",
+    reads = "see the rows above; the menu's current page items (current_items is built twice a frame while open)",
+    writes = "holds the game's player / camera / menu input while the menu is open (and gives it back); draws the sheets; changes settings when an item is picked" }
 re.on_frame(function()
     local now = os.clock()
     local ok, err = pcall(function()
@@ -2131,6 +2176,10 @@ re.on_frame(function()
 end)
 
 -- For the menu test (local/build/harness/menu_test.py): what the current page shows.
+coop_menu_on_event = dbg_task("Friend's events", "Apply a lobby or session-stats event from the friend", coop_menu_on_event, {
+    when = "when the friend's game sends 'lobby ...' or 'stats ...'",
+    reads = "the event text, the lobby state",
+    writes = "the lobby (who hosts, who is ready, the start point, go), the friend's session numbers; can start the shared jump" })
 function coop_menu_debug_items() return current_items() end
 function coop_menu_debug_title() return TITLE end
 

@@ -7,7 +7,8 @@ It needs no game: the scripts run in a stand-in game (tests/harness/fakegame.lua
 REFramework). What it checks:
   1. no global is read that nothing defines (a typo, a use before a local exists, a broken edit);
   2. every script loads and runs 300+ frames in the stand-in game in four modes, and logs no "ERR";
-  3. the story, menu, give, drop, link, look, log, voice, light and plugin scenarios (two stand-in games talking to each other).
+  3. the story, menu, give, drop, link, look, log, voice, light, plugin and debug scenarios (two stand-in games talking to each other;
+     the debug one checks that every callback and hook of every script is listed in the Debug section with a description).
 The C# plugin (reframework/plugins/source/CoopNet.cs) is compiled when RE7 starts; check it in the game.
 """
 import os, subprocess, sys
@@ -49,7 +50,8 @@ for args in (['empty', 'x', '100000'], ['rich', 'x', '100000'], ['rich', 'menus'
 for test, marker in (('story_test.py', 'all passed'), ('menu_test.py', 'checks passed'), ('give_test.py', 'checks passed'),
                      ('drop_test.py', 'checks passed'),
                      ('link_test.py', 'checks passed'), ('look_test.py', 'checks passed'), ('log_test.py', 'checks passed'),
-                     ('voice_test.py', 'checks passed'), ('light_test.py', 'checks passed'), ('plugin_test.py', 'checks passed')):
+                     ('voice_test.py', 'checks passed'), ('light_test.py', 'checks passed'), ('plugin_test.py', 'checks passed'),
+                     ('debug_test.py', 'checks passed')):
     r = run([os.path.join(HARNESS, test), SCRIPTS])
     fails = [l for l in r.stdout.splitlines() if l.startswith('FAIL')]
     step(test.replace('_test.py', '') + ' scenarios', r.returncode == 0 and marker in r.stdout,

@@ -14,6 +14,11 @@ local re = setmetatable({ on_frame = function(f)
     return _G.re.on_frame(function() if coop_busy and coop_busy() then return end return f() end)
 end }, { __index = _G.re })
 
+-- Debug registry (v0.52, coop_dummy.lua): dbg_note describes the callback or hook registered on the next lines, dbg_task
+-- gives a function its own row in the Debug section. Both are tail calls so the registry sees this file's line.
+local function dbg_note(info) if coop_note then return coop_note(info) end end
+local function dbg_task(feature, name, f, info) if coop_task then return coop_task(feature, name, f, info) end return f end
+
 revive = {
     downed = false, down_t = 0, pos = nil,
     near_t = nil,          -- since when the friend has been close
@@ -35,6 +40,10 @@ local function log(s)
     if coop_log_gate and not coop_log_gate("revive", s) then return end
     log_buf[#log_buf + 1] = os.date("%H:%M:%S ") .. tostring(s)
 end
+dbg_note{ feature = "Logging", name = "Write the revive script's log file",
+    when = "every frame; writes to disk only when 1 to 5 s have passed since the last write",
+    reads = "this script's log lines in memory",
+    writes = "coop_revive_log.txt" }
 re.on_frame(function()
     if coop_log_flush then log_buf, log_t = coop_log_flush("revive", "coop_revive_log.txt", log_buf, log_t) return end
     -- without coop_dummy.lua: the v0.51 writer
@@ -183,6 +192,10 @@ end
 -- Stop the death. canDie lives on DamageController (enemies too), so only for our player.
 local skip_next = false
 local function hook_die(method)
+    dbg_note{ feature = "Going down and being revived", name = "Stop a fatal hit on our player (go down instead)",
+        when = "when the game calls DamageController.canDie / PlayerDamageController.isEnableDieByDamageInfo (every hit any character takes, enemies included)",
+        reads = "is the hit's controller our player's? should we go down (a friend is up in this chapter)?",
+        writes = "tells the game 'cannot die' for our player when going down is allowed" }
     sdk.hook(method, function(args)
         skip_next = false
         local ok = pcall(function()
@@ -222,6 +235,10 @@ do
     local m = gmt and gmt:get_method("setGameOverFlag(System.Boolean)")
     local skip = false
     if m then
+        dbg_note{ feature = "Going down and being revived", name = "Refuse the game's game over while a friend is up",
+            when = "when the game calls GameManager.setGameOverFlag",
+            reads = "the argument (is it turning game over on?), whether a friend is up in this chapter",
+            writes = "SKIPS the game over and lets us go down instead; otherwise lets it through" }
         pcall(sdk.hook, m, function(args)
             skip = false
             pcall(function()
@@ -243,6 +260,10 @@ do
 end
 
 -- While down: hold position, keep 1 health, watch for the friend.
+dbg_note{ feature = "Going down and being revived", name = "While down: hold still, keep 1 health, wait for the friend",
+    when = "every frame; the heavy part runs only while we are down",
+    reads = "while down: our PlayerDamageController health, MovementController, the friend's position",
+    writes = "while down: sets health to 1, holds our position, shows the revive prompt; revives when the friend is close; ends the life the game's way when no friend is up" }
 re.on_frame(function()
     local now = os.clock()
     if rv.allow_death then
@@ -390,4 +411,8 @@ function revive_test_fatal_hit()
     return ok and "fatal hit taken" or ("ERR " .. tostring(err))
 end
 
+coop_revive_on_event = dbg_task("Friend's events", "Apply a 'down' / 'up' / 'gameover' event from the friend", coop_revive_on_event, {
+    when = "when the friend's game sends 'down', 'up' or 'gameover'",
+    reads = "the event text",
+    writes = "lays the friend's ghost down or stands it up; plays the 'up' voice; ends our life if nobody is left standing" })
 log("coop_revive loaded")

@@ -23,6 +23,11 @@ local re = setmetatable({ on_frame = function(f)
     return _G.re.on_frame(function() if coop_busy and coop_busy() then return end return f() end)
 end }, { __index = _G.re })
 
+-- Debug registry (v0.52, coop_dummy.lua): dbg_note describes the callback or hook registered on the next lines, dbg_task
+-- gives a function its own row in the Debug section. Both are tail calls so the registry sees this file's line.
+local function dbg_note(info) if coop_note then return coop_note(info) end end
+local function dbg_task(feature, name, f, info) if coop_task then return coop_task(feature, name, f, info) end return f end
+
 local talk = {
     list = {},            -- { t = os.time(), text, key }
     loaded = false, dirty = false, save_t = 0,
@@ -51,6 +56,10 @@ local function log(s)
     if coop_log_gate and not coop_log_gate("talk", s) then return end
     log_buf[#log_buf + 1] = os.date("%H:%M:%S ") .. tostring(s)
 end
+dbg_note{ feature = "Logging", name = "Write the talk script's log file",
+    when = "every frame; writes to disk only when 1 to 5 s have passed since the last write",
+    reads = "this script's log lines in memory",
+    writes = "coop_talk_log.txt" }
 re.on_frame(function()
     if coop_log_flush then log_buf, log_t = coop_log_flush("talk", "coop_talk_log.txt", log_buf, log_t) return end
     -- without coop_dummy.lua: the v0.51 writer
@@ -641,6 +650,30 @@ local function draw_mark(m)
     end
 end
 
+watch_friend = dbg_task("Talk and catch up", "Is the friend here? Send the catch-up list when they arrive", watch_friend, {
+    when = "every frame while linked (from the talk callback)",
+    reads = "the link's sample history: is the friend's data fresh (under 3 s old)?",
+    writes = "when the friend appears or comes back after a gap: queues the whole catch-up list for sending" })
+pump_queue = dbg_task("Talk and catch up", "Send queued catch-up batches", pump_queue, {
+    when = "every frame while linked (returns at once with an empty queue); sends one batch every BATCH_EVERY seconds",
+    reads = "the queue of changes to send (in memory)",
+    writes = "sends 'catchup <change>|<change>|...' batches" })
+send_health = dbg_task("Talk and catch up", "Tell the friend our health", send_health, {
+    when = "every frame while linked, but it only works twice a second",
+    reads = "our PlayerDamageController health and max health",
+    writes = "sends 'heal <percent>' when it moved 5% or more (and every 15 s)" })
+watch_heal = dbg_task("Talk and catch up", "Notice us healing", watch_heal, {
+    when = "every frame while linked",
+    reads = "our PlayerDamageController health and max health (two game calls every frame), the held item's name",
+    writes = "only with Options: heal my friend on, a healing item out and the friend near and hurt: puts our health back and sends 'heal <percent>' so it goes to the friend" })
+pump_opts = dbg_task("Talk and catch up", "Keep the shared options the same", pump_opts, {
+    when = "every frame while the friend is here (returns at once); does its work every 15 s",
+    reads = "the shared options (SHARED_OPTS) in settings and our mod version",
+    writes = "sends one 'opt ...' event per shared option and 'ver <version>'" })
+dbg_note{ feature = "Talk and catch up", name = "The talk callback: link checks, hotkeys, messages on screen",
+    when = "every frame",
+    reads = "the plugin status, the link, the hotkeys (reframework:is_key_down for each quick-message key), settings",
+    writes = "draws the quick messages and marks on screen; saves the catch-up list every 2 s when it changed; sends quick messages when a key goes down" }
 re.on_frame(function()
     local ok, err = pcall(function()
         if not talk.loaded then load_list() end
