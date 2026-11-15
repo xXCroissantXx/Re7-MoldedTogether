@@ -713,6 +713,23 @@ local function play(name)
     note(ok and ("your friend's story: " .. name) or ("ERR playing " .. name .. ": " .. tostring(err)))
 end
 
+-- v0.56: a "scene" of ours that has run for over LONG_SCENE_S isn't a cutscene to wait for. Some story events
+-- stay running while you play: the opening drive (c01e00_01, 155 s in real play) and the Mia fight's c01e01_01
+-- (288 s and 637 s on 2026-11-13/14, "still running after 5 minutes"). Everything of the friend's waited behind
+-- them (steps, event and fight ends, their scenes), and in the bot test (2026-11-14) the friend's game sat in the
+-- drive for over 4 minutes with the host's step 600 and wall-throw scene (c01e04_00) held: the story never moved
+-- on there, so Mia's wall stayed up and "you are further on in the story" repeated. The longest real cutscene
+-- seen is the dinner, c03e00_00, at 102 s, so 130 s leaves every real one alone.
+local LONG_SCENE_S = 130
+local function only_long_scenes()
+    if next(ss.running) == nil then return false end
+    local now = os.clock()
+    for _, t0 in pairs(ss.running) do
+        if now - (tonumber(t0) or now) < LONG_SCENE_S then return false end
+    end
+    return true
+end
+
 local function busy_here()
     local om = sdk.get_managed_singleton("app.ObjectManager")
     if om == nil or om:get_field("PlayerObj") == nil then return "loading" end
@@ -731,7 +748,7 @@ local function busy_here()
     if mm then ok, open = pcall(mm.call, mm, "isOpenPauseMenu") end
     if ok and open == true then return "in the menu" end
     if revive and revive.downed then return "down" end
-    if local_cutscene and local_cutscene() then return "in a cutscene" end
+    if local_cutscene and local_cutscene() and not only_long_scenes() then return "in a cutscene" end
     return nil
 end
 
@@ -895,6 +912,11 @@ local HOLD_AFTER_CUTSCENE = 8
 -- the end of the dinner would skip our chair, as it did on 2026-11-02. Our game sets those
 -- numbers itself when it gets there; whatever is still behind afterwards is copied then.
 local function hold_for_cutscene()
+    if ss.cut_on and only_long_scenes() then
+        if not ss.long_said then ss.long_said = true log("a long story event is running here: your friend's story is copied anyway") end
+        return false
+    end
+    ss.long_said = nil
     return ss.cut_on or os.clock() - ss.cut_end_t < HOLD_AFTER_CUTSCENE or sequence_open()
 end
 

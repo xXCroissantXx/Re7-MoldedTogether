@@ -868,6 +868,22 @@ end
 -- counts where a test friend makes sense. Until v0.43 most features checked for "steam".
 function coop_link_friend(kv) local m = kv and kv.mode return m == "steam" or m == "udp" end
 function coop_link_any(kv) local m = kv and kv.mode return m == "steam" or m == "udp" or m == "bot" end
+-- Is friend slot k (1-3) taken? (v0.55) Slot 1 always counts. Slots 2 and 3 are in the status file
+-- ("peer2=steam:..." / "peer3=...") only while a friend is in them. Kingkiller1195's Debug section measured
+-- the mod at 400-480 ms of game-thread time per second on the two test copies (2026-11-14), with the
+-- friend's-body and link callbacks marked "x3 copies": slots 2 and 3 read their friend files every frame
+-- and the enemy sync read every slot's snapshot file 30 times a second, though nobody was in them. One
+-- REFramework fs.read costs about 0.8 ms even for a file that isn't there (1.7-1.9 ms for the link files).
+-- Always slot 1's state (_G's, read once a second); when it can't be read, a slot counts as taken (as before).
+function coop_slot_in_use(k)
+    if k == nil or k <= 1 then return true end
+    local f = _G.coop_net_state
+    local st = f and f()
+    local kv = st and st.kv
+    if kv == nil or (kv.mode == nil and kv.steamSelf == nil) then return true end
+    local p = kv["peer" .. k]
+    return p ~= nil and p ~= "" and p ~= "-" and p ~= "steam:0"
+end
 -- Who runs the enemies on a udp link: "udpHost" true/false in coopnet_config.json, else the
 -- lower port (two copies on one PC); nil when nothing tells them apart (both run them).
 UDP_ROLE = { t = -100 }
@@ -1026,8 +1042,19 @@ local function net_io()
     -- in the file up to 33 ms before the game saw it), ours still go out 30 times a second (each one
     -- costs a dozen game calls). The gates are a few ms short of the period so a frame that comes a
     -- little early doesn't push the next look a whole frame later.
-    if now - (net.last_rd or 0) < 1 / 60 - 0.004 then return end
+    -- v0.56: back to the sample rate (30 a second). Measured with the Debug section on the test copies: one fs.read
+    -- of this file costs about 1.8 ms, and at the copies' 36 fps the 60-a-second gate read it on every frame
+    -- (~65 ms of game-thread time per second, the biggest single cost of the mod) though only 30 samples a second
+    -- come in, so many reads found nothing new. A read takes every sample in the file, and the playback delay
+    -- (net.update_delay) covers the few ms a sample may now wait.
+    if now - (net.last_rd or 0) < 1 / 30 - 0.004 then return end
     net.last_rd = now
+    -- Friend slots 2 and 3 with nobody in them read nothing (v0.55, see coop_slot_in_use): old samples
+    -- still age out, so a friend who left fades as before.
+    if SLOT > 1 and not _G.coop_slot_in_use(SLOT) then
+        while #net.history > 0 and net.history[1].t < now - KEEP do table.remove(net.history, 1) end
+        return
+    end
     local do_write = now - net.last_io >= 1 / 30 - 0.004
     if do_write then net.last_io = now end
 
@@ -4237,6 +4264,72 @@ re.on_frame(function()
     end
 end)
 
+-- The friend's character checks itself (v0.56, asked for 2026-11-14: "a model check for the player that
+-- rebuilds if there's any issues"). Every 2 s while the friend is connected, shown and nobody is in a scene:
+-- the character exists, its pieces are still alive and drawn, the model is where the friend is (not left
+-- behind: "only the label follows, not the model") and not stuck at the world's origin. Three bad checks in a
+-- row (6 s) rebuild it the way the window's "Fix my friend's character" button does (build_ethan); at most
+-- once in 20 s and three times in 2 minutes, then it waits and says so.
+local mcheck = { bad = 0, t = 0, rebuilds = {} }
+local function model_problem()
+    local last = net.history[#net.history]
+    if last == nil or os.clock() - last.t > 1.5 then return nil end          -- no fresh data: nothing to check
+    if ghost_hidden or (local_cutscene and local_cutscene()) or (coop_busy and coop_busy()) then return nil end
+    if climb and climb.state ~= nil then return nil end
+    if #parts == 0 or dummy == nil then return "no character" end
+    local alive, drawn = 0, 0
+    for _, p in ipairs(parts) do
+        local ok, d = pcall(p.go.call, p.go, "get_Draw")
+        if ok then alive = alive + 1 if d == true then drawn = drawn + 1 end end
+    end
+    if alive == 0 then return "its pieces are gone" end
+    if drawn == 0 then return "nothing of it is drawn" end
+    local ok, dp = pcall(function() return dummy:call("get_Transform"):call("get_Position") end)
+    if not ok or dp == nil then return "its position can't be read" end
+    if math.abs(dp.x) + math.abs(dp.y) + math.abs(dp.z) < 0.01 and math.abs(last.pos.x) + math.abs(last.pos.z) > 1 then
+        return "it's stuck at the world's origin"
+    end
+    local d = math.sqrt((dp.x - last.pos.x) ^ 2 + (dp.y - last.pos.y) ^ 2 + (dp.z - last.pos.z) ^ 2)
+    if d > 8 then return string.format("it's %.0f m from where your friend is", d) end
+    -- The pieces follow the character (the first live piece within 3 m of it).
+    for _, p in ipairs(parts) do
+        local okp, pp = pcall(function() return p.go:call("get_Transform"):call("get_Position") end)
+        if okp and pp then
+            local dd = math.sqrt((pp.x - dp.x) ^ 2 + (pp.y - dp.y) ^ 2 + (pp.z - dp.z) ^ 2)
+            if dd > 3 then return string.format("the model is %.0f m from its label", dd) end
+            break
+        end
+    end
+    return nil
+end
+coop_note{ feature = "Friend's body (ghost)", name = "Check the friend's character and rebuild it when broken",
+    when = "every frame; checks every 2 s while the friend is connected and shown",
+    reads = "the ghost's pieces (alive, drawn), its position against the friend's newest sample",
+    writes = "after 3 bad checks in a row: rebuilds the character (build_ethan), at most once in 20 s and 3 times in 2 minutes" }
+re.on_frame(function()
+    local now = os.clock()
+    if now - mcheck.t < 2 then return end
+    mcheck.t = now
+    local okc, why = pcall(model_problem)
+    if not okc then why = nil end
+    if why == nil then mcheck.bad, mcheck.why = 0, nil return end
+    mcheck.bad = mcheck.bad + 1
+    if mcheck.bad == 1 then log("friend's character check: " .. why) end
+    if mcheck.bad < 3 then return end
+    for i = #mcheck.rebuilds, 1, -1 do if now - mcheck.rebuilds[i] > 120 then table.remove(mcheck.rebuilds, i) end end
+    local last_rb = mcheck.rebuilds[#mcheck.rebuilds]
+    if (last_rb and now - last_rb < 20) or #mcheck.rebuilds >= 3 then
+        if not mcheck.capped then mcheck.capped = true log("friend's character still wrong (" .. why .. "): waiting before rebuilding again") end
+        return
+    end
+    mcheck.capped = nil
+    mcheck.rebuilds[#mcheck.rebuilds + 1] = now
+    mcheck.bad = 0
+    log("friend's character rebuilt (" .. why .. ")")
+    local ok, err = pcall(build_ethan)
+    if not ok then log("rebuild ERR " .. tostring(err)) end
+end)
+
 -- Nameplate with the distance; when the friend is off screen (behind a wall still counts
 -- as on screen), a pointer at the screen edge: "<" left, ">" right, "v" behind you.
 function friend_marker(name, p)
@@ -4646,54 +4739,55 @@ local hud = { bad_prev = 0, bad_t = -100, err = false }
 function coop_plugin_dead() return net.plugin_dead == true end
 local PLUGIN_DEAD_MSG = "Molded Together's network plugin isn't running: no connection and no bot. If Windows' Smart App Control is on, it blocks REFramework's C# files (see the README's Troubleshooting)."
 local function hud_lines()
+    -- v0.56: tidied ("clear up the UI at the top left", 2026-11-14). One line says who you're with, the ping,
+    -- their health and whether saving is on; friends 2 and 3 get one short line each; everything else shows
+    -- only while it matters, in shorter words. (It was: the link line, a health line and "Saving: off" always,
+    -- and long lines for the rest.)
     local kv = net.kv or {}
     local out = {}
+    local key = (coop_menu_key_name and coop_menu_key_name()) or "F9"
     if net.plugin_dead then out[#out + 1] = { PLUGIN_DEAD_MSG, 0xFF6B6BFF } end
     local last = net.history[#net.history]
     local fresh = last ~= nil and (os.clock() - last.t) < (NET_TIMEOUT or 2)
-    local ping = net.ping and string.format(" - %d ms", math.floor(net.ping * 1000 + 0.5)) or ""
+    local saving = settings.allow_saving and "saving on" or "saving off"
     if kv.mode == "bot" then
-        out[#out + 1] = { "Co-op: bot test" .. ping, 0xFFFFD27F }
+        out[#out + 1] = { "Co-op: bot test" .. (net.ping and string.format(" \194\183 %d ms", math.floor(net.ping * 1000 + 0.5)) or ""), 0xFFFFD27F }
     elseif kv.mode == "steam" and (kv.peer == nil or kv.peer == "steam:0") then
-        out[#out + 1] = { "Co-op: not connected (press " .. ((coop_menu_key_name and coop_menu_key_name()) or "F9") ..
-            " for the co-op menu)", 0xFF9EB7FF }
+        out[#out + 1] = { "Co-op: not connected (" .. key .. " for the co-op menu)", 0xFF9EB7FF }
     elseif fresh then
         local who = peer_name(kv) or "your friend"
-        out[#out + 1] = { "Co-op: connected to " .. who .. ping, 0xFF7FFF8C }
+        local parts_ = { "Co-op: " .. who }
+        if net.ping then parts_[#parts_ + 1] = string.format("%d ms", math.floor(net.ping * 1000 + 0.5)) end
+        local fhp = coop_friend_health and coop_friend_health()
+        if fhp then parts_[#parts_ + 1] = string.format("health %d%%", fhp) end
+        parts_[#parts_ + 1] = saving
+        out[#out + 1] = { table.concat(parts_, "  \194\183  "), (fhp and fhp < 60) and coop_friend_health_color(fhp) or 0xFF7FFF8C }
     else
-        out[#out + 1] = { "Co-op: waiting for your friend...", 0xFF7FE6FF }
+        out[#out + 1] = { "Co-op: waiting for your friend  \194\183  " .. saving, 0xFF7FE6FF }
     end
-    local fhp = fresh and coop_friend_health and coop_friend_health()
-    if fhp then
-        out[#out + 1] = { string.format("Friend's health: %d%%", fhp), coop_friend_health_color(fhp) }
-    end
-    -- Friends 2 and 3 (v0.29): name, and health when known.
+    -- Friends 2 and 3 (v0.29): name and health, one short line each.
     for k = 2, 3 do
         local env = coop_slot_envs and coop_slot_envs[k]
         local st = env and rawget(env, "coop_net_state") and env.coop_net_state()
-        local last = st and st.history and st.history[#st.history]
-        if last and os.clock() - last.t < (NET_TIMEOUT or 2) then
+        local l2 = st and st.history and st.history[#st.history]
+        if l2 and os.clock() - l2.t < (NET_TIMEOUT or 2) then
             local nm = kv.mode == "bot" and ("Bot " .. k) or kv["peer" .. k .. "Name"]
             if nm == nil or nm == "" then nm = "Friend " .. k end
             local h = coop_friend_health and coop_friend_health(k)
-            out[#out + 1] = { h and string.format("%s: here, health %d%%", nm, h) or (nm .. ": here"),
-                h and coop_friend_health_color(h) or 0xFF7FFF8C }
+            out[#out + 1] = { h and string.format("%s  \194\183  health %d%%", nm, h) or nm, h and coop_friend_health_color(h) or 0xFF7FFF8C }
         end
     end
+    -- Only while they matter:
     local tl, tc = nil, nil
     if coop_talk_hud then tl, tc = coop_talk_hud() end
     if tl then out[#out + 1] = { tl, tc } end
     local inv = pending_invite and pending_invite()
-    if inv then
-        out[#out + 1] = { inv.name .. " invited you to co-op: press " ..
-            ((coop_menu_key_name and coop_menu_key_name()) or "F9") .. " to answer", 0xFF7FFF8C }
-    end
+    if inv then out[#out + 1] = { inv.name .. " invited you: " .. key .. " to answer", 0xFF7FFF8C } end
     if fresh and anim.flags and (anim.flags & STANCE_CUTSCENE) ~= 0 then
-        out[#out + 1] = { "Friend is watching a cutscene", 0xFF7FE6FF }
+        out[#out + 1] = { "Your friend is in a cutscene", 0xFFBFBFBF }
     end
     if fresh and net.peer_chapter and net.peer_chapter ~= local_chapter() then
-        out[#out + 1] = { string.format("Friend is in %s (you're in %s): F9 > Help and fixes > Go to your friend's chapter",
-            chapter_name(net.peer_chapter), chapter_name(local_chapter())), 0xFF7FE6FF }
+        out[#out + 1] = { string.format("Your friend is in %s: %s > Help and fixes to join them", chapter_name(net.peer_chapter), key), 0xFF7FE6FF }
     end
     local vw = coop_talk_version_warning and coop_talk_version_warning()
     if vw and fresh then out[#out + 1] = { vw, 0xFF6B6BFF } end
@@ -4702,19 +4796,16 @@ local function hud_lines()
     if bad > hud.bad_prev then hud.bad_t = os.clock() end
     hud.bad_prev = bad
     if os.clock() - hud.bad_t < 10 then
-        out[#out + 1] = { "Friend's packets don't match: check you both have the same Molded Together version", 0xFF6B6BFF }
+        out[#out + 1] = { "Your friend's version doesn't match: you both need the same Molded Together", 0xFF6B6BFF }
     end
-    local em = enemy_sync_hud and enemy_sync_hud()
-    if em then out[#out + 1] = { em, 0xFF7FE6FF } end
-    local wd = world_sync_hud and world_sync_hud()
-    if wd then out[#out + 1] = { wd, 0xFF7FE6FF } end
-    local sy = story_sync_hud and story_sync_hud()
-    if sy then out[#out + 1] = { sy, 0xFF7FE6FF } end
+    for _, f in ipairs({ enemy_sync_hud, world_sync_hud, story_sync_hud }) do
+        local m = f and f()
+        if m then out[#out + 1] = { m, 0xFFBFD7E6 } end
+    end
     if revive_hud then
         local rt, rc = revive_hud()
         if rt then out[#out + 1] = { rt, rc } end
     end
-    out[#out + 1] = { settings.allow_saving and "Saving: on (backed up)" or "Saving: off", 0xFFBFBFBF }
     return out
 end
 
@@ -4729,13 +4820,22 @@ on_frame_1(function()
     local ok, err = pcall(function()
         -- In the co-op menu's font, with a shadow, when it's loaded (v0.40); else the default one.
         local lh = coop_ui_line_h and coop_ui_line_h("small") or 18
-        for i, l in ipairs(hud_lines()) do
-            local y = 16 + (i - 1) * lh
+        local lines = hud_lines()
+        if #lines == 0 then return end
+        -- v0.56: one soft panel behind the block (it was text over whatever the game showed).
+        local wmax = 0
+        for _, l in ipairs(lines) do
+            local tw = coop_ui_text_w and coop_ui_text_w(l[1], "small") or (#l[1] * 8)
+            if tw > wmax then wmax = tw end
+        end
+        pcall(draw.filled_rect, 8, 8, wmax + 20, lh * #lines + 12, 0x8C000000)
+        for i, l in ipairs(lines) do
+            local y = 14 + (i - 1) * lh
             if coop_ui_text then
-                coop_ui_text(l[1], 17, y + 1, 0xC0000000, "small")
-                coop_ui_text(l[1], 16, y, l[2], "small")
+                coop_ui_text(l[1], 19, y + 1, 0xC0000000, "small")
+                coop_ui_text(l[1], 18, y, l[2], "small")
             else
-                draw.text(l[1], 16, y, l[2])
+                draw.text(l[1], 18, y, l[2])
             end
         end
     end)

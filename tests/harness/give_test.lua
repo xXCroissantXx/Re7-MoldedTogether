@@ -44,6 +44,7 @@ local inv = obj({}, {
     ["getTotalStackNum(System.String, System.Boolean)"] = function(id) return INV[id] or 0 end,
     ["isCanAddItem(System.String, System.Int32)"] = function() return ROOM end,
     ["addItem(app.Item, via.GameObject)"] = function(item)
+        ADD_CALLS = (ADD_CALLS or 0) + 1   -- v0.55: must stay 0 (gifts are drops now)
         if ADD_WORKS then local id = item.fields.ItemDataID INV[id] = (INV[id] or 0) + (item.fields.ItemStackNum or 1) return 0 end
         return ADD_RESULT or 3   -- NoPut
     end,
@@ -66,6 +67,7 @@ sdk.find_type_definition = function(name)
         return { get_method = function(self, n)
             if n == "createItemInstance(via.GameObject, System.String)" then
                 return { call = function(_, _, owner, id)
+                    MADE_CALLS = (MADE_CALLS or 0) + 1   -- v0.55: must stay 0 (gifts are drops now)
                     local it = item_of(id)
                     return obj({}, { ["getComponent(System.Type)"] = function() return it end,
                         ["destroy(via.GameObject)"] = function() DESTROYED = DESTROYED + 1 end })

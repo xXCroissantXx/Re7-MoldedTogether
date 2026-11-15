@@ -892,6 +892,7 @@ end
 -- For the status lines (coop_dummy) and other on-screen text (v0.40): the same fonts.
 function coop_ui_text(s, x, y, color, size) text(s, x, y, color, size) end
 function coop_ui_line_h(size) return line_h(size) - 4 end
+function coop_ui_text_w(s, size) return text_w(s, size) end   -- v0.56: the status panel's width
 
 -- Input -------------------------------------------------------------------------------------
 local VK = { up = 0x26, down = 0x28, left = 0x25, right = 0x27, enter = 0x0D, space = 0x20, back = 0x08,
@@ -1251,17 +1252,9 @@ function PAGES.lobby()
             on = function() L.ready = not L.ready L.ready_for = L.start L.me_t = -100 end,
             left = function() L.ready = false L.me_t = -100 end, right = function() L.ready = true L.ready_for = L.start L.me_t = -100 end,
             hint = "You're ready by default: the host can start any time. Switch to No to hold the start back." }
-        -- Behind the host in the story: their key items and weapons (v0.41, experimental).
-        local hslot = L.host and slot_of(L.host)
-        local cmp = hslot and coop_story_compare and safe(coop_story_compare, hslot)
-        items[#items + 1] = { text = "Get the host's key items and weapons", value = cmp == "behind" and "you're behind" or nil,
-            off = (cmp == "ahead") and "you're further on than the host: you keep your own" or (hslot == nil and "the host isn't connected") or nil,
-            on = function() ask("Get the key items and weapons the host has and you don't? (experimental)", "Get them", function()
-                if world_sync then world_sync.want_inv = os.clock() end
-                send("inv_req " .. L.host)
-                say("Asking the host for their key items and weapons...", 0xFF7FFF8C)
-            end) end,
-            hint = "For catching up when you're behind in the story (experimental)." }
+        -- "Get the host's key items and weapons" (v0.41-v0.54, experimental) is gone in v0.55: it put them in the
+        -- inventory with createItemInstance + addItem (crash-prone), and a drop can't carry key items or weapons
+        -- (coop_world.lua coop_give_missing says why).
         items[#items + 1] = { text = "Leave the lobby", on = function() ask("Leave? You'll be disconnected from everyone.", "Leave", lobby_leave) end }
     end
     if L.go and not L.go.done then
@@ -1352,8 +1345,8 @@ function PAGES.talk()
 end
 
 -- Give items (v0.42): ammo, healing, materials to a friend. coop_world.lua does the giving: the
--- friend's game puts it in their inventory and says how many arrived, and only then does it
--- leave yours.
+-- friend's game puts it on the ground in front of them (v0.55, Kingkiller1195's drop; it went into their
+-- inventory before) and says it's there, and only then does it leave yours.
 local GIVE = { to = 1, amount = 1, list = nil, list_t = -100 }
 local AMOUNTS = { "One", "Half", "All" }
 function PAGES.give()
@@ -1400,7 +1393,7 @@ function PAGES.give()
                     GIVE.list = nil
                 end)
             end,
-            hint = string.format("Gives %d to %s; it leaves your inventory once it's in theirs.", n, m.name) }
+            hint = string.format("Puts %d on the ground in front of %s to pick up; it leaves your inventory once it's there.", n, m.name) }
     end
     local gm = world_sync and world_sync.give_msg
     if gm and now - gm.t < 8 then items[#items + 1] = { info = true, text = gm.text, color = gm.color } end
@@ -2199,6 +2192,25 @@ end
 -- Now the CO-OP text comes off at once, and the slot's own text is put back only once the list has stood
 -- still for a few frames, from the row it settled on (and checked again on every settled frame).
 local SETTLE_SEC = 0.12
+-- v0.56: "the tape recorder still says NEW GAME repeatedly if you scroll, until you scroll again" (2026-11-14).
+-- Putting a slot's message id back after it had a literal text didn't always make the game redraw it, so the
+-- stale text stayed. Now every slot is given its row's own text as a literal string (via.gui.message.get on the
+-- row's ElemMsgID, in the game's language), every frame, from the row it shows right now: nothing waits for the
+-- game to redraw. Where that text can't be read, the old way (clear, then the id once the list settles) is kept.
+local ROW_TEXT = {}
+local msg_get_m
+local function row_text(sp, li)
+    if ROW_TEXT[li] ~= nil then return ROW_TEXT[li] or nil end
+    if msg_get_m == nil then
+        local td = sdk.find_type_definition("via.gui.message")
+        msg_get_m = td and td:get_method("get(System.Guid)") or false
+    end
+    local guid = sp and safe(sp.get_field, sp, "ElemMsgID")
+    local s = (msg_get_m and guid) and safe(msg_get_m.call, msg_get_m, nil, guid) or nil
+    s = s and tostring(s) or ""
+    ROW_TEXT[li] = (s ~= "" and s ~= "nil" and #s < 40) and s or false
+    return ROW_TEXT[li] or nil
+end
 local function title_texts()
     local sl, steps = TITLE.sl, TITLE.steps
     if sl == nil or steps == nil or TITLE.idx == nil then return end
@@ -2221,9 +2233,13 @@ local function title_texts()
     for _, x in ipairs(slots) do
         local li, slot = x.li, x.slot
         for _, t in ipairs(texts_of(x.it)) do
+            local own = (li ~= TITLE.idx and li and li >= 0 and li < n_steps) and row_text(steps:call("get_Item", li), li) or nil
             if li == TITLE.idx then
                 if t:call("get_Message") ~= "CO-OP" then t:call("set_Message", "CO-OP") end
                 TITLE.marked[slot], TITLE.fix[slot] = true, nil
+            elseif own then
+                if t:call("get_Message") ~= own then pcall(t.call, t, "set_Message", own) end
+                TITLE.marked[slot], TITLE.fix[slot] = nil, nil
             else
                 if TITLE.marked[slot] then
                     pcall(t.call, t, "set_Message", nil)   -- off at once
@@ -2254,7 +2270,7 @@ end
 local function title_row(now)
     TITLE.selected = false
     if TITLE.broken or (settings and settings.title_coop_row == false) then return end
-    if not on_title() then TITLE.idx, TITLE.menu = nil, nil return end
+    if not on_title() then TITLE.idx, TITLE.menu = nil, nil ROW_TEXT = {} return end
     local tsm = title_menu()
     if tsm == nil then TITLE.idx = nil return end
     local addr = tsm:get_address()
@@ -2330,6 +2346,32 @@ end
 -- On the title screen the co-op screen goes on the Options table (v0.43): the title menu's own
 -- camera move there and back (app.TitleSubMenu.changeMotionCamera: VoiceRecorder_to_Option 2,
 -- Optin_to_VoiceRecorder 3; tried live 2026-11-09), with the sheets drawn on the table.
+-- Depth of field off while the co-op screen is on the table (v0.56). "When you hit CO-OP the menu is blurry and you
+-- can't see anything" (2026-11-14): the game's own Options step refocuses the title camera's depth of field on the
+-- table; ours only moves the camera (changeMotionCamera 2), so with depth of field on in the graphics settings (the
+-- test copies run without it) the sheets stayed out of focus. The title menu's app.DOFController drives a
+-- via.render.DepthOfField: both are switched off while ours is open and put back as they were.
+local DOF = {}
+local function title_dof(off)
+    if off then
+        if DOF.ctl then return end
+        local tsm = title_menu()
+        local ctl = tsm and safe(tsm.get_field, tsm, "DofControllerCompo")
+        if ctl == nil then return end
+        local df = safe(ctl.get_field, ctl, "DepthOfField")
+        DOF.ctl, DOF.df = ctl, df
+        DOF.ctl_on = safe(ctl.call, ctl, "get_Enabled")
+        DOF.df_on = df and safe(df.call, df, "get_Enabled")
+        pcall(ctl.call, ctl, "set_Enabled", false)
+        if df then pcall(df.call, df, "set_Enabled", false) end
+        log("title: depth of field off for the co-op screen")
+    elseif DOF.ctl then
+        if DOF.df and DOF.df_on ~= nil then pcall(DOF.df.call, DOF.df, "set_Enabled", DOF.df_on) end
+        if DOF.ctl_on ~= nil then pcall(DOF.ctl.call, DOF.ctl, "set_Enabled", DOF.ctl_on) end
+        DOF.ctl, DOF.df = nil, nil
+        log("title: depth of field back")
+    end
+end
 local function title_table(on)
     local tsm = title_menu()
     if on then
@@ -2338,8 +2380,10 @@ local function title_table(on)
             M.table_mode = true
             log("title: camera to the Options table")
         end
+        pcall(title_dof, true)
     elseif M.table_mode then
         M.table_mode = false
+        pcall(title_dof, false)
         if tsm and on_title() then
             pcall(tsm.call, tsm, "changeMotionCamera", 3)
             log("title: camera back to the tape recorder")
@@ -2380,11 +2424,13 @@ local function draw_prompts(now)
         lines[#lines + 1] = { "Molded Together: " .. menu_key().name .. " or L3+R3 opens the co-op menu", 0xFFBFBFBF }
     end
     if #lines == 0 then return end
+    -- v0.56: one soft panel behind the lines, like the status block at the top left (it was a strip per line).
     local lh = line_h("small")
     local y = h - 40 - lh * #lines
+    local wmax = 0
+    for _, l in ipairs(lines) do wmax = math.max(wmax, text_w(l[1], "small")) end
+    pcall(draw.filled_rect, 24, y - 6, wmax + 24, lh * #lines + 8, 0x8C000000)
     for i, l in ipairs(lines) do
-        local tw = text_w(l[1], "small")
-        pcall(draw.filled_rect, 24, y + (i - 1) * lh - 4, tw + 24, lh, 0xA0000000)
         text(l[1], 36, y + (i - 1) * lh, l[2], "small")
     end
 end

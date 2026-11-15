@@ -255,8 +255,10 @@ end
 -- a spawn point that comes alive in one game is sent as "spawn <guid> <chapter>", and the other game
 -- asks the game's own spawner for it (app.EnemyGeneratorManager.requestSpawn, tried in the bot copies:
 -- the Molded comes out, and the game puts it to sleep by its own rules when no player is in its
--- zone). The game refuses while the spot is in view, so it's asked again for 20 s. Each game still
--- runs its own (see moves_shared); kills, hits and health go by the spawn point's id.
+-- zone). The game refuses while the spot is in view, so it's asked again for SPAWN_WANT_S (v0.56: 90 s,
+-- was 20: "the Molded never spawned in for my friend", 2026-11-14 session; the friend is usually right
+-- there, looking at the spot). Kills, hits and health go by the spawn point's id.
+local SPAWN_WANT_S = 90
 es.spawn_want = es.spawn_want or {}
 es.dead_here = es.dead_here or {}   -- id -> chapter: died in this game (seen alive again: forgotten)
 local function spawn_requests(now)
@@ -280,6 +282,7 @@ local function spawn_requests(now)
     for t, w in pairs(es.spawn_want) do
         local s = byid[t]
         if now > w.until_t or w.ch ~= chapter() then
+            if w.asked and w.ch == chapter() then log("spawn " .. t .. ": didn't come out here in " .. SPAWN_WANT_S .. " s") end
             es.spawn_want[t] = nil
         elseif s and gm then
             local inst = safe(s.get_field, s, "EnemyInstance")
@@ -293,6 +296,17 @@ local function spawn_requests(now)
                 pcall(s.set_field, s, "IsSpawned", false)
                 pcall(gm.call, gm, "requestSpawn(app.EnemySpawnInfo, System.Int32)", s, 0)
                 log("spawn " .. t .. ": marked spawned with no Molded here, asked again")
+            elseif spawned and inst == nil and w.asked and safe(s.get_field, s, "IsAlive") == true
+                and safe(s.get_field, s, "IsAppeared") ~= true then
+                -- v0.56: asked, and the game is waiting to bring it out (spawned + alive, no body yet). It does once
+                -- the spot is out of this player's sight (bot test 2026-11-14: a spot 10 m away in view waited a
+                -- minute and more; one out of view came out in 2 s; the forced requestSpawn(s, true, 0) raised an
+                -- access violation inside the game, so it isn't used). Kept until it comes out or the time is up;
+                -- a request the game dropped (alive goes false) is asked again below.
+                if not w.wait_said then
+                    w.wait_said = true
+                    log("spawn " .. t .. ": asked here; the game brings it out once the spot is out of sight")
+                end
             elseif spawned or inst ~= nil then
                 if w.asked then log("spawn " .. t .. ": out here too") end
                 es.spawn_want[t] = nil   -- already out (or was, and is dead or asleep by the game's own doing)
@@ -675,7 +689,7 @@ local function on_event(text)
     local sg, sch = text:match("^spawn (%S+) (%-?%d+)$")
     if sg then
         if tonumber(sch) == chapter() and not (settings and settings.share_spawns == false) then
-            es.spawn_want[sg] = { ch = tonumber(sch), until_t = os.clock() + 20 }
+            es.spawn_want[sg] = { ch = tonumber(sch), until_t = os.clock() + SPAWN_WANT_S }
         end
         return
     end
@@ -911,6 +925,20 @@ local mv = em_move
 -- further behind, which you can't see).
 local MOVE_DELAY = 0.25
 local SNAP_EVERY = 1 / 15
+-- v0.56: the buffer follows the link, like the friend's body (coop_dummy net.delay, v0.52: one sample gap +
+-- margin + how late recent samples were, 80-300 ms). Jack "rubber banding" (2026-11-14 session): that link
+-- measured 185 ms round trip with 113 ms of lateness, so snapshots (unreliable, 15 a second, one gap 67 ms)
+-- often came later than the fixed 0.25 s and the copy waited, then jumped. Now the body's delay plus one
+-- snapshot gap, never under 0.25 s nor over 0.6 s; it moves slowly, as net.delay does.
+-- v0.56: snapshots come 15 a second; their file was read 30 times a second (each fs.read ~1.8 ms). 20 a second
+-- still sees every one (a read with nothing new stops at the "seq" line).
+local SNAP_READ_EVERY = 1 / 20
+local function move_delay()
+    local st = coop_net_state and coop_net_state()
+    local d = st and tonumber(st.delay)
+    if d == nil then return MOVE_DELAY end
+    return math.max(MOVE_DELAY, math.min(0.6, d + SNAP_EVERY))
+end
 
 local kv_cache, kv_t = {}, -100
 local function net_kv()
@@ -1213,6 +1241,10 @@ local function quiet_limit(e, k)
     if BOSS_FOLLOW[e.name] or BOSS_HANDOFF[e.name] then return 6 end
     return 3
 end
+
+-- Is friend slot k taken? (v0.55, coop_dummy.lua coop_slot_in_use): an empty slot's snapshot file isn't read
+-- (an fs.read costs about 0.8 ms even for a file that isn't there, 30 times a second per slot).
+local function slot_live(k) return k == 1 or coop_slot_in_use == nil or coop_slot_in_use(k) end
 
 -- Guest: take a received snapshot into the per-enemy timelines.
 local function read_snapshot(now, k)
@@ -1530,7 +1562,7 @@ local function drive(e, h, now)
         e.wake_logged = true
         log(string.format("%s %s: the game put the copy to sleep, woken again", e.name, e.id))
     end
-    local t = now - MOVE_DELAY
+    local t = now - move_delay()
     local a, b = h[1], h[#h]
     for i = #h - 1, 1, -1 do
         if h[i].t <= t then a, b = h[i], h[i + 1] break end
@@ -1608,6 +1640,9 @@ local function friend_pos(k)
     return safe(function() return g:call("get_Transform"):call("get_Position") end)
 end
 
+-- A boss's turn with each game (v0.56, see check_handoffs).
+local BOSS_TURN_S, BOSS_TURN_R = 20, 12
+mv.mine_own = mv.mine_own or {}
 local function hand_off(e, now, k)
     k = k or 1
     local _, ids = party_ids()
@@ -1674,7 +1709,23 @@ function check_handoffs(now)
             -- A boss stays at least 5 s with the game that got it (v0.51): with both players close, the bot test
             -- had Mia change games every 3 s, each change a jolt on both screens.
             if (BOSS_FOLLOW[e.name] or BOSS_HANDOFF[e.name]) and not we_down and now - (mv.own_t[e.id] or -100) < 5 then best = nil end
-            if best and ((we_down and (BOSS_HANDOFF[e.name] or is_regular(e.name)) and bd < 30) or bd + 3 < dm or (eager and bd < dm * 0.7 and dm - bd > 1)) then hand_off(e, now, best) end
+            -- Taking turns (v0.56): "the Mia fights didn't have her attacking my friend" (2026-11-14 session). A boss
+            -- only changed games when the friend was clearly nearer and she wasn't on top of whoever had her; in a
+            -- fight she's on one player nearly all the time, so she went after that one for the whole fight. Now a
+            -- boss our game has run for BOSS_TURN_S goes to a friend within BOSS_TURN_R (and not while she's within
+            -- HOLD_R of us, a grab); their game hands her back the same way, so she goes after each of you in turn.
+            mv.mine_since = mv.mine_since or {}
+            if mv.mine_since[e.id] == nil or mv.own[e.id] ~= mv.mine_own[e.id] then
+                mv.mine_since[e.id] = (mv.own[e.id] == "me" and mv.own_t[e.id]) or now
+                mv.mine_own[e.id] = mv.own[e.id]
+            end
+            local turn = BOSS_HANDOFF[e.name] == true and not we_down and best ~= nil and bd < BOSS_TURN_R
+                and now - mv.mine_since[e.id] >= BOSS_TURN_S
+            if best and ((we_down and bd < 30) or turn or bd + 3 < dm or (eager and bd < dm * 0.7 and dm - bd > 1)) then
+                if turn and not (bd + 3 < dm) then log(string.format("%s: your friend's turn (we had it %.0f s)", e.name, now - mv.mine_since[e.id])) end
+                mv.mine_since[e.id] = nil
+                hand_off(e, now, best)
+            end
         end
     end
 end
@@ -1754,7 +1805,49 @@ do
         end
     end
 end
+-- Our player is down (v0.56). check_handoffs gives every shared enemy within 30 m to a friend who's standing,
+-- but when the friend's game can't take it (it isn't in their game, or the hand-off is cooling down) ours
+-- kept it, and its AI stays on its own game's player: "Jack stayed focused on the downed player and wouldn't
+-- go after the one still up" (2026-11-14 session). Then ours is aimed at the standing friend's character
+-- (the same setTarget + target hold as the Molded aim below): it can't hurt them from here, but on their
+-- screen it comes after them instead of standing over us. Let go as soon as we're up.
+local function down_aim(now)
+    local we_down = revive ~= nil and revive.downed == true
+    if not we_down then
+        if es.down_aimed then
+            for addr in pairs(es.down_aimed) do es.aim_hold[addr] = nil end
+            es.down_aimed = nil
+            log("back up: enemies go for you again")
+        end
+        return
+    end
+    if now - (es.down_aim_t or 0) < 0.5 then return end
+    es.down_aim_t = now
+    local fg, fp
+    for k = 1, 3 do
+        local skip = friend_in_cutscene(k) or (revive.down_slots and revive.down_slots[k]) or (mv.paused_slots and mv.paused_slots[k])
+        local pos = not skip and friend_pos(k)
+        local g = pos and friend_ghost(k)
+        if g then fg, fp = g, pos break end
+    end
+    if fg == nil then return end
+    for _, e in pairs(es.tracked) do
+        if not e.dead and not e.dup and not mv.puppets[e.id] and not friend_owned(e.id) and safe(e.go.call, e.go, "get_Update") == true then
+            local ep = safe(function() return e.go:call("get_Transform"):call("get_Position") end)
+            local th = ep and math.sqrt(dist2(ep, fp)) < 30 and think_of(e)
+            local tgt = th and safe(th.call, th, "get_Target")
+            if tgt ~= nil and tgt ~= fg then
+                set_target(th, fg)
+                es.down_aimed = es.down_aimed or {}
+                if not es.down_aimed[th:get_address()] then log(e.name .. " goes after your friend while you're down") end
+                es.down_aimed[th:get_address()] = true
+                es.aim_hold[th:get_address()] = fg:get_address()
+            end
+        end
+    end
+end
 function aim_regulars(now)
+    pcall(down_aim, now)
     local on = settings == nil or settings.share_molded_target ~= false
     local om = sdk.get_managed_singleton("app.ObjectManager")
     local player = om and om:get_field("PlayerObj")
@@ -1978,9 +2071,9 @@ local function update_movement(now)
             for id in pairs(mv.puppets) do release(id) n = n + 1 end
             log("cutscene: enemy following paused" .. (n > 0 and string.format(" (%d copies run on their own)", n) or ""))
         end
-        if not mv.replay and now - mv.in_t >= 1 / 30 then
+        if not mv.replay and now - mv.in_t >= SNAP_READ_EVERY then
             mv.in_t = now
-            for k = 1, 3 do pcall(read_snapshot, now, k) end
+            for k = 1, 3 do if slot_live(k) then pcall(read_snapshot, now, k) end end
         end
         return
     elseif mv.cut then
@@ -1998,10 +2091,11 @@ local function update_movement(now)
         local ok2, err2 = pcall(coop_enemy_check_skips, now)
         if not ok2 and not mv.skip_err then mv.skip_err = true log("skip check ERR " .. tostring(err2)) end
     end
-    if not mv.replay and now - mv.in_t >= 1 / 30 then
+    if not mv.replay and now - mv.in_t >= SNAP_READ_EVERY then
         mv.in_t = now
         for k = 1, 3 do
-            local ok, err = pcall(read_snapshot, now, k)
+            local ok, err = true, nil
+            if slot_live(k) then ok, err = pcall(read_snapshot, now, k) end
             if not ok and not mv.read_snap_err then mv.read_snap_err = true log("snapshot read ERR " .. tostring(err)) end
         end
     end

@@ -178,22 +178,20 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
       games load their latest save. Note it if the title screen doesn't load (then choose CONTINUE yourself).
 - [ ] **The VHS tape**: one of you puts a tape in the VCR: the other follows into it, and afterwards the tape is
       gone from both inventories.
-- [ ] **Behind the host**: the one behind uses Lobby > "Get the host's key items and weapons" (experimental).
 
 ## 14. New in v0.42
 
 - [ ] **Your friend's voice**: let an enemy hit your friend, or have them block: you hear their grunt from where
       they are (not as if it's you). Their scream if they die, a grunt when they drop down or climb up, a sound
       when they're revived. If it sounds like it's inside your head, note it and turn off **Friend's voice**.
-- [ ] **Give items**: co-op screen > **Give items**: give your friend one handgun ammo. It arrives in their
-      inventory and leaves yours. Try **All** with healing; try giving when their inventory is full (nothing moves).
+- [ ] **Give items**: co-op screen > **Give items**: give your friend one handgun ammo. It's put on the ground in
+      front of them (since v0.55) and leaves yours. Try **All** with healing.
 - [ ] **This session**: after a fight, both of you open **This session**: each sees their own counts and the
       other's (theirs show after about 20 seconds).
 - [ ] **Difficulty**: if you play on different difficulties, the Lobby says so (in red) and a message tells you.
 - [ ] **Your friend's flashlight** (experimental): both tick Options > **Your friend's flashlight**, go somewhere
       dark where the flashlight comes on: you see your friend's beam where they look. Note it if the game stutters
       or the light points the wrong way.
-- [ ] **Get the host's key items and weapons** (it found nothing before v0.42): the one behind tries it again.
 - [ ] **Close**: on sheet A, highlight Close: sheet B says "Back to the game".
 
 ## 15. New in v0.43
@@ -361,6 +359,28 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
       go to the chapter.
 - [ ] **Holding it back**: the friend sets Ready to No: the host's Start says it's waiting for them.
 - [ ] **After a start**: play for a few minutes: no "The lobby's host left" messages while you're both connected.
+
+## 28. New in v0.55
+
+- [ ] **Give items**: give your friend some ammo and a herb. Each lies on the ground in front of them; they pick it
+      up with the normal button, and it left your inventory. Their game says "it's on the ground in front of you".
+- [ ] **Discard**: discard a herb in the inventory: it's on the ground in front of you and your friend, as before.
+- [ ] **Frame rate**: compare with v0.54 in the same place: it should be a little smoother. The Molded Together
+      window's Debug section (Measure) shows the time each part takes, if you want to send us a report.
+
+## 29. New in v0.56
+
+- [ ] **Chapter 1 together**: play through Mia's fight. When she throws one of you into the wall, the other is
+      brought into the same scene and the wall is broken in both games afterwards. "You are further on in the
+      story" shouldn't keep coming up.
+- [ ] **Mia attacks both**: in her fights, stay close together: she goes after one of you, then (after about 20
+      seconds) the other, and hits whoever she's after.
+- [ ] **Molded**: in the main house, when a Molded comes out for one of you, it appears for the other too (it can
+      take a moment if they're looking right at the spot).
+- [ ] **Jack**: he moves smoothly on both screens. Let one of you go down: he goes after the one still standing.
+- [ ] **Title screen**: scroll the tape recorder up and down: every row keeps its own name. Choose CO-OP: the
+      sheets are sharp.
+- [ ] **Top left**: one line with your friend, ping, health and saving.
 
 ## Afterwards
 

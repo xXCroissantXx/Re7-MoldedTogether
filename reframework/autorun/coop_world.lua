@@ -2177,8 +2177,9 @@ local function poll_used(now)
 end
 
 -- Giving a friend who's behind the host's key items and weapons (v0.41, experimental): "inv_req"
--- asks, "inv <item:count,...>" answers, and the missing ones are made with the game's own
--- ItemManager.createItemInstance and put in the inventory with Inventory.addItem.
+-- asks, "inv <item:count,...>" answers, and the missing ones are put on the ground in front of the one
+-- who asked, to pick up (v0.55: Kingkiller1195's drop, see "Discarding an item" below; it was
+-- createItemInstance + Inventory.addItem, the pair an earlier co-op mod's sessions found crashed the game).
 local GIVE_CATS = { [1] = true, [4] = true, [8] = true, [9] = true, [10] = true }   -- weapons and key items
 -- What's in the inventory: { id, n, cat, item } per kind of item. Inventory._ItemList holds
 -- app.Inventory.ItemInfo { Owner, Item, Gun } (type dump); the id and the data are on the Item
@@ -2207,69 +2208,21 @@ function coop_inventory_list()
     end
     return table.concat(out, ",")
 end
--- One new item of that kind (stack n where it stacks) into our inventory, through the game's own
--- calls. Returns how many arrived (counted, not assumed) and why not, if none did.
-local function give_one(inv, id, n)
-    n = math.max(1, n or 1)
-    local om = sdk.get_managed_singleton("app.ObjectManager")
-    local player = om and om:get_field("PlayerObj")
-    local can = safe(inv.call, inv, "isCanAddItem(System.String, System.Int32)", id, n)
-    if can == false then return 0, "no room" end
-    -- Stacks we already have first (v0.44): no new object for what fits in them.
-    local before0 = inv_count(inv, id)
-    local list = safe(inv.get_field, inv, "_ItemList")
-    local left = n
-    for i = 0, (list and (safe(list.call, list, "get_Count") or 0) or 0) - 1 do
-        if left <= 0 then break end
-        local info = safe(list.call, list, "get_Item", i)
-        local it = info and safe(info.get_field, info, "Item")
-        if it and tostring(safe(it.get_field, it, "ItemDataID")) == id then
-            local cur = tonumber(safe(it.call, it, "getStackNum")) or 0
-            local max = tonumber(safe(it.call, it, "getMaxStackNum")) or 0
-            local add = math.min(left, max - cur)
-            if add > 0 and pcall(it.call, it, "setStackNum(System.Int32)", cur + add) then left = left - add end
-        end
-    end
-    if left <= 0 or left < n then
-        local topped = inv_count(inv, id) - before0
-        if left <= 0 or topped <= 0 then return math.max(0, topped), topped > 0 and "ok" or "it didn't go in" end
-        return topped, "ok"   -- the rest comes in the caller's next round (a new slot)
-    end
-    local td = sdk.find_type_definition("app.ItemManager")
-    local m = td and td:get_method("createItemInstance(via.GameObject, System.String)")
-    local go = (m and player) and safe(m.call, m, nil, player, id) or nil
-    local item = go and safe(go.call, go, "getComponent(System.Type)", sdk.typeof("app.Item"))
-    if item == nil then return 0, "couldn't make " .. id end
-    if n > 1 then pcall(item.call, item, "setStackNum(System.Int32)", n) end
-    local before = inv_count(inv, id)
-    local ok, res = pcall(inv.call, inv, "addItem(app.Item, via.GameObject)", item, go)
-    local got = inv_count(inv, id) - before
-    if ok and tonumber(res) == 1 or tonumber(res) == 2 then
-        log("give: " .. id .. " merged into a stack as a new object (result " .. tostring(res) .. ")")
-    end
-    if got > 0 then return got, "ok" end
-    -- Not counted. Inventory.AddItemResult: Put 0, Integration 1, IntegrationAndNoPut 2, NoPut 3,
-    -- LimitOver 4. Only when the game says it wasn't added is the new object removed (one it
-    -- did add must never be destroyed under the inventory).
-    local r = ok and tonumber(res) or nil
-    if not ok or (r ~= nil and r >= 3) then pcall(go.call, go, "destroy(via.GameObject)", go) end
-    return 0, ok and ("it didn't go in" .. (r and (" (" .. r .. ")") or "")) or tostring(res)
-end
+-- v0.55: nothing is put into an inventory by this mod any more. give_one (v0.42-v0.54) made the item with
+-- ItemManager.createItemInstance and pushed it in with Inventory.addItem; an earlier co-op mod's real
+-- sessions found that pair crashed the game every time it made an object (Kingkiller1195's notes, NOTES.md
+-- "Discard drops the item for your friend"). A gift is now a world item put down in front of the player
+-- with ItemManager.createDropItemInstance (ws.spawn_world_item, set up with the discard drop below), picked
+-- up with the game's own pickup, which also deals with a full inventory.
+-- The host's key items and weapons (v0.41-v0.54, experimental) are retired in v0.55. A drop can't carry them:
+-- bot test 2026-11-14, createDropItemInstance makes a supply into a real pickup ("..._Get", with
+-- InteractMaterialControl: picked up with the game's own button, herbs 3 -> 5, shells 7 -> 10) but every weapon
+-- and key item into a bare "..._Item" object nobody can pick up (Fuse, Battery, RepairKit, all guns, the knife).
+-- The only other way in is the crash-prone createItemInstance + addItem. An old version's "inv" answer is
+-- ignored: this says so and puts nothing anywhere.
 function coop_give_missing(list_text)
-    local inv = active_inventory()
-    if inv == nil then return 0, "no inventory" end
-    local given = 0
-    for id, n in tostring(list_text):gmatch("([^:,]+):(%d+)") do
-        local want, have = tonumber(n), inv_count(inv, id)
-        for _ = 1, math.max(0, want - have) do
-            local got, why = give_one(inv, id, 1)
-            log(string.format("give %s: %s (%d -> %d)", id, why, have, inv_count(inv, id)))
-            if got <= 0 then break end
-            have = inv_count(inv, id)
-            given = given + got
-        end
-    end
-    return given
+    log("host's key items and weapons: not given (retired in v0.55: they can't be put down to pick up)")
+    return 0, "retired"
 end
 
 -- Giving a friend an item (v0.42) ------------------------------------------------------------
@@ -2277,9 +2230,10 @@ end
 --   "give <token> <to> <item> <n>"  ours, to the friend with SteamID <to>
 --   "give_ok <token> <n>"           theirs: n of them are in their inventory now
 --   "give_no <token> <why>"         theirs: nothing arrived (no room...)
--- The friend's game makes the item and puts it in its inventory with the game's own calls,
--- and counts what arrived; only then is ours taken (Inventory.reduceItem). No answer in 10 s:
--- nothing is taken, so an item is never lost on the way.
+-- The friend's game puts the item on the ground in front of them (v0.55: Kingkiller1195's drop,
+-- createDropItemInstance; it went into their inventory before) and says it's there; only then is ours
+-- taken (Inventory.reduceItem with false: true on a whole entry crashed the earlier mod). No answer in
+-- 10 s: nothing is taken, so an item is never lost on the way.
 local SHARE_CATS = { [0] = true, [2] = true, [3] = true, [7] = true, [8] = true }   -- other, ammo, healing, materials, throwables
 ws.gives = ws.gives or {}         -- our token -> { to, id, n, t, name }
 ws.give_seen = ws.give_seen or {} -- tokens we answered (an event can't arrive twice, but just in case)
@@ -2339,25 +2293,23 @@ local function on_give(token, to, id, n)
     local st = coop_net_state and coop_net_state()
     local me = st and st.kv and st.kv.steamSelf
     local udp = st and st.kv and st.kv.mode == "udp"
-    if not ((me ~= nil and to == me) or (udp and to == "0")) then return end   -- for someone else ("0": the udp friend)
+    -- For someone else? A udp link has one friend: "0" (v0.44-v0.53) or the lobby's port id "9<port>" (v0.54).
+    if not ((me ~= nil and to == me) or (udp and (to == "0" or to:match("^9%d+$") ~= nil))) then return end
     if ws.give_seen[token] then return end
     ws.give_seen[token] = true
-    local inv = active_inventory()
-    if inv == nil then send("give_no " .. token .. " not_playing") return end
-    local got, why, left = 0, "?", n
-    -- A big stack may go in as more than one slot.
-    for _ = 1, 8 do
-        if left <= 0 then break end
-        local g, w = give_one(inv, id, left)
-        why = w
-        if g <= 0 then break end
-        got, left = got + g, left - g
-    end
-    log(string.format("friend gave %s x%d: %d arrived (%s)", id, n, got, why))
-    if got > 0 then
-        send(string.format("give_ok %s %d", token, got))
-        note(string.format("%s gave you %s x%d", coop_event_slot and coop_event_slot > 1 and ("Friend " .. coop_event_slot) or "Your friend",
-            coop_item_name(id), got))
+    if active_inventory() == nil then send("give_no " .. token .. " not_playing") return end
+    n = math.max(1, math.min(999, math.floor(tonumber(n) or 1)))
+    -- Only what Give items offers (ammo, healing, materials...): checked here too.
+    local cat = item_category(id)
+    if cat == nil or not SHARE_CATS[cat] then send("give_no " .. token .. " not_shared") return end
+    local spawn = ws.spawn_world_item
+    if spawn == nil then send("give_no " .. token .. " no_drop_call") return end
+    local ok, why = spawn(id, n)   -- in front of our feet
+    log(string.format("friend gave %s x%d: %s", id, n, ok and "put down in front of us" or ("not put down (" .. tostring(why) .. ")")))
+    if ok then
+        send(string.format("give_ok %s %d", token, n))
+        note(string.format("%s gave you %s x%d: it's on the ground in front of you", coop_event_slot and coop_event_slot > 1 and ("Friend " .. coop_event_slot) or "Your friend",
+            coop_item_name(id), n))
     else
         send("give_no " .. token .. " " .. tostring(why):gsub("%s+", "_"))
     end
@@ -2376,7 +2328,10 @@ local function on_give_reply(token, ok, val)
         if coop_stat then pcall(coop_stat, "given", n) end
     else
         local why = tostring(val or "?"):gsub("_", " ")
-        ws.give_msg = { text = string.format("%s couldn't take %s: %s", g.to_name, g.name, why), color = 0xFF7FE6FF, t = os.clock() }
+        local reasons = { ["not playing"] = "isn't in the game right now", ["not shared"] = "can't be given that kind of item",
+            ["no player"] = "isn't in the game right now", ["not drawn"] = "couldn't have it put down there", ["no object"] = "couldn't have it put down there", ["no pickup"] = "couldn't have it put down to pick up" }
+        why = reasons[why] or why
+        ws.give_msg = { text = string.format("%s couldn't take %s: %s (you keep it)", g.to_name, g.name, why), color = 0xFF7FE6FF, t = os.clock() }
     end
     note(ws.give_msg.text)
 end
@@ -2470,6 +2425,28 @@ do
             obj = ms and safe(m.call, m, nil, go, ms, n) or nil
         end
         if obj == nil then return nil, "no_object" end
+        -- v0.55: only a real pickup counts. Bot test 2026-11-14: supplies come out as "..._Get" objects with an
+        -- app.InteractMaterialControl (the game shows its pickup prompt and its button picks them up); weapons and
+        -- key items come out as bare "..._Item" objects nobody can pick up. One without it is removed again (it's
+        -- ours, made a moment ago, in no inventory) and the drop counts as failed, so a gift is never taken from
+        -- the giver for something nobody can pick up. When the parts can't be read, it's kept as before.
+        do
+            local comps = safe(obj.call, obj, "get_Components")
+            local readable, found = false, false
+            for j = 0, (comps and tonumber(safe(comps.call, comps, "get_Count")) or 0) - 1 do
+                local c = safe(comps.call, comps, "get_Item", j)
+                local td = c and c.get_type_definition and safe(c.get_type_definition, c)
+                local nm = td and safe(td.get_name, td)
+                if nm then
+                    readable = true
+                    if nm == "InteractMaterialControl" then found = true break end
+                end
+            end
+            if readable and not found then
+                pcall(obj.call, obj, "destroy(via.GameObject)", obj)
+                return nil, "no_pickup"
+            end
+        end
         -- Made as the player's child, at the player's position: let go of the player, then move it
         -- (set_Position doesn't stick while parented: the box drops in coop_world did the same).
         local tr = safe(obj.call, obj, "get_Transform")
@@ -2483,6 +2460,8 @@ do
         if safe(obj.call, obj, "get_Draw") ~= true then return nil, "not_drawn" end
         return true, x, y, z
     end
+    -- v0.55: Give items and the host's key items use this too (a world item to pick up, never an inventory add).
+    ws.spawn_world_item = spawn_world_item
 
     -- The discard hook: it only watches. Pre reads the item's name and count (fields only: nothing is
     -- called in the middle of the game's own discard); post reads whether it went through.
@@ -2604,7 +2583,7 @@ do
         if ok then return end
         local text = tostring(why or "?"):gsub("_", " ")
         local reasons = { ["too far"] = "is too far away to see it", ["other chapter"] = "is in another part of the game",
-            ["switched off"] = "has dropping discarded items switched off", ["not shared"] = "can't share that kind of item" }
+            ["switched off"] = "has dropping discarded items switched off", ["not shared"] = "can't share that kind of item", ["no pickup"] = "couldn't have it put down to pick up" }
         note(string.format("your friend %s: the %s you dropped is only on your ground", reasons[text] or ("couldn't see it (" .. text .. ")"), item_text(o.id)))
     end
 

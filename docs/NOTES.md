@@ -2021,3 +2021,46 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   'host left' and wiped its lobby. kv() keeps the last good reading 30 s; host-left needs 20 s (open) / 60 s
   (started) of silence. udp links: lobby ids are '9<port>' from coopnet_config.json (the two test copies share
   one SteamID). Bot tools: bottest/title_pair.py, lobby_title_test.py, title_steps.lua, cutin_probe*.lua.
+- v0.55 (2026-11-14, Kingkiller1195's drop for gifts + slot reads). Give items: the receiver puts the gift down with
+  ws.spawn_world_item (his createDropItemInstance path) in front of its player and answers give_ok; the giver's
+  Inventory.reduceItem(id, n, false) only then. give_one (createItemInstance + addItem) is deleted: nothing adds to
+  an inventory any more. Bot test: Herb x2 and ShotgunBullet x3 given, put down, picked up with the pad's Decide
+  (herbs 3->5, shells 7->10). Pickup needs the camera on the item (aim_item.lua moved it for the test).
+  createDropItemInstance survey (drop_survey2.lua): supplies make '..._Get' objects with InteractMaterialControl
+  (HandgunBullet, ShotgunBullet, MagnumBullet, Herb, EyeDrops, RemedyM/L, Gunpowder, Coin): real pickups; key
+  items and weapons make bare '..._Item' objects (Fuse, Battery, RepairKit, every gun, Knife, Burner) with no
+  prompt. spawn_world_item now destroys one without InteractMaterialControl and fails 'no_pickup' (parts
+  unreadable: kept). Colliders/ObjectLabel are NOT the marker (shells have neither and pick up). coop_give_missing
+  and the lobby's 'Get the host's key items and weapons' retired for that reason.
+  Debug section Measure on the two test copies (60 s, both in a save, linked): 406 / 480 ms of callback time per
+  second, no row threw. REFramework fs.read: 0.82 ms for a missing file, 1.9 ms coopnet_in.txt, 1.7 ms status.
+  Slots 2-3 ran net_io (fs.read of coopnet_in2/3.txt each frame) and the enemy sync read coopnet_es_in_2/3.txt
+  30x/s with nobody there. coop_slot_in_use(k) (peer<k>= in the status; unreadable -> true) gates both: 270 /
+  322 ms per second after, frame rate 32.6->36.0 and 38.4->43.1. Biggest left: slot 1's ghost + link (~65 ms/s
+  each), mostly the friend-file read. on_give accepts the v0.54 udp port id '9<port>' (gifts over udp were dropped).
+- v0.56 (2026-11-14 evening session fixes). Story deadlock: hold_for_cutscene()/busy_here() held the friend's
+  steps, evend, btlend and scenes while ANY own event ran; c01e00_01 (opening drive, 155 s) and c01e01_01 (Mia fight
+  background, 288/637 s) stay 'running' and only end as the flow moves -> one game sat behind for minutes. Bot test:
+  New Game -> chapterJumpRequest('Chapter1_Start') -> copy 1 in the drive (c01e00_01) never ended with copy 0's step
+  600 held. only_long_scenes(): all ss.running entries older than LONG_SCENE_S 130 (dinner c03e00_00 is 102 s) ->
+  not held. After: copy 1 stepped 200->600 at 130 s; SR.play('c01e04_00') (Mia wall throw) on copy 0 -> copy 1
+  joined within 1 s ('host leads', brought from 131 m), both at step 800. The wall is the flow object
+  '800_2ndBattleWallChange' (step 800), not the scene: same in both worlds once both reach 800. ChainCutter object
+  sits in c01 B1 (bolt cutters); chain 'cut by hand' skips the game's own logic but the steps come from the host.
+  Molded: requestSpawn(s, 0) waits while the spot is in view (spawned+alive, no EnemyInstance; a spot 10 m in view
+  waited 1 min+, one out of view came out in 2 s); requestSpawn(s, true, 0) raised c0000005 inside the game (caught)
+  -> never used; spawnInstance() did nothing. spawn_want kept 90 s (was 20) and a pending request no longer counts
+  as done. Enemy playback delay = max(0.25, net.delay + 1/15), cap 0.6 (was fixed 0.25; session link 185 ms RTT,
+  113 ms late). check_handoffs: while down, ANY shared enemy within 30 m goes to a standing friend (was bosses and
+  Molded only: roaming Jack Em3000 stayed); if ours keeps it, down_aim() setTarget's it on the friend's ghost with
+  the aim_hold. Title: TitleSubMenu.DofControllerCompo (app.DOFController) + its DepthOfField set_Enabled(false)
+  while the co-op screen is open (both were on in the bots); slot texts are literal via.gui.message.get(ElemMsgID)
+  every frame (row_text). Ghost watchdog (coop_dummy model_problem): no parts / none alive / none drawn / at origin
+  / >8 m from the newest sample / first part >3 m from the dummy -> 3 bad checks -> build_ethan (20 s, 3 per 2 min).
+  Perf: net_io read gate 1/30 (was 1/60; fs.read coopnet_in ~1.8 ms), snapshot reads 1/20 (was 1/30): 270->214,
+  322->251 ms/s; fps 36->39, 43->46.5. HUD: one header line + transient lines on a 0x8C000000 panel.
+  Boss turns: check_handoffs hands a BOSS_HANDOFF boss to a friend within BOSS_TURN_R 12 m after BOSS_TURN_S 20 s
+  with us (mv.mine_since), not within HOLD_R; bot test: copy 0 -> copy 1 at 00:16:44, back at 00:17:14. In RE7 an
+  enemy only attacks its own game's player, so this is how Mia (and Jack's boss fights) get to both. Mia's 2nd battle
+  after c01e04_00 stood idle in the bots (waits on player actions): her attacks on the friend aren't bot-verified.
+  Not tested: the garage fight (no friend log; my log starts after it), a real Molded spawn in front of the friend.

@@ -62,6 +62,18 @@ sdk.find_type_definition = function(name)
                         set_DrawSelf = function(v) rec.draw_self = v end,
                         set_UpdateSelf = function(v) rec.update_self = v end,
                         get_Draw = function() return not NOT_DRAWN end,
+                        -- v0.55: the parts list. Nil (unreadable) unless a test sets NO_PICKUP / PICKUP_PARTS:
+                        -- a supply drop has an InteractMaterialControl, a key item's or weapon's doesn't.
+                        get_Components = function()
+                            if not (NO_PICKUP or PICKUP_PARTS) then return nil end
+                            local names = NO_PICKUP and { "Transform", "Item" } or { "Transform", "Item", "Mesh", "InteractMaterialControl" }
+                            local list = {}
+                            for _, nm in ipairs(names) do
+                                list[#list + 1] = { get_type_definition = function() return { get_name = function() return nm end } end }
+                            end
+                            return obj2({}, { get_Count = function() return #list end, get_Item = function(i) return list[i + 1] end })
+                        end,
+                        ["destroy(via.GameObject)"] = function() rec.destroyed = true end,
                     })
                     WORLD[#WORLD + 1] = rec
                     return o

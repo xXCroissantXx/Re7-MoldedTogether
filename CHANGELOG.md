@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.56 (2026-11-14)
+Fixes from last night's session: the story no longer gets stuck behind long events, and a lot less lag.
+
+- **Mia's wall and the story falling behind.** Some story events keep running while you play (the opening drive,
+  part of the Mia fight). The mod waited for them to end before copying your friend's story, and they only end
+  when the story moves on, so one game could sit behind for minutes: Mia's wall throw (and the wall breaking,
+  which happens at that story step) never reached the other game, and "you are further on in the story" kept
+  coming up. Now a story event that has run over two minutes doesn't hold anything back. Bot test: the friend's
+  game caught up and played Mia's wall throw within a second, and the wall changed in both games.
+- **The Molded now come out for both of you.** The game won't bring a Molded out where the player is looking, and
+  your friend's game only asked for 20 seconds; it now keeps asking for 90 and doesn't give up early.
+- **Mia goes after both of you.** She used to change games only when the other player was clearly nearer and she
+  wasn't on top of anyone, so in a fight she stayed on one player the whole time. Now the two games take turns
+  running her (about 20 seconds each while you're both within 12 m), and each game's Mia attacks its own player,
+  so she goes after each of you in turn. The same goes for Jack's boss fights.
+- **Jack**: smoother (enemies on your friend's screen now follow the measured connection, like your friend does,
+  instead of a fixed delay), and when you're down he goes to the friend who's still standing, or at least turns
+  on them, instead of standing over you.
+- **Title screen**: scrolling the tape recorder no longer leaves NEW GAME on other rows, and the co-op screen is
+  no longer blurry (the game's depth of field is switched off while it's open, and back on after).
+- **Your friend's character checks itself** every 2 seconds and rebuilds when it's broken (missing, invisible,
+  stuck somewhere else, or the model left behind its name tag).
+- **Less lag.** The mod now does about half the work per frame it did in v0.54 (measured on the test PC:
+  406 to 214 and 480 to 251 ms per second; frame rate up from 33 to 39 and 38 to 46 fps).
+- **Tidier screen**: the top left is one line (who you're with, ping, their health, saving) plus anything that
+  matters right now; the bottom left uses one panel.
+
+## v0.55 (2026-11-14)
+Steadier: gifts go on the ground, and the mod does a third less work every frame.
+
+- **Give items puts the gift on the ground** in front of your friend, to pick up like any item, using
+  Kingkiller1195's item drop (the one discarded items use). It used to be pushed straight into their inventory,
+  the way an earlier co-op mod found crashed the game. It still leaves your inventory only once it's down.
+- **Only real pickups are put down.** The game can make ammo, healing, gunpowder and coins into items to pick up,
+  but turns weapons and key items into objects nobody can pick up. Those are now refused (you keep yours) instead
+  of being lost on the floor. This covers dropping discarded items too.
+- **"Get the host's key items and weapons" is gone** (it was experimental): the game can't put those down to pick
+  up, and the only other way in could crash the game.
+- **Less work every frame.** Kingkiller1195's Debug section showed the mod reading the files for friend places 2
+  and 3 many times a second even with nobody in them (each read costs almost a millisecond). Empty places now read
+  nothing. On the test PC the mod's time per second fell by a third (406 to 270 ms and 480 to 322 ms) and the
+  frame rate went up (33 to 36 and 38 to 43 fps).
+- Fixed: a gift over a direct (LAN or IP) link was ignored since v0.54.
+
 ## v0.54 (2026-11-14)
 The co-op screen is on the game's own paper, and you can start from the lobby as soon as a friend connects.
 

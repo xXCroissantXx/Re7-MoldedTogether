@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.54; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.56; formerly coop-re7)
 Created by xXCroissantXx & Kingkiller1195
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
@@ -22,7 +22,7 @@ climb and fight where they do, over Steam (no port forwarding).
 | **Story** | Story progress one of you makes counts for everyone, step by step, the way the game itself steps. Cutscenes play for everyone in first person; phone calls and scripted moves (the fridge, the pot, the sheet metal) play on the player who does them while the others hear them, and they count for all. The host's game leads; a friend who's behind catches up. **VHS tapes:** when your friend puts one in, you follow them into it. |
 | **Doors, drawers, lockers, boxes** | A door unlocked, opened or closed in one game does the same in the others. Drawers and lockers open and shut for all; a breakable box smashed by one disappears for the others (no pieces), and each of you gets its item. Body bags kicked in the morgue swing for everyone. |
 | **Puzzles and key items** | A key item used in its lock (the dog heads, the statue) does its job in every game. The shadow puzzles and the basement cremator are solved for everyone. One-off interactions (the fridge, the van, the pot, switches) happen in every game. |
-| **Giving items** | Give your friend ammo, healing or crafting materials from the co-op screen (**Give items**): it leaves your inventory only once it's in theirs. |
+| **Giving items** | Give your friend ammo, healing or crafting materials from the co-op screen (**Give items**): it's put on the ground in front of them to pick up, and leaves your inventory once it's there. |
 | **Supplies** | Each player gets their own ammo, healing and crafting materials. For a harder game, tick **Share supplies**: then there's one copy, and whatever one player picks up disappears for the others. Weapons, keys, files and maps always stay for everyone, so nobody gets stuck; when one of you takes one, the others are told to pick it up too. |
 | **Deaths** | With a friend connected, a fatal hit (also in a grab or a boss fight) puts you **down** instead of a game over, until a friend stands next to you for 3 seconds. It's a real game over only when everyone is down. |
 | **Pausing** | The others see "Your friend paused the game"; enemies your game was running carry on in theirs. |
@@ -120,8 +120,8 @@ The Lobby then says "Full character models: installed".
    items**, which then has you picked, with your health.
 8. **You appear as** (main page): how your friends see you (Ethan, Mia, Mia (ship), Clancy, Zoe, Chris, Joe).
 9. **Give items**: pick a friend and how many (one, half or all), then the ammo, healing or material to give.
-   Your friend's game puts it in their inventory and says how many arrived; only then does it leave yours (no
-   room on their side: nothing moves).
+   Your friend's game puts it on the ground in front of them, to pick up like any item; only once it's there
+   does it leave yours (if it can't be put down, nothing moves).
 10. **This session**: how long you've played together, and for each of you the enemies taken down, shots, hits
    taken, times down and back up, heals and items given.
 
@@ -136,8 +136,9 @@ once. The host can remove a player: pick their row in the Lobby. A friend whose 
 after 30 seconds; friends you played with in the last week reconnect by themselves when they invite you again.
 
 **Behind in the story?** The host's game leads: its story steps play out in the others' games too, and a friend
-who joins later catches up. The Lobby shows who's behind or ahead. A friend who's behind the host can choose
-**Get the host's key items and weapons** (experimental); a friend who's ahead keeps their own.
+who joins later catches up. The Lobby shows who's behind or ahead. Key items and weapons are each player's own
+(the experimental "Get the host's key items and weapons" was removed in v0.55: the game can't put them down to
+pick up, and the other way in could crash the game).
 
 **Meeting up.** If your friend is in another chapter: co-op menu > **Help and fixes** > **Go to your friend's
 chapter**: you start at the beginning of their chapter, then walk to each other. Nothing from the jump is saved
