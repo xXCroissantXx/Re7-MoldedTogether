@@ -2100,3 +2100,14 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   cutscene or hold_for_cutscene(); bot run 2026-11-24 at Chapter324_Start: the host's C04_1_Main_MiaEventEnd
   reached the loading guest, c04_1 0 -> 25 at once, and the guest's step-0 FSMs were switched off half done
   (0_4-1MiaEventStart at KickEvent, 0_Init_Inventory4-1Start at StartState; host: end / Set).
+- v0.59 (2026-11-24, Jack's grabs on the copy). A grab jacks the enemy's layer 0 (TreeLayer get_Jacked,
+  get_JackFrom; bank 0, mid ticking) from a child via.motion.MotionJackFsm (an Fsm with its own banks: _EM/_PL
+  pairs per grab: CommonHeadButt, CommonKnee, CommonThrowL/R, CommonMount, CommonTurn, Chapter3Battle1CutLeg,
+  ...; idle: disabled, TargetGameObject nil, first state). The game starts it through app.MotionManager
+  .setExternalTask(TaskSetting{Owner=half GO, setJackFsm(fsm,false), setJackMotionParam(MotionParam{StartFrame,
+  InterpFrame, InterpMode 2, InterpCurve 0}), LayerDelegateMoveFlag 1, LayerFSMMoveFlag -1}); clearExternalTask
+  ends it; layer changeMotion unjacks. Scenes use the same API with their own jack objects (not children).
+  coop_enemies: owner appends ' J:<half>:<state>' to the enemy sample when jacked from its own child (grab_of);
+  copy (drive) runs the same half via its MotionManager with no Delegate (no grab logic, no player half), follows
+  state changes and frame drift >20, and clears on the owner's end / release / save / orphan. Bot test
+  local/bottest/grab_sync_test.py (grab started on the owner by hand as the game does).

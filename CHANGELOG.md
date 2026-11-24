@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.59 (2026-11-24)
+Jack's grabs show on your friend's screen.
+
+- **Jack's grabs are shared.** When Jack grabs one of you (the headbutt, the knee, a throw, pinning you down, the
+  Chapter 3 leg cut and neck slash), the game doesn't play an ordinary move: it hands his whole body to a grab
+  animation he carries for each of them, paired with one for the player. The other game had no way to play that, so
+  its Jack stood frozen in the swing that started the grab, for as long as it lasted. Now the other game plays the
+  same grab on its Jack, at the same moment and through each of its stages, and lets go when it ends. Only Jack's
+  side is played there: nothing grabs the player in that game. The same goes for any enemy that grabs this way.
+
 ## v0.58 (2026-11-24)
 Play the whole story in co-op on the default settings.
 

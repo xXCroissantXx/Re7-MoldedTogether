@@ -1055,6 +1055,108 @@ local function layer0(e)
     return e.layer
 end
 
+-- Grabs (v0.58). When Jack grabs a player, the game doesn't play a clip from one of his banks: it hands his whole
+-- pose to a "grab half", one of the MotionJackFsm objects he carries as children in _EM/_PL pairs (CommonHeadButt,
+-- CommonKnee, CommonThrowL/R, CommonMount, Chapter3Battle1CutLeg/NeckSlash...), through his MotionManager's external
+-- task. His layer then reports bank 0 and is "jacked" from that child. A copy can't play that from any bank, so it
+-- stood frozen in the attack that started the grab (about 16 s in a bot fight, 2026-11-24). The owner now adds the
+-- grab to the sample (" J:<half>:<state>"), and the copy runs its own copy of that half the same way the game does,
+-- the enemy half only: no motion delegate, so none of the game's grab logic (camera, the player's half) runs.
+local function grab_of(e, L)
+    if safe(L.call, L, "get_Jacked") ~= true then return nil end
+    local jf = safe(L.call, L, "get_JackFrom")
+    if jf == nil then return nil end
+    -- Only the enemy's own grab halves (children of its body); a scene's jack objects play in both games anyway.
+    local tr = safe(jf.call, jf, "get_Transform")
+    local p = tr and safe(tr.call, tr, "get_Parent")
+    local pg = p and safe(p.call, p, "get_GameObject")
+    if pg == nil or pg:get_address() ~= e.go:get_address() then return nil end
+    local f = safe(jf.call, jf, "getComponent(System.Type)", sdk.typeof("via.motion.MotionJackFsm"))
+    local st = f and safe(f.call, f, "getCurrentState", 0)
+    local name = safe(jf.call, jf, "get_Name")
+    if not (name and st) then return nil end
+    return (tostring(name):gsub("[%s:]", "~")) .. ":" .. (tostring(st):gsub("%s", "~"))
+end
+local function grab_half(e, name)
+    e.grab_halves = e.grab_halves or {}
+    local h = e.grab_halves[name]
+    if h then return h end
+    local tr = safe(e.go.call, e.go, "get_Transform")
+    local c = tr and safe(tr.call, tr, "get_Child")
+    local n = 0
+    while c and n < 200 do
+        n = n + 1
+        local g = safe(c.call, c, "get_GameObject")
+        if g and safe(g.call, g, "get_Name") == name then
+            local f = safe(g.call, g, "getComponent(System.Type)", sdk.typeof("via.motion.MotionJackFsm"))
+            if f then h = { go = g, f = f } break end
+        end
+        c = safe(c.call, c, "get_Next")
+    end
+    e.grab_halves[name] = h or false
+    return h
+end
+local SET_STATE = "setCurrentState(System.String, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)"
+local function grab_stop(e, why)
+    local g = e.grab
+    if g == nil then return end
+    e.grab = nil
+    if g.mm then safe(g.mm.call, g.mm, "clearExternalTask") end
+    e.cur_bank, e.cur_mid = nil, nil   -- the owner's clip is played again, which ends the jack on the layer
+    log(string.format("%s copy: grab %s over (%s)", e.name, g.name, why or "the owner's is over"))
+end
+local function grab_follow(e, grab, frame, L, now)
+    local name, state = grab:match("^([^:]+):(.+)$")
+    if not name then return end
+    state = state:gsub("~", " ")
+    local g = e.grab
+    if g and g.name == name then
+        if g.state ~= state then
+            safe(g.half.f.call, g.half.f, SET_STATE, state, 0, frame or 0.0, 8.0, 2, 0)
+            g.state, g.fix_t = state, now
+        elseif frame and L and now - (g.fix_t or 0) >= 1 then
+            -- Drifted (a state change can come with the last state's frame): back to the owner's frame.
+            local f = tonumber(safe(L.call, L, "get_Frame"))
+            if f and math.abs(f - frame) > 20 then
+                g.fix_t = now
+                safe(g.half.f.call, g.half.f, SET_STATE, state, 0, frame, 4.0, 2, 0)
+            end
+        end
+        return
+    end
+    if g then grab_stop(e, "another grab") end
+    local half = grab_half(e, name)
+    if not half then
+        if not e.grab_missing_logged then
+            e.grab_missing_logged = true
+            log(string.format("%s copy: the owner's grab %s isn't on this body", e.name, name))
+        end
+        return
+    end
+    e.mm = e.mm or safe(e.go.call, e.go, "getComponent(System.Type)", sdk.typeof("app.MotionManager"))
+    if e.mm == nil then return end
+    local ok, err = pcall(function()
+        safe(half.f.call, half.f, SET_STATE, state, 0, frame or 0.0, 0.0, 2, 0)
+        local ts = sdk.create_instance("app.MotionManager.TaskSetting", true)
+        ts:add_ref()
+        pcall(ts.call, ts, ".ctor")
+        ts:set_field("Owner", half.go)
+        ts:call("setJackFsm", half.f, false)
+        local mp = sdk.create_instance("app.MotionManager.MotionParam", true)
+        pcall(mp.call, mp, ".ctor")
+        mp:set_field("StartFrame", (frame or 0.0) + 0.0)
+        mp:set_field("InterpFrame", 8.0)
+        mp:set_field("InterpMode", 2)
+        mp:set_field("InterpCurve", 0)
+        ts:call("setJackMotionParam", mp)
+        ts:set_field("LayerDelegateMoveFlag", 1)
+        ts:set_field("LayerFSMMoveFlag", -1)
+        e.mm:call("setExternalTask", ts)
+        e.grab = { name = name, state = state, half = half, mm = e.mm, ts = ts }
+    end)
+    log(string.format("%s copy: grab %s (%s) played as in the owner's game%s", e.name, name, state, ok and "" or (" ERR " .. tostring(err))))
+end
+
 local function yaw_of(q) return 2 * math.atan(q.y, q.w) end
 
 -- Held weapons. Each enemy's app.EquipManager has its own weapons (ManagedWeapons; Jack:
@@ -1158,12 +1260,16 @@ local function enemy_line(e)
     local p, q = tr:call("get_Position"), tr:call("get_Rotation")
     local L = layer0(e)
     if L == nil then return nil end
+    local grab = grab_of(e, L)
     return string.format("%s %.3f %.3f %.3f %.4f %d %d %.2f %.3f %s", e.id, p.x, p.y, p.z, yaw_of(q),
         L:call("get_MotionBankID") or 0, L:call("get_MotionID") or 0, L:call("get_Frame") or 0, L:call("get_Speed") or 1,
-        safe(held_weapon, e) or "-")
+        safe(held_weapon, e) or "-") .. (grab and (" J:" .. grab) or "")
 end
 
 local function parse_line(line)
+    local grab
+    local base, g = line:match("^(.-) J:(%S+)$")   -- v0.58: the owner's enemy is in a grab
+    if base then line, grab = base, g end
     local id, x, y, z, yaw, bank, mid, frame, speed, weapon =
         line:match("^(%S+) (%S+) (%S+) (%S+) (%S+) (%-?%d+) (%-?%d+) (%S+) (%S+) (%S+)$")
     if id == nil then
@@ -1173,7 +1279,7 @@ local function parse_line(line)
     if id == nil then return nil end
     return id, { x = tonumber(x), y = tonumber(y), z = tonumber(z), yaw = tonumber(yaw),
         bank = tonumber(bank), mid = tonumber(mid), frame = tonumber(frame), speed = tonumber(speed),
-        weapon = weapon }
+        weapon = weapon, grab = grab }
 end
 
 local function push_hist(id, s, t)
@@ -1500,6 +1606,7 @@ local function release(id)
     mv.puppets[id] = nil
     mv.hist[id] = nil
     if e then
+        if e.grab then pcall(grab_stop, e, "the copy is ours again") end
         safe(set_brain, e, true)
         e.cur_bank, e.cur_mid = nil, nil
         log("puppet off: " .. e.name .. " " .. id)
@@ -1512,6 +1619,7 @@ end
 function coop_enemy_orphan(e, sleep)
     if mv.puppets[e.id] == e then
         mv.puppets[e.id] = nil
+        if e.grab then pcall(grab_stop, e, "the body isn't that copy any more") end
         safe(set_brain, e, true)
         e.cur_bank, e.cur_mid = nil, nil
     end
@@ -1528,6 +1636,7 @@ function release_for_save(id)
     local e = mv.puppets[id]
     mv.puppets[id] = nil
     if e then
+        if e.grab then pcall(grab_stop, e, "a save") end
         safe(set_brain, e, true)
         e.cur_bank, e.cur_mid = nil, nil
     end
@@ -1712,6 +1821,14 @@ local function drive(e, h, now)
     local s = (k > 0.5) and b or a
     local L = layer0(e)
     if L == nil then return end
+    -- A grab (v0.58, see grab_of): the copy runs the same grab half; nothing else touches its layer meanwhile.
+    if s.grab then
+        local ok, err = pcall(grab_follow, e, s.grab, s.frame, L, now)
+        if not ok and not e.grab_err then e.grab_err = true log("grab ERR " .. tostring(err)) end
+        if e.grab then return end
+    elseif e.grab then
+        pcall(grab_stop, e)
+    end
     -- Something else put another clip on the copy (v0.57): the game's own handling of an enemy whose AI is off set
     -- its idle (10/1000) back after we'd played the owner's 10/8000, and since the owner's clip didn't change, the
     -- copy stood in the wrong pose for good (bot test 2026-11-20). Played again whenever the body isn't on ours.
@@ -2355,7 +2472,7 @@ local function update_movement(now)
         while r.i <= #r.frames and r.frames[r.i].rt <= now - r.t0 do
             local f = r.frames[r.i]
             push_hist(r.id, { x = f.x, y = f.y, z = f.z, yaw = f.yaw, bank = f.bank, mid = f.mid, frame = f.frame,
-                speed = f.speed, weapon = f.weapon }, now)
+                speed = f.speed, weapon = f.weapon, grab = f.grab }, now)
             r.i = r.i + 1
         end
         if r.i > #r.frames and now - r.t0 > r.frames[#r.frames].rt + 3.5 then

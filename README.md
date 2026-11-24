@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.58; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.59; formerly coop-re7)
 Created by xXCroissantXx & Kingkiller1195
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
@@ -241,7 +241,8 @@ your friend's weapon in hand, ladders, on-screen status and the shared switches)
   game runs its own copy of the fight; only Jack and Mia are run by one game for both so far.
 - **Bosses and Molded** are run by the nearest player's game and copied to the others. The copies were checked by
   bots (the same place to within about a metre, usually a few centimetres); a fast lunge can look a little behind on
-  the other screen. A Molded's grab and Mia's attacks on a friend haven't been seen in a real session yet.
+  the other screen. Jack's grabs play on the other screen too (since v0.59). A Molded's grab and Mia's attacks on
+  a friend haven't been seen in a real session yet.
 - **Story:** phone calls and scripted moves play on the friend's character; how that looks on screen hasn't been
   checked in a real session. Keys and story items are picked up by each player separately (you're told when your
   friend takes one), because some scripted events follow that player's own pickup. If a cutscene ever hangs and you
