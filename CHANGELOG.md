@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.61 (2026-11-24)
+Both of you reach the ending.
+
+- **The ending follows the host.** When one game goes on to a later chapter, the other follows it, but the ending
+  wasn't on that list, and during its movie a game sends nothing the other could follow anyway. So if the host's
+  game went into the ending after the last fight and the guest's didn't by itself, the guest was left in Chapter 4.
+  Now a game that goes from Chapter 4 into the ending tells the other, and the guest's game follows 12 seconds
+  later if it hasn't gone already (15 seconds in the bot test).
+- **Saving in the ending.** A jump the co-op makes switches saving off until you're playing again, which the
+  ending (one long movie) never was: the game's save at the end of it couldn't be written. Saving now comes back on
+  as soon as the jump into the ending has loaded.
+- All of Chapter 4 checked on the test bots, step by step and with its scenes: both games stayed at the same story
+  step from the ship to the end of the salt mine, with their story objects the same.
+
 ## v0.60 (2026-11-24)
 Jack is shared from the start of the garage fight.
 

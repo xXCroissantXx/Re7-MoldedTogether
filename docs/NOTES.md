@@ -2120,3 +2120,13 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   Bot test local/bottest/jack_share_test.py x3: first pair 0-4 s after the scene (was ~40 s), unshared gaps
   <=5 s (hand-overs, 6 s quiet take-back when a player is down). Natural grabs on the copy: HeadButt, Knee,
   ThrowL, Turn, ShovelLift, FinishNeck.
+- v0.61 (2026-11-24, the ending). coop_dummy CHAPTER_ORDER_V gets [17] = 7 (EndingMovie). A game in the ending
+  sends no player samples (net.history stale), so the chapter follow never saw it: a game that goes 6 -> 17
+  sends 'ending 6' every 3 s for 3 minutes (coop_ending_on_event, dispatched from coop_enemies on_event), and the
+  guest's follow takes theirs = 17 while one was heard in the last 10 s. Saving back on after a co-op jump: in
+  chapter 17, 10 s after the jump, even mid-movie (harness save_test case 8). Bot test local/bottest/ending_test.py:
+  guest followed 15 s after the host. Chapter 4 story runs (story_run --chapter Chapter324_Start --flags --gimmicks
+  [--scenes]): c04_1, c04_2, c04_3_Main to 800 in step; c04e70_00 is never forced (NO_FORCE: forced at c04_1 200 it
+  never ends); a 4-door lock split appeared only after a crash recovery (Chapter4_Start replay), not in a clean run
+  (both games lockDoor at step 400). Two silent host freezes a few s into Mia scenes (c04e12_00, c04e71_00) in one
+  run, none in the next: no dump, no WER entry, cause unknown.

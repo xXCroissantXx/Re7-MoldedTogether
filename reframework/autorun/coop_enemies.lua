@@ -677,6 +677,8 @@ local function on_event(text)
     end
     -- v0.57: which game runs Jack's car in the garage fight.
     if coop_car_on_event and coop_car_on_event(text) then return end
+    -- v0.60: the friend's game went into the ending (coop_dummy.lua).
+    if coop_ending_on_event and coop_ending_on_event(text) then return end
     -- v0.57: a host's enemy hit our character in their game ("Host runs every enemy").
     local hto, hdmg, hname, hid, hch = text:match("^hurt (%S+) (%d+) (%S+) (%S+) (%-?%d+)$")
     if hto then

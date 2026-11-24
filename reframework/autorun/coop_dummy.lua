@@ -2767,7 +2767,9 @@ end)
 -- the next chapter) or straight into the host's chapter. Only forward, only the guest, only from where the two
 -- were together. Saving is switched off for the jump as for any chapter jump (the next chapter's own autosave
 -- needs saving switched back on).
-CHAPTER_ORDER_V = { [2] = 1, [4] = 2, [13] = 3, [5] = 4, [14] = 5, [6] = 6 }
+-- The ending too (v0.60, 17 = EndingMovie): nothing followed the host into it, so a guest whose game didn't go there by
+-- itself after the last fight stayed behind in Chapter 4.
+CHAPTER_ORDER_V = { [2] = 1, [4] = 2, [13] = 3, [5] = 4, [14] = 5, [6] = 6, [17] = 7 }
 FOLLOW_CH_AFTER = 12
 local chf = { want = nil, since = nil, try_t = 0, tries = 0, done = nil }
 coop_note{ feature = "Follow the host into the next chapter", name = "Did the host go on to a later chapter? Jump after them",
@@ -2781,8 +2783,11 @@ on_frame_1(function()
     if SLOT ~= 1 or coop_enemy_role_now ~= "guest" then return end
     if settings and (settings.story_follow_host == false or settings.follow_chapters == false) then return end
     local last = net.history[#net.history]
-    if last == nil or now - last.t > (NET_TIMEOUT or 2) then chf.want, chf.since = nil, nil return end
-    local mine, theirs = local_chapter(), net.peer_chapter
+    -- The ending (v0.60): the host's game sends no samples during its movie (no player), so its "ending" message
+    -- (below) stands in for them.
+    local heard_end = chf.end_heard ~= nil and now - chf.end_heard < 10
+    if not heard_end and (last == nil or now - last.t > (NET_TIMEOUT or 2)) then chf.want, chf.since = nil, nil return end
+    local mine, theirs = local_chapter(), heard_end and 17 or net.peer_chapter
     local om, ot = CHAPTER_ORDER_V[mine or -1], CHAPTER_ORDER_V[theirs or -1]
     if om == nil or ot == nil or ot <= om or not follow.was_together or chf.done == theirs then
         chf.want, chf.since = nil, nil
@@ -2810,6 +2815,36 @@ on_frame_1(function()
     join.msg = "following your friend into " .. chapter_name(theirs)
     jump_to_chapter(target)
 end)
+
+-- Into the ending (v0.60). A game that goes from Chapter 4 into the ending (EndingMovie, 17) says so every 3 s for
+-- 3 minutes ("ending 6"): its movie sends no player samples, so the friend's follow above (guest only) had nothing
+-- to go on and the bot test's guest stayed in Chapter 4.
+local endf = { sent_t = 0, n = 0, in4_t = nil }
+coop_note{ feature = "Follow the host into the next chapter", name = "Tell the friend we went into the ending",
+    when = "every frame, but it only looks once a second",
+    reads = "our chapter", writes = "sends 'ending 6' every 3 s for 3 minutes after going from Chapter 4 into the ending" }
+_G.re.on_frame(function()
+    if SLOT ~= 1 then return end
+    local now = os.clock()
+    if now - (endf.check_t or 0) < 1 then return end
+    endf.check_t = now
+    local ch = local_chapter()
+    if ch == 6 then endf.in4_t, endf.n = now, 0 return end
+    if ch ~= 17 or endf.in4_t == nil or now - endf.in4_t > 900 or endf.n >= 60 or now - endf.sent_t < 3 then return end
+    endf.sent_t, endf.n = now, endf.n + 1
+    if coop_send_event then pcall(coop_send_event, "ending 6") end
+    if endf.n == 1 then log("into the ending: telling your friend") end
+end)
+if SLOT == 1 then
+    function coop_ending_on_event(text)
+        if text ~= "ending 6" then return false end
+        if (coop_event_slot or 1) == 1 and local_chapter() == 6 then
+            if chf.end_heard == nil then log("your friend went into the ending") end
+            chf.end_heard = os.clock()
+        end
+        return true
+    end
+end
 
 coop_note{ feature = "Link to your friend's game", name = "Read the Steam friends list file",
     when = "every frame, but it only reads the file every 2 s",
@@ -3059,11 +3094,14 @@ on_frame_1(function()
     saving_back.check_t = now
     if settings.allow_saving then settings.saving_off_for_jump = nil save_settings() return end
     local ch = local_chapter()
+    -- The ending (v0.60, 17): one long movie, never "settled", and the game's clear save comes at its end. Saving is back
+    -- on as soon as the jump into it has loaded (the story behind it was played here, step by step).
+    local ending = ch == 17 and chapters.pending == nil and now - (chapters.jump_t or -100) > 10
     local settled = ch ~= nil and MAIN_CHAPTERS[ch] and not (coop_busy and coop_busy()) and not local_cutscene()
         and chapters.pending == nil and now - (chapters.jump_t or -100) > 20
-    if not settled then saving_back.since = nil return end
+    if not settled and not ending then saving_back.since = nil return end
     saving_back.since = saving_back.since or now
-    if now - saving_back.since < 20 then return end
+    if not ending and now - saving_back.since < 20 then return end
     settings.allow_saving, settings.saving_off_for_jump = true, nil
     save_settings()
     if send_command then pcall(send_command, "backup allow") end

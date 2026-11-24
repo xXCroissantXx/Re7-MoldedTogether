@@ -98,5 +98,21 @@ L.execute('settings.allow_saving = true')
 seconds(g, 2)
 check(L.eval('settings.saving_off_for_jump') is None, 'turned on by hand: the reminder is dropped')
 
+# 8. Following the host into the ending (v0.60, chapter 17, a movie): back on soon after, even during the movie, so the
+#    game's clear save at its end can be written.
+L, g = fresh()
+L.execute('jump_to_chapter(%s)' % JUMP)
+L.execute('local_chapter = function() return 17 end')
+L.execute('local_cutscene = function() return true end')
+seconds(g, 8)
+check(L.eval('settings.allow_saving') is False, 'still off right after the jump into the ending')
+seconds(g, 10)
+check(L.eval('settings.allow_saving') is True, 'back on in the ending, though its movie is playing')
+L, g = fresh()
+L.execute('jump_to_chapter(%s, true)' % JUMP)
+L.execute('local_chapter = function() return 17 end')
+seconds(g, 60)
+check(L.eval('settings.allow_saving') is False, "a test jump into the ending leaves saving off")
+
 print('save scenarios: ' + ('all checks passed' if not fails else '%d FAILED' % len(fails)))
 sys.exit(1 if fails else 0)
