@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.57 (2026-11-15)
+An experimental way to play: the host's game runs every enemy.
+
+- **Host runs every enemy (experimental, Options, off by default, the same for both of you).** Until now each
+  game ran the enemies near its own player and passed them back and forth, because in RE7 an enemy can only
+  attack its own game's player. That passing is where rubber-banding and "it isn't in this game" came from. With
+  this on, the host's game runs every enemy for the whole fight and points each one at whichever of you is
+  nearer, your friend's character included (it was found to need the player's status and a target hold to take
+  your friend on). Your friend's game shows copies of the host's enemies, and a copy plays the host's attacks
+  where your friend really is, so their hits land in your friend's own game with the game's own damage and
+  flinch. Enemies next to your friend are kept awake in the host's game, and your friend's own copies never
+  fight on their own. This is how the Resident Evil 2 co-op mods work too.
+- Tested on the two test copies: the host's Molded went for the friend's character and the friend took the
+  copies' hits. Not yet played by two people: please try it in a fight or two and send us your logs.
+- **The co-op screen is shorter**: Quick messages and Give items are gone from it. F5-F8 still send quick
+  messages, and discarding a supply still puts it on your friend's ground too.
+- **The story can't get stuck behind your friend's puzzle any more (story flags).** RE7's story moves on by itself
+  when its milestone flags turn true: a tray opened, a crest found, a puzzle solved. When your friend did one in
+  their game, your game never got the flag and its story waited for good (that's how a save sat at Chapter 3's
+  step 400 all evening). Now every milestone and objective flag that turns true in one game is set in the other,
+  and your story carries on by itself; a friend who joins later gets all of them. Failures, deaths, timers and
+  boss working state stay each game's own. Every story flag change is written to coop_story_log.txt by name.
+- **What a puzzle leaves behind is the same for both.** Objects the game saves for the story (collisions, boards,
+  props a scene moved: about 50 in the main house) are now shared: a change that stays for 2 s outside a cutscene
+  reaches your friend, and a friend who joins gets the host's. On the test copies one of them (the collision that
+  stops you falling in a boss area) had been on in one game and off in the other.
+- **The Molded always show up for both of you (stand-ins).** Your friend only saw a Molded once their own game
+  brought one out at that spot, and the game won't while the spot is in view, so it often waited a minute or never
+  came ("the Molded never spawned in for my friend"). Now a Molded the other game runs that yours has no body for
+  gets one straight away from your game's own pool of Molded, and follows the real one. If your game's own Molded
+  comes out later, it takes over and the stand-in goes back. On the test copies: with the friend's spawner
+  refusing, the Molded never appeared before; now it appears in about a second and stays within a few centimetres.
+- **A copied Molded now shows the real one's moves.** The game kept putting a copy back on its idle pose after the
+  mod had played the real Molded's move, so your friend could see a Molded standing still while yours was
+  attacking. The copy plays the move again whenever that happens. If more Molded are out than your game has spare
+  bodies (five), the ones nearest you always get one.
+- **Your hits make the Molded flinch in your friend's game too.** The hit reaction for a hit made in the other game
+  had never worked (every log said "no ResistResultSet"); it plays now, at most once a second or so per Molded, so
+  a handgun doesn't stun-lock them.
+- **Host runs every enemy: fixes.** A Molded that once went after the friend never came back to the host however
+  close the host got (a Lua mistake); it turns back now. And a Molded the friend sets off that the host's game
+  can't bring out no longer stands frozen in front of the friend: after 5 s the friend's game runs it and the
+  host's shows a stand-in.
+- **Host runs every enemy: a Molded only your friend is near goes to your friend's game.** The host's game can't
+  make a Molded fight your friend's character (to the game's enemies it isn't a player), so one that has seen no
+  one for 3 s while only the friend is near is handed to the friend's game, where they're a real player; the
+  host's game shows the copy.
+- The lobby's Start button was green even while someone wasn't ready; it's only green when everyone is.
+- **Jack's car in the garage is shared.** The car was never an enemy: it's its own scripted object with its own
+  fight script, played with whoever is in that game, so each of you had a separate car fight (on the test copies
+  one game's player sat in the driver's seat while the other game's Jack drove its car into the wall alone). Now
+  the first game whose car starts (you get in, or Jack does) runs it and keeps Jack for the whole fight; the other
+  game shows that same car where it really is, with the same broken windows, body, door and tyres, and Jack
+  driving it over you there hurts you. When it burns out, it's a wreck in both games. With "Host runs every enemy"
+  on, the host's game always runs it. Tested on the test copies (the hand-over, the car following, windows,
+  run-over hits, the wreck); the whole fight hasn't been played through by two people yet.
+
 ## v0.56 (2026-11-14)
 Fixes from last night's session: the story no longer gets stuck behind long events, and a lot less lag.
 

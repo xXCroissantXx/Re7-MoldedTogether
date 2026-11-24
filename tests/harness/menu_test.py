@@ -219,27 +219,14 @@ press("enter")
 check(not coop_menu.open, "Enter on Close closes the menu")
 ''')
 
-# 15. v0.42: Give items lists what can be given and asks before giving.
+# 15. v0.57: Quick messages and Give items are no longer sections on sheet A (the owner's choice).
 B.execute('''
-GIVEN = {}
-coop_shareable_items = function() return { { id = "HandgunBullet", n = 10, name = "Handgun Ammo", cat = 2 }, { id = "RemedyM", n = 2, name = "First Aid Med", cat = 3 } } end
-coop_give_item = function(to, id, n, name) GIVEN[#GIVEN + 1] = { to = to, id = id, n = n } return "t1" end
-coop_menu_set_open(true)
-open_cat("Give items")
-check(coop_menu.page == "give", "Give items opens")
-local t, items = coop_menu_debug_items()
-local ammo
-for _, it in ipairs(items) do if it.text == "Handgun Ammo" then ammo = it end end
-check(ammo ~= nil and ammo.value == "x10", "the ammo is listed with its count")
-for _, it in ipairs(items) do if it.text == "How many" then it.right() it.right() end end   -- One -> Half -> All
-t, items = coop_menu_debug_items()
-for _, it in ipairs(items) do if it.text == "Handgun Ammo" then ammo = it end end
-ammo.on()
-check(coop_menu.confirm ~= nil and coop_menu.confirm.question:find("x10", 1, true), "All: it asks to give all 10")
-coop_menu.confirm.fn()
-check(#GIVEN == 1 and GIVEN[1].to == T.peer and GIVEN[1].id == "HandgunBullet" and GIVEN[1].n == 10, "and gives them to the friend")
-coop_menu_set_open(false)
+local labels = {}
+for _, c in ipairs(coop_menu.cats) do labels[c.label] = true end
+check(not labels["Quick messages"] and not labels["Give items"], "Quick messages and Give items are gone from the co-op screen")
+check(labels["Lobby"] and labels["Friends"] and labels["Options"] and labels["Close"], "the other sections are still there")
 ''')
+
 
 # 16. v0.42: This session shows our counts and the friend's, and ours go out every 20 s.
 B.execute('''
@@ -276,38 +263,6 @@ check(v ~= nil and v.value == "On", "Options: Bump into your friend, on by defau
 coop_menu_set_open(false)
 ''')
 
-# 18. v0.43: "I need ammo" and "I need healing" in Quick messages.
-B.execute('''
-TALKED = {}
-coop_talk_send = function(k) TALKED[#TALKED + 1] = k end
-coop_menu_set_open(true)
-open_cat("Quick messages")
-local t, items = coop_menu_debug_items()
-local ammo, meds
-for _, it in ipairs(items) do
-    if it.text == "I need ammo" then ammo = it end
-    if it.text == "I need healing" then meds = it end
-end
-check(ammo ~= nil and meds ~= nil, "Quick messages: I need ammo and I need healing")
-ammo.on()
-check(TALKED[1] == "ammo" and not coop_menu.open, "I need ammo sends the ammo request and closes the screen")
-''')
-
-# 19. v0.43: Give items picks the friend who asked, and shows their health.
-B.execute('''
-coop_friend_health = function(slot) return 40 end
-coop_give_ask = { slot = 1, kind = "meds", t = os.clock() }
-coop_menu_set_open(true)
-open_cat("Give items")
-local t, items = coop_menu_debug_items()
-local to
-for _, it in ipairs(items) do if it.text == "Give to" then to = it.value end end
-check(to ~= nil and to:find("(health 40%)", 1, true), "Give to shows the friend's health")
-check(coop_give_ask.used == true, "the friend who asked is picked (once)")
-coop_menu_set_open(false)
-coop_friend_health = nil
-''')
-
 # 20. v0.43: the game fills its list over several frames. CO-OP waits for it, goes after EXIT,
 # and a CO-OP row left before EXIT (v0.42 did that: "row 7 of 7") moves to the end.
 D = game('76561198000000004', '76561198000000001', 'Title2')
@@ -339,10 +294,10 @@ settings.menu_text = "normal" coop_menu_set_open(true) frames(2)   -- (the new f
 MX, MY = 3, 3 frames(0.1)
 coop_menu_set_open(true) frames(0.1)
 local hit = coop_menu.hit
-local r = hit and hit.a[7]
-check(r ~= nil and #hit.a == 9, "the sections' places are kept for the mouse")
+local r = hit and hit.a[5]
+check(r ~= nil and #hit.a == 7, "the sections' places are kept for the mouse")
 MX, MY = (r[1] + r[3]) / 2, (r[2] + r[4]) / 2 frames(0.1)
-check(coop_menu.cat == 7 and coop_menu.focus == "A", "pointing at Options highlights it")
+check(coop_menu.cat == 5 and coop_menu.focus == "A", "pointing at Options highlights it")
 MDOWN = true frames(0.05) MDOWN = false frames(0.05)
 check(coop_menu.focus == "B" and coop_menu_debug_items() == "Options", "a click opens Options")
 local _, items = coop_menu_debug_items()

@@ -1523,7 +1523,276 @@ local function apply_objdone(id, ch)
 end
 
 ss.obj_apply = apply_objdone
+
+-- Story flags (v0.57). ------------------------------------------------------------------------------------------
+-- RE7 keeps its story state in global variables (via.userdata.GlobalUserData.get_VariablesHub(): 93 named sets such
+-- as c03_2_Main_Flag, c03_Objective_Flag, ProgressiveNumber). The story flows advance on their own when their
+-- milestone flags turn true: at c03_2 step 400, setting c03_2_Main_OpenTrayInWorkshopKey moved it to 500 within a
+-- second, and c03_2_Main_GetCrestInFreezerRoom to 600 (bot test 2026-11-23). A milestone done in one game (a tray
+-- opened, a crest found, a puzzle solved) never set the flag in the other, so that story waited for good; the
+-- owner's own save sat at c03_2 400 that way. Now the milestone and objective flags that turn true in one game are
+-- set in the other ("gflag"), only ever false to true; a friend who connects gets every one that's true here
+-- ("gfall"). Per-moment flags (the *_Flag sets: car positions, a cut leg), boss working state, timers, failures and
+-- deaths stay each game's own. Every story flag change is logged by name (coop_story_log.txt).
+local function gsafe(f, ...) local ok, r = pcall(f, ...) if ok then return r end return nil end
+local gf = { list = nil, by_key = {}, scan_t = -100, poll_t = 0, pending = {}, sent = 0, applied = 0, digest_due = false }
+story_flags = gf
+GF_POLL_S = 0.5
+local GF_SET_OK = { "_Main_Flag$", "_Main_A_Flag$", "_Main_B_Flag$", "Objective_Flag$" }
+local GF_SET_NO = { "LastBoss" }
+local GF_NAME_NO = { "Failed", "Dead", "Wait_", "_Trg", "Loop", "Random" }
+local function gf_sharing() return sharing() and settings.share_story_flags ~= false end
+local function gf_hub()
+    local td = sdk.find_type_definition("via.userdata.GlobalUserData")
+    local m = td and td:get_method("get_VariablesHub")
+    return m and gsafe(m.call, m, nil)
+end
+local function gf_wanted_set(n)
+    for _, p in ipairs(GF_SET_NO) do if n:find(p) then return false end end
+    for _, p in ipairs(GF_SET_OK) do if n:find(p) then return true end end
+    return false
+end
+local function gf_wanted_name(n)
+    for _, p in ipairs(GF_NAME_NO) do if n:find(p, 1, true) then return false end end
+    return true
+end
+-- Every wanted bool flag: { v, key = "<set hash>:<name hash>", name, set, on }. Read again every 10 s (a load swaps them).
+local function gf_scan(now)
+    gf.scan_t = now
+    local hub = gf_hub()
+    if hub == nil then gf.list = nil return end
+    local list, by_key = {}, {}
+    local n = tonumber(gsafe(hub.call, hub, "getUserVariablesCount")) or 0
+    for i = 0, n - 1 do
+        local uv = gsafe(hub.call, hub, "getUserVariables", i)
+        local sn = uv and tostring(gsafe(uv.call, uv, "get_Name") or "")
+        if sn and gf_wanted_set(sn) then
+            local sh = (tonumber(gsafe(uv.call, uv, "get_HashName")) or 0) & 0xFFFFFFFF
+            for j = 0, (tonumber(gsafe(uv.call, uv, "getVariableCount")) or 0) - 1 do
+                local v = gsafe(uv.call, uv, "getVariable", j)
+                local name = v and tostring(gsafe(v.call, v, "get_Name") or "")
+                local on = v and gsafe(v.call, v, "get_Bool")
+                if name and name ~= "" and type(on) == "boolean" and gf_wanted_name(name) then
+                    local key = string.format("%08x:%08x", sh, (tonumber(gsafe(v.call, v, "get_NameHash")) or 0) & 0xFFFFFFFF)
+                    local old = gf.by_key[key]
+                    local e = { v = v, key = key, name = name, set = sn, on = old and old.on }
+                    if e.on == nil then e.on = on end
+                    list[#list + 1] = e
+                    by_key[key] = e
+                end
+            end
+        end
+    end
+    gf.list, gf.by_key = list, by_key
+end
+local function gf_apply(key, ch, why)
+    local e = gf.by_key[key]
+    if e == nil then return false end
+    if ch ~= chapter() then
+        gf.pending[key] = ch
+        return true
+    end
+    gf.pending[key] = nil
+    local cur = gsafe(e.v.call, e.v, "get_Bool")
+    if cur == true then e.on = true return true end
+    local ok = pcall(e.v.call, e.v, "set_Bool", true)
+    e.on = true
+    gf.applied = gf.applied + 1
+    log(string.format("story flag %s (%s) set from your friend's game%s%s", e.name, e.set, why or "", ok and "" or " ERR"))
+    return true
+end
+local function gf_tick(now)
+    if now - gf.poll_t < GF_POLL_S then return end
+    gf.poll_t = now
+    if gf.list == nil or now - gf.scan_t > 10 then gf_scan(now) end
+    if gf.list == nil then return end
+    local ch = chapter()
+    for _, e in ipairs(gf.list) do
+        local on = gsafe(e.v.call, e.v, "get_Bool")
+        if type(on) == "boolean" and on ~= e.on then
+            e.on = on
+            if on then
+                log(string.format("story flag %s (%s) set here", e.name, e.set))
+                if gf_sharing() then
+                    send(string.format("gflag %s %d %s", e.key, ch, e.name))
+                    gf.sent = gf.sent + 1
+                end
+            else
+                log(string.format("story flag %s (%s) cleared here (a load or the game's own reset)", e.name, e.set))
+            end
+        end
+    end
+    -- Ones that came for another chapter, now that we're in it.
+    for key, pch in pairs(gf.pending) do
+        if pch == ch and gf_sharing() then gf_apply(key, pch, " (held until we got to that chapter)") end
+    end
+    -- A friend just connected: every milestone that's true here, 40 to an event.
+    if gf.digest_due and gf_sharing() then
+        gf.digest_due = false
+        local keys = {}
+        for _, e in ipairs(gf.list) do if e.on then keys[#keys + 1] = e.key end end
+        for i = 1, #keys, 40 do
+            send(string.format("gfall %d %s", ch, table.concat(keys, ",", i, math.min(i + 39, #keys))))
+        end
+        log(string.format("story flags: sent all %d that are set here to the friend who connected", #keys))
+    end
+end
+dbg_note{ feature = "Shared story", name = "Watch the story flags and share milestones",
+    when = "every frame; its work twice a second (and a rescan of the flag list every 10 s)",
+    reads = "the global variables hub (via.userdata.GlobalUserData): the *_Main_Flag and *Objective_Flag sets, about 300 flags",
+    writes = "logs every change by name; sends 'gflag' when a milestone turns true here and 'gfall' to a friend who connects" }
+re.on_frame(function()
+    local ok, err = pcall(gf_tick, os.clock())
+    if not ok and not gf.err then gf.err = true log("story flags ERR " .. tostring(err)) end
+end)
+local function gf_on_event(text)
+    local key, ch, name = text:match("^gflag (%x+:%x+) (%-?%d+) ?(%S*)")
+    if key then
+        if gf_sharing() then
+            if gf.list == nil then pcall(gf_scan, os.clock()) end
+            if not gf_apply(key, tonumber(ch)) then log("story flag " .. tostring(name) .. " from your friend: not known here") end
+        end
+        return true
+    end
+    local ach, keys = text:match("^gfall (%-?%d+) (%S+)")
+    if ach then
+        if gf_sharing() then
+            if gf.list == nil then pcall(gf_scan, os.clock()) end
+            local n = 0
+            for k in keys:gmatch("[^,]+") do
+                local e = gf.by_key[k]
+                if e and not e.on then n = n + 1 end
+                gf_apply(k, tonumber(ach), " (catching up)")
+            end
+            if n > 0 then log(string.format("story flags: caught up %d from your friend's game", n)) end
+        end
+        return true
+    end
+    return false
+end
+-- Story objects (v0.57). ----------------------------------------------------------------------------------------
+-- What a gimmick leaves behind in the world is kept on objects with app.OtherObjectSave (about 50 in the main house:
+-- collisions, boards, props a scene moved): their GameObject's UpdateSelf/DrawSelf, saved by SaveGUID. After the
+-- same story steps one of them differed between the test copies: BossArea_PLFallDownStopCollision_OOS on in one game
+-- and off in the other (bot test 2026-11-23). A change that holds GOS_HOLD_S s outside a cutscene goes to the friend
+-- ("gos <guid> <upd><draw> <chapter> <name>") and is applied there; a friend who connects gets the host's states
+-- ("gosall"). Logged by name.
+local gos = { list = nil, by_id = {}, scan_t = -100, poll_t = 0, pend = {}, sent = 0, applied = 0, digest_due = false }
+story_objects = gos
+GOS_POLL_S, GOS_HOLD_S = 1.0, 2.0
+local function gos_sharing() return sharing() and settings.share_story_objects ~= false end
+local function gos_guid(g)
+    if g == nil then return nil end
+    local b = {}
+    for i = 0, 7 do b[#b + 1] = string.format("%02x", (gsafe(g.get_field, g, "mData4_" .. i) or 0) & 0xFF) end
+    local t = string.format("%08x%04x%04x%s", (gsafe(g.get_field, g, "mData1") or 0) & 0xFFFFFFFF,
+        (gsafe(g.get_field, g, "mData2") or 0) & 0xFFFF, (gsafe(g.get_field, g, "mData3") or 0) & 0xFFFF, table.concat(b))
+    if t == "00000000000000000000000000000000" then return nil end
+    return t
+end
+local function gos_state(go)
+    local u, d = gsafe(go.call, go, "get_UpdateSelf"), gsafe(go.call, go, "get_DrawSelf")
+    if type(u) ~= "boolean" or type(d) ~= "boolean" then return nil end
+    return (u and "1" or "0") .. (d and "1" or "0")
+end
+local function gos_scan(now)
+    gos.scan_t = now
+    local sc = sdk.call_native_func(sdk.get_native_singleton("via.SceneManager"), sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
+    local arr = sc and gsafe(sc.call, sc, "findComponents(System.Type)", sdk.typeof("app.OtherObjectSave"))
+    if arr == nil then return end
+    local list, by_id = {}, {}
+    for _, c in ipairs(arr_items(arr)) do
+        local id = gos_guid(gsafe(c.get_field, c, "SaveGUID"))
+        local go = id and gsafe(c.call, c, "get_GameObject")
+        if go then
+            local old = gos.by_id[id]
+            local e = { id = id, go = go, name = tostring(gsafe(go.call, go, "get_Name") or "?"), st = old and old.st or gos_state(go) }
+            list[#list + 1] = e
+            by_id[id] = e
+        end
+    end
+    gos.list, gos.by_id = list, by_id
+end
+local function gos_apply(id, st, ch, why)
+    if ch ~= chapter() then return end
+    local e = gos.by_id[id]
+    if e == nil then return end
+    if gos_state(e.go) == st then e.st = st return end
+    pcall(e.go.call, e.go, "set_UpdateSelf", st:sub(1, 1) == "1")
+    pcall(e.go.call, e.go, "set_DrawSelf", st:sub(2, 2) == "1")
+    e.st, e.since, e.cand = st, nil, nil
+    gos.applied = gos.applied + 1
+    log(string.format("story object %s set to %s from your friend's game%s", e.name, st == "11" and "on" or (st == "00" and "off" or st), why or ""))
+end
+local function gos_tick(now)
+    if now - gos.poll_t < GOS_POLL_S then return end
+    gos.poll_t = now
+    if gos.list == nil or now - gos.scan_t > 10 then gos_scan(now) end
+    if gos.list == nil then return end
+    local cut = local_cutscene and local_cutscene()
+    local ch = chapter()
+    for _, e in ipairs(gos.list) do
+        local st = gos_state(e.go)
+        if st and st ~= e.st then
+            -- Held GOS_HOLD_S s, outside a cutscene (scenes hide and show things for a moment).
+            if e.cand ~= st then e.cand, e.since = st, now
+            elseif not cut and now - e.since >= GOS_HOLD_S then
+                log(string.format("story object %s %s here (%s -> %s)", e.name, st == "11" and "on" or (st == "00" and "off" or "changed"), tostring(e.st), st))
+                e.st, e.cand, e.since = st, nil, nil
+                if gos_sharing() then
+                    send(string.format("gos %s %s %d %s", e.id, st, ch, e.name))
+                    gos.sent = gos.sent + 1
+                end
+            end
+        else
+            e.cand, e.since = nil, nil
+        end
+    end
+    if gos.digest_due and gos_sharing() and coop_enemy_role_now == "host" and not cut then
+        gos.digest_due = false
+        local parts = {}
+        for _, e in ipairs(gos.list) do if e.st then parts[#parts + 1] = e.id .. ":" .. e.st end end
+        for i = 1, #parts, 30 do send(string.format("gosall %d %s", ch, table.concat(parts, ",", i, math.min(i + 29, #parts)))) end
+        log(string.format("story objects: sent the state of all %d here to the friend who connected", #parts))
+    end
+end
+dbg_note{ feature = "Shared story", name = "Watch the saved story objects and share their changes",
+    when = "every frame; its work once a second (and a rescan of the objects every 10 s)",
+    reads = "every app.OtherObjectSave's GameObject: UpdateSelf / DrawSelf (about 50 in an area)",
+    writes = "logs changes by name; sends 'gos' for a change that held 2 s outside a cutscene, 'gosall' (host) to a friend who connects" }
+re.on_frame(function()
+    local ok, err = pcall(gos_tick, os.clock())
+    if not ok and not gos.err then gos.err = true log("story objects ERR " .. tostring(err)) end
+end)
+local function gos_on_event(text)
+    local id, st, ch = text:match("^gos (%x+) ([01][01]) (%-?%d+)")
+    if id then
+        if gos_sharing() then
+            if gos.list == nil then pcall(gos_scan, os.clock()) end
+            gos_apply(id, st, tonumber(ch))
+        end
+        return true
+    end
+    local ach, items = text:match("^gosall (%-?%d+) (%S+)")
+    if ach then
+        if gos_sharing() and coop_enemy_role_now ~= "host" and not (local_cutscene and local_cutscene()) then
+            if gos.list == nil then pcall(gos_scan, os.clock()) end
+            for gid, gst in items:gmatch("(%x+):([01][01])") do gos_apply(gid, gst, tonumber(ach), " (the host's, on connecting)") end
+        end
+        return true
+    end
+    return false
+end
+
+function story_flags_status()
+    local n, on = 0, 0
+    for _, e in ipairs(gf.list or {}) do n = n + 1 if e.on then on = on + 1 end end
+    return string.format("Story flags: %d watched, %d set; sent %d, applied %d", n, on, gf.sent, gf.applied)
+end
+
 function coop_story_on_event(text)
+    if gf_on_event(text) then return true end
+    if gos_on_event(text) then return true end
     local oid, och = text:match("^objdone (%x+) (%-?%d+)$")
     if oid then
         local ok, err = pcall(apply_objdone, oid, tonumber(och))
@@ -1532,6 +1801,9 @@ function coop_story_on_event(text)
     end
     local pch, pclock, pdiff = text:match("^spos (%-?%d+) (%-?%d+) ?(%-?%d*)")
     if pch then
+        -- A friend we hadn't heard from for 20 s+ (just connected, or back): our story flags go to them (gfall).
+        local prev = ss.spos[coop_event_slot or 1]
+        if prev == nil or os.clock() - prev.t > 20 then gf.digest_due, gos.digest_due = true, true end
         ss.spos[coop_event_slot or 1] = { ch = tonumber(pch), clock = tonumber(pclock), t = os.clock(), diff = tonumber(pdiff) }
         pcall(check_difficulty, coop_event_slot or 1)
         return true

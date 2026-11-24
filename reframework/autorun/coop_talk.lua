@@ -261,8 +261,9 @@ local KINDS = {
     go = { label = "Go on ahead", color = 0xFFFFFFFF, mark = false },
     help = { label = "Help!", color = 0xFF5050FF, mark = true },
     -- v0.43: asking for supplies; the friend can give some under Give items (co-op screen).
-    ammo = { label = "I need ammo", color = 0xFF7FE6FF, mark = false, tip = " - co-op screen > Give items" },
-    meds = { label = "I need healing", color = 0xFF7FE6FF, mark = false, tip = " - co-op screen > Give items" },
+    -- (v0.57: no "co-op screen > Give items" tip: that section was taken off the co-op screen)
+    ammo = { label = "I need ammo", color = 0xFF7FE6FF, mark = false, tip = "" },
+    meds = { label = "I need healing", color = 0xFF7FE6FF, mark = false, tip = "" },
 }
 local KEY_ORDER = { { vk = 0x74, kind = "ping", name = "F5" }, { vk = 0x75, kind = "come", name = "F6" },
     { vk = 0x76, kind = "wait", name = "F7" }, { vk = 0x77, kind = "help", name = "F8" } }
@@ -323,6 +324,8 @@ local SHARED_OPTS = {
     { key = "share_jack_fight", label = "One boss for both", on = true },
     { key = "share_molded_moves", label = "One Molded for both", on = true },
     { key = "share_molded_target", label = "Molded go after any of you", on = true },
+    -- v0.57, experimental: the host's game runs every enemy and they attack both players there.
+    { key = "host_runs_enemies", label = "Host runs every enemy (experimental)", on = false },
     { key = "story_follow_host", label = "One game leads the story", on = true },
     { key = "enemy_chase_both", label = "Enemies chase both players", on = true },
 }

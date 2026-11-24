@@ -99,6 +99,17 @@ local function is_regular(name)
     return name:match("^Em4%d%d%d") ~= nil
 end
 
+-- "Host runs every enemy" (v0.57, experimental; settings.host_runs_enemies, the same for everyone). The host's game
+-- runs every shared enemy and the others only show copies: no hand-offs, so no enemy changes games mid-fight. An
+-- enemy can only attack its own game's player in RE7, so the host's game points each one at whichever player is
+-- nearer, the friend's character included (EnemyThinkBase.setTarget + set_targetStatus + the target hold), and
+-- catches the enemy's own live attack shapes touching the friend's character, sending the game's own damage value
+-- to the friend's game (host_fight, "hurt"). Bot test 2026-11-15: a Molded held this way swung at the friend's
+-- character (attack sets with Damage 200/300 going live 1.5-2 m from it, the host's player 5 m away). The way the
+-- RE2 co-op mods work (re2coop: host enemies attack the client's NPC, damage caught and replayed on the client).
+local function host_mode() return settings ~= nil and settings.host_runs_enemies == true end
+function coop_host_runs_enemies() return host_mode() end
+
 -- Boss mode: only the stalker Jack (Em3000) has his movement shared (the Molded too until v0.47,
 -- see moves_shared). Boss
 -- fights and story characters (Jack's later forms, the family Em31xx-Em33xx...) are scripted
@@ -110,6 +121,10 @@ end
 -- (the chainsaw one in the basement) aren't mapped yet.
 local JACK_BOSS_STAGES = { { hash = 0x9fb77189, from = 900, to = 999 } }
 local boss_cache = { t = -100, on = false }
+-- Jack's car in that fight (v0.57): which game runs it ("me", a friend slot, or nil before anyone has started it).
+-- See "Jack's car in the garage" further down.
+coop_car = coop_car or { runner = nil, hist = {} }
+local function car_pinned(name) return name == "Em3000" and coop_car.runner ~= nil end
 function jack_boss_fight()
     local now = os.clock()
     if now - boss_cache.t < 1 then return boss_cache.on end
@@ -176,6 +191,8 @@ function moves_shared(name)
     -- kills are still shared either way.
     if coop_party_size and coop_party_size() > 1 and settings and settings.share_enemies_group == false then return false end
     if name == "Em3000" then
+        -- The garage car fight (v0.57): Jack rides in the car of the game that runs it (see "Jack's car").
+        if jack_boss_fight() and coop_car.runner ~= nil then return not (local_cutscene and local_cutscene()) end
         if jack_boss_fight() then return BOSS_HANDOFF.Em3000 == true and not (local_cutscene and local_cutscene()) end
         return true
     end
@@ -379,7 +396,8 @@ local function send_event(text)
     es.sent = es.sent + 1
     -- Regular check-ins (health, options, version) would fill the log: not logged.
     if not (text:match("^ehp ") or text:match("^opt ") or text:match("^ver ") or text:match("^dang ") or text:match("^spos ")
-        or text:match("^lobby me ") or text:match("^lobby open ") or text:match("^stats ") or text:match("^light ")) then log("sent: " .. text) end
+        or text:match("^lobby me ") or text:match("^lobby open ") or text:match("^stats ") or text:match("^light ")
+        or text:match("^car run ")) then log("sent: " .. text) end
     if coop_talk_record then pcall(coop_talk_record, text) end   -- the catch-up list (coop_talk.lua)
 end
 
@@ -439,9 +457,9 @@ local function scan()
                     local map, body = spawn_ids(os.clock())
                     local sid = map[addr]
                     if sid and sid ~= e.id then
-                        log(string.format("%s is now %s (was %s)", e.name, sid, e.id))
+                        log(string.format("%s is now %s (was %s%s)", e.name, sid, e.id, e.standin and ", a stand-in" or ""))
                         if coop_enemy_orphan then pcall(coop_enemy_orphan, e, false) end   -- a copy of what it was
-                        e.id, e.hp, e.dup = sid, nil, false
+                        e.id, e.hp, e.dup, e.standin = sid, nil, false, nil
                         -- A new body for a Molded the friend's game runs (v0.49): a copy at once (see settled);
                         -- left to its own AI until it had walked 1 m, it stood 3 m from the friend's (bot test).
                         if em_move and em_move.own and type(em_move.own[sid]) == "number" then e.replaced = true end
@@ -449,9 +467,10 @@ local function scan()
                     elseif sid == nil and e.id:sub(1, 2) == "s:" and body[e.id] and body[e.id] ~= addr then
                         -- Its spawn point has another body now: this one is left over (two bodies
                         -- with one id were seen 2026-11-10). Back to its pool name, so it's left alone.
-                        log(string.format("%s %s: its spawn point has another body now", e.name, e.id))
+                        log(string.format("%s %s: its spawn point has another body now%s", e.name, e.id,
+                            e.standin and " (the game's own came out: the stand-in goes back to the pool)" or ""))
                         if coop_enemy_orphan then pcall(coop_enemy_orphan, e, true) end
-                        e.id, e.hp = enemy_id(go), nil
+                        e.id, e.hp, e.standin = enemy_id(go), nil, nil
                     end
                 end
                 local active = safe(go.call, go, "get_Update") == true
@@ -552,6 +571,7 @@ end
 -- a ResistResultSet. ResistResult Damaged = 1; resist type Small = 0 (Middle = 1 for big
 -- hits); body part Chest = 0. Untested in play.
 local RESIST_DAMAGED, RESIST_SMALL, RESIST_MIDDLE, PART_CHEST = 1, 0, 1, 0
+FLINCH_EVERY = 1.2
 function flinch(e, amount)
     if e.ac == nil then
         for _, c in ipairs(arr_items(e.go:call("get_Components"))) do
@@ -564,12 +584,15 @@ function flinch(e, amount)
     -- REFramework builds with ValueType.new.
     local td = sdk.find_type_definition("app.EnemyActionController.ResistResultSet")
     if td == nil then return "no ResistResultSet type" end
+    -- It's a class whose only constructor takes four arguments, so sdk.create_instance gave nil and no friend's hit
+    -- ever made an enemy flinch ("no ResistResultSet (value type: false)" in every log since v0.36). Made without
+    -- its constructor (simplify) and filled in below, it works: the Molded played its hit reaction, bank 40 motion
+    -- 100, for a second (bot test 2026-11-20).
     local rs
     if td:is_value_type() then
         rs = ValueType.new(td)
     else
-        rs = sdk.create_instance("app.EnemyActionController.ResistResultSet")
-        if rs then pcall(rs.call, rs, ".ctor") end
+        rs = sdk.create_instance("app.EnemyActionController.ResistResultSet", true)
     end
     if rs == nil then return "no ResistResultSet (value type: " .. tostring(td:is_value_type()) .. ")" end
     rs:set_field("result", RESIST_DAMAGED)
@@ -593,7 +616,10 @@ local function on_damage(id, ch, amount, name)
     e.dc:call("setHealth(System.Single, System.Single)", new, e.dc:call("get_maxHealth"))
     e.hp = e.dc:call("get_health")
     -- The reaction plays only where the enemy's AI runs; a copy follows its owner's clip.
-    if (em_move == nil or type(em_move.own[id]) ~= "number") and is_regular(name) then
+    -- At most one forced reaction per FLINCH_EVERY s (v0.57, now that they play): every handgun bullet staggering it
+    -- would make the friend's shots far stronger than the game's own resistances.
+    if (em_move == nil or type(em_move.own[id]) ~= "number") and is_regular(name) and os.clock() - (e.flinch_t or -100) >= FLINCH_EVERY then
+        e.flinch_t = os.clock()
         -- Not bosses (v0.36): their reactions are scripted; a forced one went with a crash.
         local ok, res = pcall(flinch, e, amount)
         if not es.flinch_logged or not ok then
@@ -643,6 +669,20 @@ local function on_event(text)
     if coop_story_on_event and coop_story_on_event(text) then return end
     if coop_revive_on_event and coop_revive_on_event(text) then return end
     if coop_gunsound_on_event and coop_gunsound_on_event(text) then return end
+    -- v0.57: the host's game hands us a Molded it can't set on us ("hrun <id> <chapter> <our SteamID or 0>").
+    local rid, rch, rto = text:match("^hrun (%S+) (%-?%d+) (%S+)$")
+    if rid then
+        if coop_enemy_take_run then pcall(coop_enemy_take_run, rid, tonumber(rch), rto) end
+        return
+    end
+    -- v0.57: which game runs Jack's car in the garage fight.
+    if coop_car_on_event and coop_car_on_event(text) then return end
+    -- v0.57: a host's enemy hit our character in their game ("Host runs every enemy").
+    local hto, hdmg, hname, hid, hch = text:match("^hurt (%S+) (%d+) (%S+) (%S+) (%-?%d+)$")
+    if hto then
+        if coop_enemy_apply_hurt then pcall(coop_enemy_apply_hurt, hto, tonumber(hdmg), hname, hid, tonumber(hch)) end
+        return
+    end
     local pz = text:match("^pause ([01])")
     if pz then
         -- em_move, not mv: the local alias is declared further down, so "mv" here was a nil
@@ -1176,6 +1216,12 @@ local function write_snapshot(now)
         -- The host sends every enemy it runs; the guest only the ones handed to it.
         local mine = moves_shared(e.name) and (mv.own[e.id] == "me" or (mv.role == "host" and not friend_owned(e.id)))
         if BOSS_FOLLOW[e.name] and not BOSS_HANDOFF[e.name] and mv.role ~= "host" then mine = false end   -- a copied boss: the host's only (v0.48)
+        -- Host runs every enemy (v0.57): the host sends all of them, the others none.
+        if host_mode() then
+            mine = moves_shared(e.name) and ((mv.role == "host" and type(mv.own[e.id]) ~= "number") or (es.hq_own ~= nil and es.hq_own[e.id] ~= nil))
+        end
+        -- The garage car fight (v0.57): Jack is sent by the game that runs the car, only.
+        if car_pinned(e.name) then mine = coop_car.runner == "me" end
         if mine and not e.dup and not seq_hold(e.name) and safe(e.go.call, e.go, "get_Update") == true and not mv.puppets[e.id] then
             local l = safe(enemy_line, e)
             if l then
@@ -1187,11 +1233,24 @@ local function write_snapshot(now)
     end
     table.sort(list, function(a, b) return a.d < b.d end)
     for i = 1, math.min(#list, SNAP_MAX) do lines[#lines + 1] = list[i].l end
+    -- Jack's car (v0.57): one "car ..." line while our game runs it.
+    local cl = coop_car_line and safe(coop_car_line)
+    if cl then lines[#lines + 1] = cl end
     -- "end" closes a whole snapshot: CoopNet sends only whole ones (v0.39).
     lines[#lines + 1] = "end"
     mv.seq = mv.seq + 1
     lines[1] = "seq " .. mv.seq
     fs.write("coopnet_es_out.txt", table.concat(lines, "\n") .. "\n")
+    mv.sent = mv.sent + 1
+end
+
+-- While our cutscene plays no snapshot goes out (v0.39), but the car fight's own moments (Jack pulling the player
+-- out of the car, hijacking it) can count as one: the car line still goes, on its own (v0.57).
+local function write_car_only(now)
+    local cl = coop_car_line and safe(coop_car_line)
+    if not cl then return end
+    mv.seq = mv.seq + 1
+    fs.write("coopnet_es_out.txt", table.concat({ "seq " .. mv.seq, string.format("t %.3f ch %d", now, chapter()), cl, "end" }, "\n") .. "\n")
     mv.sent = mv.sent + 1
 end
 
@@ -1237,6 +1296,8 @@ end
 -- friend's game that says it can't run it ("eskip") gives it back at once.
 local function quiet_limit(e, k)
     if mv.skip_why and mv.skip_why[e.id] then return 0 end
+    -- Jack in the car fight (v0.57) stays with the game that runs the car, even through its quiet moments.
+    if car_pinned(e.name) and coop_car.runner == k then return 60 end
     if type(k) == "number" and friend_in_cutscene(k) then return 30 end
     if BOSS_FOLLOW[e.name] or BOSS_HANDOFF[e.name] then return 6 end
     return 3
@@ -1258,14 +1319,17 @@ local function read_snapshot(now, k)
     local t, ch = text:match("\nt (%S+) ch (%-?%d+)")
     t, ch = tonumber(t), tonumber(ch)
     if t == nil or ch ~= chapter() then return end
-    -- Their cutscene moves their enemies (v0.39): Jack sat at their dinner table while ours had
-    -- moved on (2026-11-08). Nothing of theirs is followed until it ends.
-    if friend_in_cutscene(k) then return end
     local off = now - t
     -- A jump of 5 s+ means that friend's clock restarted: start over (see coop_dummy).
     local o = mv.offset_s[k]
     if o == nil or off < o or off > o + 5 then o = off mv.offset_s[k] = o end
     if k == 1 then mv.offset = o end
+    -- Jack's car (v0.57): followed even through their cutscene (the car fight's own moments can count as one).
+    local cl = coop_car_on_line and text:match("\n(car [^\n]+)")
+    if cl then pcall(coop_car_on_line, cl, t + o, k) end
+    -- Their cutscene moves their enemies (v0.39): Jack sat at their dinner table while ours had
+    -- moved on (2026-11-08). Nothing of theirs is followed until it ends.
+    if friend_in_cutscene(k) then return end
     for line in text:gmatch("[^\n]+") do
         local id, s = parse_line(line)
         local te = id and find_tracked(id)
@@ -1274,7 +1338,27 @@ local function read_snapshot(now, k)
         if id then
             -- Friend k runs it. Two games running the same enemy: the lower SteamID keeps it.
             local own, take = mv.own[id], false
-            if te and BOSS_HANDOFF[te.name] then
+            if te and car_pinned(te.name) then
+                -- The garage car fight (v0.57): the game that runs the car runs Jack, the whole fight.
+                if coop_car.runner == k then
+                    if own ~= k then mv.own[id], mv.own_t[id] = k, now end
+                    take = true
+                end
+            elseif host_mode() and mv.role == "guest" then
+                -- Host runs every enemy (v0.57): the host's copy is the one, always.
+                if own ~= k then mv.own[id], mv.own_t[id] = k, now end
+                take = true
+            elseif host_mode() then
+                -- We're the host: ours runs, whatever an older copy of the mod sends. Except a Molded our game hasn't got
+                -- awake (v0.57): the guest's game runs that one after HQ_WAIT s, and ours shows it (a stand-in if need be).
+                local mine_awake = te ~= nil and safe(te.go.call, te.go, "get_Update") == true and own ~= k
+                if id:sub(1, 2) == "s:" and not mine_awake then
+                    if own ~= k then mv.own[id], mv.own_t[id] = k, now log("the guest's game runs " .. id:sub(1, 12) .. " (ours hasn't got it)") end
+                    take = true
+                else
+                    take = false
+                end
+            elseif te and BOSS_HANDOFF[te.name] then
                 -- One boss for both (v0.48): ours until handed to us; when both games run him, the host's.
                 if own == k then
                     take = true
@@ -1578,6 +1662,19 @@ local function drive(e, h, now)
     local s = (k > 0.5) and b or a
     local L = layer0(e)
     if L == nil then return end
+    -- Something else put another clip on the copy (v0.57): the game's own handling of an enemy whose AI is off set
+    -- its idle (10/1000) back after we'd played the owner's 10/8000, and since the owner's clip didn't change, the
+    -- copy stood in the wrong pose for good (bot test 2026-11-20). Played again whenever the body isn't on ours.
+    if e.cur_bank ~= nil and now - (e.clip_fix_t or -100) >= 0.5
+        and (L:call("get_MotionBankID") ~= e.cur_bank or L:call("get_MotionID") ~= e.cur_mid) then
+        e.clip_fix_t = now   -- at most twice a second, so a body something keeps resetting doesn't blend every frame
+        if not e.clip_reset_logged then
+            e.clip_reset_logged = true
+            log(string.format("%s copy: its clip was changed under it (%s/%s instead of %s/%s): played again", e.name,
+                tostring(L:call("get_MotionBankID")), tostring(L:call("get_MotionID")), tostring(e.cur_bank), tostring(e.cur_mid)))
+        end
+        e.cur_bank, e.cur_mid = nil, nil
+    end
     if e.cur_bank ~= s.bank or e.cur_mid ~= s.mid then
         -- Not a clip this copy has (v0.51): keep the last move, ask for the bank (checked twice a second).
         local ms = e.missing
@@ -1662,6 +1759,7 @@ function check_handoffs(now)
     -- hands one over). Require "steam" rather than "not bot": a status file read while
     -- it was being rewritten has no mode line, and that once handed Jack to the bot.
     if not (coop_link_friend and coop_link_friend(net_kv())) then return end
+    if host_mode() then return end   -- v0.57: the host runs every enemy, nothing changes games
     -- See watch_pause. A "paused" that never got its "back" (they quit) expires after 10 min.
     if mv.friend_paused and now - (mv.friend_paused_t or 0) > 600 then mv.friend_paused = false end
     if mv.paused then return end
@@ -1685,7 +1783,7 @@ function check_handoffs(now)
     local p = player:call("get_Transform"):call("get_Position")
     for _, e in pairs(es.tracked) do
         local cooling = mv.no_handoff and (mv.no_handoff[e.id] or 0) > now and not coop_friend_has(e.id)
-        if moves_shared(e.name) and not e.dup and settled(e, now) and not (BOSS_FOLLOW[e.name] and not BOSS_HANDOFF[e.name]) and not seq_hold(e.name) and not friend_owned(e.id) and not cooling and not e.dead and not mv.puppets[e.id] and safe(e.go.call, e.go, "get_Update") == true then
+        if moves_shared(e.name) and not e.dup and settled(e, now) and not (BOSS_FOLLOW[e.name] and not BOSS_HANDOFF[e.name]) and not car_pinned(e.name) and not seq_hold(e.name) and not friend_owned(e.id) and not cooling and not e.dead and not mv.puppets[e.id] and safe(e.go.call, e.go, "get_Update") == true then
             local ep = e.go:call("get_Transform"):call("get_Position")
             local best, bd = nil, nil
             for _, f in ipairs(friends) do
@@ -1812,6 +1910,7 @@ end
 -- (the same setTarget + target hold as the Molded aim below): it can't hurt them from here, but on their
 -- screen it comes after them instead of standing over us. Let go as soon as we're up.
 local function down_aim(now)
+    if host_mode() then return end   -- v0.57: host_fight does this (and the two fought over the target)
     local we_down = revive ~= nil and revive.downed == true
     if not we_down then
         if es.down_aimed then
@@ -2037,7 +2136,7 @@ local function watch_pause(now)
     send_event(paused and "pause 1" or "pause 0")
     if not paused then return end
     for _, e in pairs(es.tracked) do
-        if moves_shared(e.name) and not e.dup and settled(e, os.clock()) and not (BOSS_FOLLOW[e.name] and not BOSS_HANDOFF[e.name]) and not friend_owned(e.id) and not e.dead and not mv.puppets[e.id] and safe(e.go.call, e.go, "get_Update") == true then
+        if moves_shared(e.name) and not e.dup and settled(e, os.clock()) and not (BOSS_FOLLOW[e.name] and not BOSS_HANDOFF[e.name]) and not car_pinned(e.name) and not friend_owned(e.id) and not e.dead and not mv.puppets[e.id] and safe(e.go.call, e.go, "get_Update") == true then
             -- To the nearest friend who isn't paused.
             local ep = e.go:call("get_Transform"):call("get_Position")
             local best, bd = nil, nil
@@ -2049,6 +2148,103 @@ local function watch_pause(now)
                 end
             end
             if best then hand_off(e, now, best) end
+        end
+    end
+end
+
+-- Molded stand-ins (v0.57). A Molded the friend's game runs showed up here only once our own spawn point brought one
+-- out (spawn_requests), and the game won't while the spot is in our player's view: the friend, usually right there
+-- looking at it, waited a minute and more, or never saw it ("the molded never spawned in for my friend", 2026-11-14).
+-- Now a Molded the friend runs that we have no body for gets one at once from our own pool (MoldedGenerator/
+-- MoldedPool: five Em4000 bodies, asleep at the origin): it takes the Molded's id and the copy code drives it from
+-- the friend's samples like any copy. If our spawn point brings out the game's own body later, that one takes over
+-- and the stand-in goes back to the pool (scan); so does a stand-in the friend's game goes quiet on, or one that died.
+STANDIN_QUIET = 2.5   -- s without the friend's data (before the copy code's 3 s take-back)
+STANDIN_DEAD = 8      -- s a dead stand-in lies there
+local function in_pool(e)
+    local tr = safe(e.go.call, e.go, "get_Transform")
+    local par = tr and safe(tr.call, tr, "get_Parent")
+    local pgo = par and safe(par.call, par, "get_GameObject")
+    return pgo ~= nil and tostring(safe(pgo.call, pgo, "get_Name") or ""):find("Pool", 1, true) ~= nil
+end
+local function standin_back(e, why)
+    local id = e.id
+    if coop_enemy_orphan then pcall(coop_enemy_orphan, e, true) end
+    if e.go and safe(e.go.call, e.go, "get_UpdateSelf") then
+        safe(e.go.call, e.go, "set_UpdateSelf", false)
+        safe(e.go.call, e.go, "set_DrawSelf", false)
+    end
+    pcall(repool, e)
+    e.id, e.hp, e.standin, e.standin_dead_t = enemy_id(e.go), nil, nil, nil
+    log(string.format("stand-in for %s back in the pool (%s)", id, why))
+end
+local function stand_ins(now)
+    if now - (es.standin_t or 0) < 0.25 then return end
+    es.standin_t = now
+    if settings and settings.molded_standins == false then return end
+    if not moves_shared("Em4000") then return end
+    local have, free = {}, {}
+    for _, e in pairs(es.tracked) do
+        have[e.id] = e
+        if e.standin then
+            local h = mv.hist[e.id]
+            local k = mv.own[e.id]
+            if e.dead then
+                e.standin_dead_t = e.standin_dead_t or now
+                if now - e.standin_dead_t > STANDIN_DEAD then standin_back(e, "dead") end
+            elseif type(k) ~= "number" then
+                standin_back(e, "ours to run now")
+            elseif not friend_in_cutscene(k) and (h == nil or #h == 0 or now - h[#h].t > STANDIN_QUIET) then
+                standin_back(e, "no data from your friend")
+            end
+        elseif is_regular(e.name) and e.id:sub(1, 2) == "p:" and not e.dead and safe(e.go.call, e.go, "get_UpdateSelf") == false
+            and in_pool(e) then
+            free[#free + 1] = e
+        end
+    end
+    -- Wanted: the friend's Molded we have no body for, nearest our player first.
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local pl = om and safe(om.get_field, om, "PlayerObj")
+    local pp = pl and safe(function() return pl:call("get_Transform"):call("get_Position") end)
+    local function d2(x, z) return pp and ((x - pp.x) ^ 2 + (z - pp.z) ^ 2) or 0 end
+    local wanted = {}
+    for id, h in pairs(mv.hist) do
+        if id:sub(1, 2) == "s:" and have[id] == nil and type(mv.own[id]) == "number" and #h > 0 and now - h[#h].t <= 1
+            and es.dead_here[id] ~= chapter() then
+            wanted[#wanted + 1] = { id = id, h = h, d = d2(h[#h].x, h[#h].z) }
+        end
+    end
+    table.sort(wanted, function(x, y) return x.d < y.d end)
+    for _, w in ipairs(wanted) do
+        local id, h = w.id, w.h
+        if #free == 0 then
+            -- More Molded than spare bodies (the pool has five): the stand-in farthest from us, if it's 10 m+ farther
+            -- than this one, gives its body to it, so the Molded next to you are always there (v0.57).
+            local far, fd
+            for _, e in pairs(es.tracked) do
+                if e.standin and not e.dead then
+                    local p = safe(function() return e.go:call("get_Transform"):call("get_Position") end)
+                    local d = p and d2(p.x, p.z)
+                    if d and (fd == nil or d > fd) then far, fd = e, d end
+                end
+            end
+            if far == nil or math.sqrt(fd) < math.sqrt(w.d) + 10 then
+                if not es.standin_full_logged then
+                    es.standin_full_logged = true
+                    log("stand-in: no spare Molded body here (all five in use); the nearest ones keep theirs")
+                end
+                break
+            end
+            standin_back(far, "a nearer Molded needs the body")
+            free[#free + 1] = far
+        end
+        do
+            local e = table.remove(free)
+            e.id, e.standin, e.hp, e.dup, e.replaced = id, true, nil, false, true
+            have[id] = e
+            es.spawn_want[id:sub(3)] = nil   -- the game's own may still come out: then it takes over
+            local s = h[#h]
+            log(string.format("stand-in: %s gets a body from our pool at once (your friend's at %.1f, %.1f, %.1f)", id, s.x, s.y, s.z))
         end
     end
 end
@@ -2070,6 +2266,10 @@ local function update_movement(now)
             local n = 0
             for id in pairs(mv.puppets) do release(id) n = n + 1 end
             log("cutscene: enemy following paused" .. (n > 0 and string.format(" (%d copies run on their own)", n) or ""))
+        end
+        if coop_car.runner == "me" and now - mv.snap_t >= SNAP_EVERY then
+            mv.snap_t = now
+            pcall(write_car_only, now)
         end
         if not mv.replay and now - mv.in_t >= SNAP_READ_EVERY then
             mv.in_t = now
@@ -2113,6 +2313,9 @@ local function update_movement(now)
             mv.msg = "replay finished"
         end
     end
+    -- Molded the friend runs that we have no body for: one from our pool (v0.57).
+    local sok, serr = pcall(stand_ins, now)
+    if not sok and not es.standin_err then es.standin_err = true log("stand-in ERR " .. tostring(serr)) end
     -- Drive the enemies the friend runs; take back the ones they went quiet on.
     -- Not while a save is being prepared: followers have their own AI back then.
     local saving = mv.save_pause_until and now < mv.save_pause_until
@@ -2235,6 +2438,537 @@ watch_pause = dbg_task("Enemy movement", "Tell the friend when we pause", watch_
     when = "every frame (from the movement update)",
     reads = "the game's pause state (is_paused)",
     writes = "sends 'pause 1' / 'pause 0' when it changes" })
+
+-- Host runs every enemy (v0.57): the host's targeting and hits on the friends ---------------------------------
+local HF_SWITCH = 2.0      -- m: a friend has to be this much nearer to take the enemy from us (and back)
+local HF_RANGE = 25.0      -- m: farther than this from a friend, an enemy stays on us
+local HF_WAKE = 15.0       -- m: an enemy the game put to sleep wakes again with a friend this near
+local HF_NOTICE = 6.0      -- m: an awake enemy with no target takes on a friend this near
+HAND_AGAIN_S = 20             -- s before the same Molded is handed to a friend's game again (v0.57)
+HAND_IDLE_S = 3               -- s a Molded held on a friend may go without seeing anyone before the friend's game runs it (v0.57)
+HQ_WAIT = 5                 -- s a guest holds a Molded still waiting for the host's game to have it (v0.57)
+local HF_BODY_R, HF_BODY_H = 0.45, 1.9   -- the friend's body: radius and height (m) the attack shapes are tested against
+es.hf_hits = es.hf_hits or 0
+local function our_status()
+    local pl = sdk.get_managed_singleton("app.ObjectManager"):get_field("PlayerObj")
+    return pl, pl and safe(pl.call, pl, "getComponent(System.Type)", sdk.typeof("app.PlayerStatus"))
+end
+local function shape_hit(sh, gp)
+    -- The shape's centre (sphere) or ends (capsule), against the friend's body (an upright cylinder).
+    if sh == nil then return false end
+    local pts, r = {}, 0.25
+    local ok, c = pcall(function() return sh:call("get_Center") end)
+    if ok and c then pts[1] = c local okr, rr = pcall(function() return sh:call("get_Radius") end) if okr and rr then r = rr end end
+    if #pts == 0 then
+        local okc, cap = pcall(function() return sh:call("get_Capsule") end)
+        if okc and cap then pts[1], pts[2], r = cap.p0, cap.p1, cap.r or r end
+    end
+    if #pts == 0 then
+        local oks, sp = pcall(function() return sh:call("get_Sphere") end)
+        if oks and sp then pts[1], r = sp.pos, sp.r or r end
+    end
+    for _, p in ipairs(pts) do
+        if p and (math.abs(p.x) + math.abs(p.y) + math.abs(p.z)) > 0.01 then   -- a shape's first frame reads 0,0,0
+            local dx, dz = p.x - gp.x, p.z - gp.z
+            if p.y >= gp.y - 0.3 and p.y <= gp.y + HF_BODY_H and dx * dx + dz * dz <= (HF_BODY_R + r) ^ 2 then return true end
+        end
+    end
+    return false
+end
+local function hf_release(e, th, player)
+    if th then
+        es.aim_hold[th:get_address()] = nil
+        if player then set_target(th, player) end
+    end
+    e.hf = nil
+end
+es.hq = es.hq or {}   -- enemies whose AI we switched off as a friend of the host (id -> e)
+function host_fight(now)
+    -- A friend's game in host mode (v0.57): no shared enemy fights here on its own. Until the host's copy takes over
+    -- (puppet), its AI is off; in the bot test the guest's own Molded hit the guest before the host's took over.
+    if host_mode() and mv.role == "guest" then
+        es.hq_t, es.hq_own = es.hq_t or {}, es.hq_own or {}
+        for _, e in pairs(es.tracked) do
+            local awake = safe(e.go.call, e.go, "get_Update") == true
+            if es.hq_own[e.id] and (e.dead or not awake) then es.hq_own[e.id] = nil end
+            if moves_shared(e.name) and not e.dead and not e.dup and not mv.puppets[e.id] and not es.hq[e.id]
+                and not es.hq_own[e.id] and awake then
+                safe(set_brain, e, false)
+                es.hq[e.id], es.hq_t[e.id] = e, now
+                log(string.format("%s %s held still: the host's game runs it", e.name, e.id:sub(1, 12)))
+            elseif es.hq[e.id] and mv.puppets[e.id] then
+                es.hq[e.id] = nil   -- a copy now (its brain stays off as a copy)
+            elseif es.hq[e.id] and is_regular(e.name) and now - (es.hq_t[e.id] or now) > HQ_WAIT then
+                -- A Molded the host's game hasn't got (v0.57): its spawner wouldn't bring it out, or the host is
+                -- elsewhere. Held still it stood frozen in front of the friend; now our game runs it after HQ_WAIT s
+                -- and sends it, and the host's game shows a copy (from its pool if need be: stand-ins).
+                local h = mv.hist[e.id]
+                if h == nil or #h == 0 or now - h[#h].t > 2 then
+                    es.hq[e.id] = nil
+                    es.hq_own[e.id] = now
+                    mv.own[e.id], mv.own_t[e.id] = "me", now
+                    safe(set_brain, e, true)
+                    log(string.format("%s %s: the host's game hasn't got it after %d s, so ours runs it", e.name, e.id:sub(1, 12), HQ_WAIT))
+                end
+            end
+        end
+        return
+    end
+    if next(es.hq) ~= nil then
+        for id, e in pairs(es.hq) do if not mv.puppets[id] then safe(set_brain, e, true) end end
+        es.hq = {}
+        log("enemies held for the host's game: their own AI back")
+    end
+    if not (host_mode() and mv.role == "host") then
+        if es.hf_any then
+            es.hf_any = nil
+            for _, e in pairs(es.tracked) do if e.hf then hf_release(e, think_of(e), nil) end end
+        end
+        return
+    end
+    if not (coop_link_friend and coop_link_friend(net_kv())) or scripted_now() then return end
+    local player, ps = our_status()
+    if player == nil or ps == nil then return end
+    local p = safe(function() return player:call("get_Transform"):call("get_Position") end)
+    if p == nil then return end
+    local we_down = revive ~= nil and revive.downed == true
+    local friends = {}
+    for k = 1, 3 do
+        if slot_live(k) and not friend_in_cutscene(k) and not (revive and revive.down_slots and revive.down_slots[k])
+            and not (mv.paused_slots and mv.paused_slots[k]) then
+            local fp = friend_pos(k)
+            local g = fp and friend_ghost(k)
+            if g then friends[#friends + 1] = { k = k, pos = fp, go = g } end
+        end
+    end
+    local _, ids = party_ids()
+    es.hf_any = true
+    for _, e in pairs(es.tracked) do
+        -- Not Jack in the car fight (v0.57): his targets there are the car's script's.
+        if not e.dead and not e.dup and moves_shared(e.name) and not mv.puppets[e.id] and not car_pinned(e.name)
+            and type(mv.own[e.id]) ~= "number" then
+            local ep = safe(function() return e.go:call("get_Transform"):call("get_Position") end)
+            -- The nearest friend, and the distances.
+            local best, bd
+            if ep then
+                for _, f in ipairs(friends) do
+                    local d = math.sqrt(dist2(ep, f.pos))
+                    if bd == nil or d < bd then best, bd = f, d end
+                end
+            end
+            -- Asleep with a friend next to it (the game sleeps what's far from its own player): awake again.
+            if best and bd < HF_WAKE and safe(e.go.call, e.go, "get_UpdateSelf") == false and (e.out or not is_regular(e.name)) then
+                if wake(e) then log(string.format("%s %s woken: your friend is next to it", e.name, e.id:sub(1, 12))) end
+            end
+            local th = ep and safe(e.go.call, e.go, "get_Update") == true and think_of(e)
+            if th then
+                local tgt = safe(th.call, th, "get_Target")
+                local dm = math.sqrt(dist2(ep, p))
+                local want = nil
+                -- One that's fighting, or an awake one a friend is right next to (with the host's player far off, the host's
+                -- game never sets it on anyone: it stood idle next to the friend in the bot test).
+                if best and bd < HF_RANGE and (tgt ~= nil or e.hf or bd < HF_NOTICE) then
+                    if we_down then want = best
+                    elseif e.hf then
+                        -- Stays on the friend until we're HF_SWITCH m nearer. (Was "(cond) and nil or best", which is always
+                        -- best in Lua: an enemy that once went after the friend never came back to the host, bot test 2026-11-20.)
+                        if not (dm + HF_SWITCH < bd) then want = best end
+                    elseif bd + HF_SWITCH < dm then want = best end
+                end
+                if want then
+                    if e.hf ~= want.k then log(string.format("%s %s goes after %s", e.name, e.id:sub(1, 12), want.k == 1 and "your friend" or ("friend " .. want.k))) end
+                    e.hf = want.k
+                    es.aim_hold[th:get_address()] = want.go:get_address()   -- first: the hold lets this target through
+                    if tgt ~= want.go then set_target(th, want.go) end
+                    if safe(th.call, th, "get_targetStatus") ~= ps then pcall(th.call, th, "set_targetStatus", ps) end
+                    -- Handed to the friend's game (v0.57). Our game can't start a fight with the friend's body: its vision
+                    -- never sees it (a VrDummyPlayer, no AIVisionBeacon), and even made to see it (AIVisionSensor.senseDirect,
+                    -- a beacon, a PlayerStatus on it, all bot-tested 2026-11-20) the Molded idled next to it. One that's
+                    -- already fighting keeps going at the friend (its copy's hits land natively); one that has seen no one
+                    -- for HAND_IDLE_S s is run by the friend's game instead, where the friend is a real player.
+                    if is_regular(e.name) then
+                        local vs = safe(th.get_field, th, "<visionSensor>k__BackingField")
+                        local tl = vs and safe(vs.get_field, vs, "_TargetList")
+                        local seen = tl and (tonumber(safe(tl.call, tl, "get_Count")) or 0) > 0
+                        if seen then
+                            e.hf_idle_t = nil
+                        else
+                            e.hf_idle_t = e.hf_idle_t or now
+                            -- Not again within HAND_AGAIN_S s of the last time: a Molded the friend's game put to sleep came back
+                            -- here and went straight back to them every 6 s in the bot test.
+                            if now - e.hf_idle_t > HAND_IDLE_S and now - (e.hand_t or -100) > HAND_AGAIN_S then
+                                e.hf_idle_t, e.hand_t = nil, now
+                                send_event(string.format("hrun %s %d %s", e.id, chapter(), ids[want.k] or "0"))
+                                mv.own[e.id], mv.own_t[e.id] = want.k, now
+                                log(string.format("%s %s hasn't seen anyone in %d s: handed to %s's game, where they're a real player",
+                                    e.name, e.id:sub(1, 12), HAND_IDLE_S, want.k == 1 and "your friend" or ("friend " .. want.k)))
+                                hf_release(e, th, player)
+                                goto continue
+                            end
+                        end
+                    end
+                    -- Its live attack shapes against the friend's body: the game's own damage on a touch.
+                    local rsc = e.rsc or safe(e.go.call, e.go, "getComponent(System.Type)", sdk.typeof("via.physics.RequestSetCollider"))
+                    e.rsc = rsc
+                    e.hf_sets = e.hf_sets or {}
+                    local gp = safe(function() return want.go:call("get_Transform"):call("get_Position") end)
+                    for i = 0, (rsc and gp) and ((safe(rsc.call, rsc, "get_NumRequestSets") or 0) - 1) or -1 do
+                        local live = safe(rsc.call, rsc, "isRegisteredRequestSetFromIndex(System.UInt32)", i) == true
+                        if not live then
+                            e.hf_sets[i] = nil
+                        elseif e.hf_sets[i] ~= "hit" then
+                            local nc = safe(rsc.call, rsc, "getNumCollidablesFromIndex(System.UInt32)", i) or 0
+                            for j = 0, nc - 1 do
+                                local c = safe(rsc.call, rsc, "getCollidableFromIndex(System.UInt32, System.UInt32)", i, j)
+                                local ud = c and safe(c.call, c, "get_UserData")
+                                -- v0.57: off unless host_sends_hits is set. The friend's copy of this enemy plays the same attack
+                                -- (its attack shapes go live in the friend's own game, where the friend really is), so the hit
+                                -- lands there natively (bot tests: 300 and 200 damage hits at 1.2-2 m); sending it too would
+                                -- hit them twice. Kept as a fallback for enemies whose copies don't hit.
+                                if settings.host_sends_hits == true and ud and ud:get_type_definition():is_a("app.Collision.AttackUserData") and shape_hit(safe(c.call, c, "get_TransformedShape"), gp) then
+                                    local dmg = tonumber(safe(ud.get_field, ud, "Damage")) or 0
+                                    if dmg > 0 then
+                                        e.hf_sets[i] = "hit"
+                                        es.hf_hits = es.hf_hits + 1
+                                        send_event(string.format("hurt %s %d %s %s %d", ids[want.k] or "0", dmg, e.name, e.id, chapter()))
+                                        log(string.format("%s hit %s for %d", e.name, want.k == 1 and "your friend" or ("friend " .. want.k), dmg))
+                                    end
+                                    break
+                                end
+                            end
+                        end
+                    end
+                elseif e.hf then
+                    log(string.format("%s %s back on you (you %.1f m, your friend %s m)", e.name, e.id:sub(1, 12), dm, bd and string.format("%.1f", bd) or "-"))
+                    hf_release(e, th, player)
+                end
+            end
+        end
+        ::continue::
+    end
+end
+host_fight = dbg_task("Host runs every enemy", "Point enemies at the nearer player and catch their hits on friends", host_fight, {
+    when = "every frame while 'Host runs every enemy' is on and we're the host",
+    reads = "every shared enemy's position, target and live attack shapes (RequestSetCollider); the friends' characters",
+    writes = "setTarget / set_targetStatus / the target hold on enemies near a friend; wakes ones the game slept near a friend; sends 'hurt' when a live attack shape touches a friend's character" })
+
+-- The host's game handed us a Molded (v0.57, "hrun"): it can't start a fight with our character there; here we're
+-- a real player. Ours runs it from now on (its AI back, sent to the host), until it sleeps or dies (host_fight).
+function coop_enemy_take_run(id, ch, to)
+    if ch ~= chapter() or not host_mode() or mv.role == "host" then return end
+    local me = party_ids()
+    if not (to == "0" or to == me or net_kv().mode == "udp") then return end
+    local e = find_tracked(id)
+    if e == nil then log("the host handed us " .. id:sub(1, 12) .. ", but it isn't here") return end
+    es.hq_own = es.hq_own or {}
+    es.hq_own[id] = os.clock()
+    es.hq[id] = nil
+    mv.own[id], mv.own_t[id] = "me", os.clock()
+    if mv.puppets[id] then release(id) else safe(set_brain, e, true) end
+    log(string.format("%s %s: the host's game handed it to ours (it hadn't seen anyone there): ours runs it", e.name, id:sub(1, 12)))
+end
+
+-- A host's enemy hit us (v0.57): the game's own damage path, with the copy that hit us as the attacker.
+function coop_enemy_apply_hurt(to, dmg, name, id, ch)
+    if ch ~= chapter() or not host_mode() then return end
+    local me, _ = party_ids()
+    local kv = net_kv()
+    if not (to == "0" or to == me or kv.mode == "udp") then return end
+    local pl = sdk.get_managed_singleton("app.ObjectManager"):get_field("PlayerObj")
+    if pl == nil or (local_cutscene and local_cutscene()) then return end
+    local dc = safe(pl.call, pl, "getComponent(System.Type)", sdk.typeof("app.PlayerDamageController"))
+    local m = sdk.find_type_definition("app.DamageController"):get_method("newFakeDamageInfo")
+    if dc == nil or m == nil then return end
+    local te = find_tracked(id)
+    local attacker = te and te.go or pl
+    local info = safe(m.call, m, nil, dmg + 0.0, attacker, pl)
+    if info == nil then log("hurt: no damage info") return end
+    local ok, err = pcall(dc.call, dc, "addManualDamage", info)
+    log(string.format("hit by the host's %s for %d%s", name, dmg, ok and "" or (" ERR " .. tostring(err))))
+end
+
+-- Jack's car in the garage (v0.57). ---------------------------------------------------------------------------
+-- The garage fight's car (sm9104_EthanCar_Garage) isn't an enemy, so the Game Object explorer's enemy lists never
+-- show it: it sits under a scene folder (c03_MainHouse1FGarage_havok), not under any game object, and has no
+-- EnemySave. Its app.CarInGarage component and its own FSM (via.fsm.Fsm, states WaitPlayerGetInto, PlayerGetInto,
+-- WaitEnemyGetPlayerOut, EnemyGetInto, ... ExecEnemyCrashEvent, AfterExplosion; saved by app.FsmParamSave) play the
+-- whole fight with the local player (its Player field is our Pl0000) and garage Jack (its Enemy field, Em3000). So
+-- each game had its own car fight: in the 2026-11-20 bot test one game's player sat in the driver's seat while the
+-- other game's Jack got into its car, smashed every window and drove it into the wall on his own.
+-- Now one game runs the car: the first whose car leaves WaitPlayerGetInto (its player got in, or its Jack did) says
+-- so ("car run <chapter> <state>", every 4 s); if both did, the host's. That game keeps Jack for the whole fight (no
+-- hand-offs: he rides in its car). The other game's car is a copy: its CarInGarage and FSM are stopped, its get-in
+-- points switched off, and it's put every frame where the running game's car is (the "car" line of the enemy
+-- snapshot, 15 a second), with the same windows, body, door and tyres broken. When Jack drives it over the other
+-- player there, that game hurts its own player (the game's own damage path). With "Host runs every enemy" on, the
+-- host's game always runs it.
+local car = coop_car
+car.hist = car.hist or {}
+CAR_IDLE = { WaitPlayerGetInto = true }
+CAR_RUNOVER_SPEED = 2.0   -- m/s: the car's own SpeedEnableEnemyRunOver
+CAR_HIT_DMG = 250         -- of the player's 1000 health
+CAR_HIT_EVERY = 2.0       -- s between two run-over hits
+CAR_DELAY = 0.12          -- s the copy stays behind the running game's car (to blend between samples)
+-- Its footprint around its origin (m): the headlights sit 2.4 m ahead of it, the body is about 2 m wide.
+local CAR_HALF_W, CAR_FRONT, CAR_REAR = 1.0, 2.6, 2.5
+local CAR_FLAGS = { "IsDoorBroken", "IsFrontLeftBlownOut", "IsFrontRightBlownOut", "IsRearLeftBlownOut", "IsRearRightBlownOut",
+    "IsEnemyDriving", "IsPlayerDriving", "IsCrashed" }
+local CAR_TYRES = { [2] = "blowOutFrontLeft", [3] = "blowOutFrontRight", [4] = "blowOutRearLeft", [5] = "blowOutRearRight" }
+
+local function car_find(now)
+    if car.c and safe(car.c.call, car.c, "get_GameObject") then return car.c end
+    car.c = nil
+    if now - (car.find_t or -100) < 2 then return nil end
+    car.find_t = now
+    local sc = sdk.call_native_func(sdk.get_native_singleton("via.SceneManager"), sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
+    local arr = sc and safe(sc.call, sc, "findComponents(System.Type)", sdk.typeof("app.CarInGarage"))
+    local n = arr and tonumber(safe(arr.call, arr, "get_Count")) or 0
+    if n == 0 then return nil end
+    local c = arr:call("get_Item", 0)
+    car.c, car.go = c, c:call("get_GameObject")
+    car.tr, car.fsm = car.go:call("get_Transform"), c:get_field("Fsm")
+    car.interacts = nil
+    log("Jack's car found (the garage fight)")
+    return c
+end
+
+local function car_state()
+    return car.fsm and safe(car.fsm.call, car.fsm, "getCurrentState(System.UInt32)", 0)
+end
+
+-- The friend slot of the host (the lowest SteamID), or nil when we're the host.
+local function car_host_slot()
+    if mv.role == "host" then return nil end
+    local _, ids = party_ids()
+    local best
+    for k, id in pairs(ids) do if best == nil or id_less(id, ids[best]) then best = k end end
+    return best or 1
+end
+
+-- The car's own get-in, ignition and get-out points (InteractSendFsm on its children Interact_*).
+local function car_interacts(on)
+    if car.interacts == nil then
+        car.interacts = {}
+        local ch = safe(car.tr.call, car.tr, "get_Child")
+        while ch do
+            local go = safe(ch.call, ch, "get_GameObject")
+            if go and tostring(safe(go.call, go, "get_Name") or ""):match("^Interact_") then
+                for _, c in ipairs(arr_items(safe(go.call, go, "get_Components"))) do
+                    if c:get_type_definition():get_full_name():find("Interact", 1, true) then car.interacts[#car.interacts + 1] = c end
+                end
+            end
+            ch = safe(ch.call, ch, "get_Next")
+        end
+    end
+    for _, c in ipairs(car.interacts) do safe(c.call, c, "set_Enabled", on) end
+end
+
+local function car_puppet(on)
+    if car.c == nil or (car.puppet == true) == on then return end
+    car.puppet = on
+    safe(car.c.call, car.c, "set_Enabled", not on)
+    safe(car.fsm.call, car.fsm, "set_Paused", on)
+    car_interacts(not on)
+    if on then car.win_done, car.fr_calls, car.rr_calls, car.flags_done = 0, 0, 0, 0 end
+    log(on and "Jack's car: your friend's game runs it, this one is a copy of theirs" or "Jack's car: this game's own again")
+end
+
+-- The running game's car, as one snapshot line.
+function coop_car_line()
+    if car.runner ~= "me" or car.c == nil then return nil end
+    local c, tr = car.c, car.tr
+    local p, q = safe(tr.call, tr, "get_Position"), safe(tr.call, tr, "get_Rotation")
+    if p == nil or q == nil then return nil end
+    local flags = 0
+    for i, f in ipairs(CAR_FLAGS) do if safe(c.get_field, c, f) == true then flags = flags | (1 << (i - 1)) end end
+    return string.format("car %.3f %.3f %.3f %.4f %.4f %.4f %.4f %.2f %d %d %d %d %s", p.x, p.y, p.z, q.x, q.y, q.z, q.w,
+        tonumber(safe(c.get_field, c, "DriveSpeed")) or 0, tonumber(safe(c.get_field, c, "FlagWindowBroken")) or 0,
+        tonumber(safe(c.get_field, c, "CrashCountForFrontBody")) or 0, tonumber(safe(c.get_field, c, "CrashCountForRearBody")) or 0,
+        flags, tostring(car.st or "-"))
+end
+
+-- A friend's car line (t is on our clock).
+function coop_car_on_line(line, t, k)
+    if car.runner ~= k then return end
+    local x, y, z, qx, qy, qz, qw, spd, win, fr, rr, fl, st =
+        line:match("^car (%S+) (%S+) (%S+) (%S+) (%S+) (%S+) (%S+) (%S+) (%d+) (%d+) (%d+) (%d+) (%S+)$")
+    if x == nil then return end
+    local s = { t = t, x = tonumber(x), y = tonumber(y), z = tonumber(z), qx = tonumber(qx), qy = tonumber(qy),
+        qz = tonumber(qz), qw = tonumber(qw), spd = tonumber(spd) or 0, win = tonumber(win), fr = tonumber(fr),
+        rr = tonumber(rr), fl = tonumber(fl), st = st }
+    if s.x == nil or s.qw == nil then return end
+    local h = car.hist
+    if #h > 0 and t <= h[#h].t then return end
+    h[#h + 1] = s
+    while #h > 2 and h[2].t < t - 2 do table.remove(h, 1) end
+    if car.last == nil or car.last.st ~= st then log("Jack's car (your friend's): " .. st) end
+    car.last = s
+end
+
+function coop_car_on_event(text)
+    local ch, st = text:match("^car run (%-?%d+) (%S+)$")
+    if ch == nil then return false end
+    if tonumber(ch) ~= chapter() then return true end
+    local k = coop_event_slot or 1
+    if car.runner == "me" then
+        if mv.role == "host" then return true end   -- both games started theirs: the host's is the one
+        log("Jack's car: both games started theirs, the host's is the one")
+    end
+    if car.runner ~= k then
+        log(string.format("Jack's car: friend %d's game runs it (it's at %s there)", k, st))
+        if k == 1 then note("Jack's car: your friend's game drives it, you see theirs") end
+    end
+    car.runner = k
+    return true
+end
+
+-- What the running game's car has broken, broken on ours too (each once).
+local function car_mirror_damage()
+    local s, c = car.last, car.c
+    if s == nil or c == nil then return end
+    for i = 1, 6 do
+        local b = 1 << i
+        if s.win & b ~= 0 and car.win_done & b == 0 then
+            car.win_done = car.win_done | b
+            safe(c.call, c, "breakWindow(app.CarInGarage.Window)", i)
+        end
+    end
+    while car.fr_calls < math.min(s.fr, 4) do car.fr_calls = car.fr_calls + 1 safe(c.call, c, "breakFrontBody") end
+    while car.rr_calls < math.min(s.rr, 4) do car.rr_calls = car.rr_calls + 1 safe(c.call, c, "breakRearBody") end
+    if s.fl & 1 ~= 0 and car.flags_done & 1 == 0 then
+        car.flags_done = car.flags_done | 1
+        if safe(c.get_field, c, "IsDoorBroken") ~= true then safe(c.call, c, "breakOriginalLeftDoor") end
+    end
+    for bit, m in pairs(CAR_TYRES) do
+        local b = 1 << (bit - 1)
+        if s.fl & b ~= 0 and car.flags_done & b == 0 then
+            car.flags_done = car.flags_done | b
+            if safe(c.get_field, c, CAR_FLAGS[bit]) ~= true then safe(c.call, c, m) end
+        end
+    end
+end
+
+-- Jack drives the copy over our player: our game hurts us (the game's own damage path, the car as the attacker).
+local function car_runover(now)
+    local s = car.last
+    if s == nil or s.fl & 32 == 0 or math.abs(s.spd) < CAR_RUNOVER_SPEED then car.inside = false return end
+    if now - (car.hit_t or -100) < CAR_HIT_EVERY or (local_cutscene and local_cutscene()) then return end
+    if revive and revive.downed then return end
+    local pl = sdk.get_managed_singleton("app.ObjectManager"):get_field("PlayerObj")
+    local pp = pl and safe(function() return pl:call("get_Transform"):call("get_Position") end)
+    local cp, q = safe(car.tr.call, car.tr, "get_Position"), safe(car.tr.call, car.tr, "get_Rotation")
+    if pp == nil or cp == nil or q == nil then return end
+    -- The car's forward (its local +Z) and right, flat.
+    local fx, fz = 2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y)
+    local n = math.sqrt(fx * fx + fz * fz)
+    if n < 1e-4 then return end
+    fx, fz = fx / n, fz / n
+    local dx, dy, dz = pp.x - cp.x, pp.y - cp.y, pp.z - cp.z
+    local along, side = dx * fx + dz * fz, dx * fz - dz * fx
+    local m = 0.35   -- the player's own width
+    local inside = not (math.abs(dy) > 1.6 or math.abs(side) > CAR_HALF_W + m or along > CAR_FRONT + m or along < -(CAR_REAR + m))
+    -- One hit per pass: the bot test's car took 2.6 s to slide through and hit twice.
+    local was = car.inside
+    car.inside = inside
+    if not inside or was then return end
+    car.hit_t = now
+    local dc = safe(pl.call, pl, "getComponent(System.Type)", sdk.typeof("app.PlayerDamageController"))
+    local mk = sdk.find_type_definition("app.DamageController"):get_method("newFakeDamageInfo")
+    local info = dc and mk and safe(mk.call, mk, nil, CAR_HIT_DMG + 0.0, car.go, pl)
+    if info == nil then return end
+    local ok, err = pcall(dc.call, dc, "addManualDamage", info)
+    log(string.format("Jack's car hit you (%.1f m/s)%s", math.abs(s.spd), ok and "" or (" ERR " .. tostring(err))))
+end
+
+-- The fight is over or left: everything back as the game had it.
+local function car_end(why)
+    local final = car.last and car.last.st
+    if car.puppet then
+        car_puppet(false)
+        -- The running game's car burnt out: ours is left the way a save loads it after the fight (the FSM state, which
+        -- app.FsmParamSave keeps, and the wreck: breakAll, bot-tested 2026-11-20).
+        if final and (final:find("Explosion", 1, true) or final:find("Crash", 1, true)) and car.fsm then
+            safe(car.fsm.call, car.fsm, "setCurrentState(System.String)", "AfterExplosion")
+            safe(car.c.call, car.c, "breakAll")
+            log("Jack's car: your friend's burnt out, so ours is the wreck too")
+        end
+    end
+    if car.runner ~= nil then log("Jack's car: " .. why) end
+    car.runner, car.hist, car.last, car.ann_t = nil, {}, nil, nil
+end
+
+local function car_tick(now)
+    if not jack_boss_fight() then
+        if car.runner ~= nil or car.puppet then car_end("the garage fight is over") end
+        return
+    end
+    if car.puppet and car.c then pcall(car_runover, now) end
+    if now - (car.t or -100) < 0.25 then return end
+    car.t = now
+    if car_find(now) == nil then return end
+    car.st = car_state()
+    if host_mode() and mv.role ~= "host" then
+        -- Host runs every enemy (v0.57): the host's game runs the car too, from the start.
+        local h = car_host_slot()
+        if car.runner ~= h then car.runner = h log("Jack's car: the host's game runs it (Host runs every enemy)") end
+    elseif car.runner == nil and car.st and not CAR_IDLE[car.st] then
+        car.runner, car.ann_t = "me", nil
+        log("Jack's car: our game started it (" .. car.st .. "): we run it and Jack, your friend's game copies ours")
+        note("Jack's car: your game drives it, your friend sees yours")
+        -- Jack is ours from now on: a copy of the friend's Jack stops being one at once.
+        for id, e in pairs(es.tracked) do
+            if e.name == "Em3000" and mv.own[id] ~= nil and mv.own[id] ~= "me" then
+                mv.own[id], mv.own_t[id], mv.handed[id] = "me", now, nil
+                if mv.puppets[id] then release(id) end
+                mv.hist[id] = nil
+                log("took back Em3000 " .. id .. " (he rides in our car)")
+            end
+        end
+    end
+    if car.runner == "me" and now - (car.ann_t or -100) >= 4 then
+        car.ann_t = now
+        send_event(string.format("car run %d %s", chapter(), tostring(car.st or "-")))
+    end
+    local follow = type(car.runner) == "number"
+    car_puppet(follow)
+    if follow then pcall(car_mirror_damage) end
+end
+
+-- The copy is put where the running game's car was CAR_DELAY s ago, just before the frame is drawn.
+local function car_place()
+    if not car.puppet or car.tr == nil or #car.hist == 0 then return end
+    local h = car.hist
+    local rt = os.clock() - CAR_DELAY
+    local a, b, f = h[#h], h[#h], 0
+    if rt < h[#h].t then
+        a, b = h[1], h[1]
+        for i = #h - 1, 1, -1 do
+            if h[i].t <= rt then a, b = h[i], h[i + 1] break end
+        end
+        if b.t > a.t then f = math.max(0, math.min(1, (rt - a.t) / (b.t - a.t))) end
+    end
+    local sgn = (a.qx * b.qx + a.qy * b.qy + a.qz * b.qz + a.qw * b.qw) < 0 and -1 or 1
+    local qx, qy = a.qx + (sgn * b.qx - a.qx) * f, a.qy + (sgn * b.qy - a.qy) * f
+    local qz, qw = a.qz + (sgn * b.qz - a.qz) * f, a.qw + (sgn * b.qw - a.qw) * f
+    local n = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+    if n < 1e-6 then return end
+    car.tr:call("set_Position", Vector3f.new(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f, a.z + (b.z - a.z) * f))
+    car.tr:call("set_Rotation", Quaternion.new(qw / n, qx / n, qy / n, qz / n))
+end
+dbg_note{ feature = "Jack's car (garage fight)", name = "Put the copy of the friend's car where theirs is",
+    when = "every frame, just before drawing, only while the friend's game runs the garage car",
+    reads = "the friend's car samples (the 'car' line of their enemy snapshot)",
+    writes = "our garage car's position and rotation" }
+re.on_pre_application_entry("PrepareRendering", function()
+    if coop_busy and coop_busy() then return end
+    local ok, err = pcall(car_place)
+    if not ok and not car.place_err then car.place_err = true log("car place ERR " .. tostring(err)) end
+end)
+car_tick = dbg_task("Jack's car (garage fight)", "Decide which game runs the garage car; copy it in the other", car_tick, {
+    when = "every frame during the garage fight (story stage 9fb77189 900-999); its checks 4 times a second",
+    reads = "the car's FSM state and damage, the friend's 'car run' and car samples",
+    writes = "'car run' events; on the copy: CarInGarage/FSM off, its get-in points off, windows/body/door/tyres broken like theirs, run-over hits on our player" })
+
 dbg_note{ feature = "Enemy scheduler", name = "The enemies callback (calls the movement update, event reader and scan)",
     when = "every frame; its timers: the movement update every frame, events every 0.2 s, the scan every 0.25 s",
     reads = "see the rows above",
@@ -2255,6 +2989,10 @@ re.on_frame(function()
     end
     local mok, merr = pcall(update_movement, now)
     if not mok and not mv.err then mv.err = true log("movement ERR " .. tostring(merr)) end
+    local hok, herr = pcall(host_fight, now)
+    if not hok and not es.hf_err then es.hf_err = true log("host_fight ERR " .. tostring(herr)) end
+    local cok, cerr = pcall(car_tick, now)
+    if not cok and not car.tick_err then car.tick_err = true log("car ERR " .. tostring(cerr)) end
     if now - es.in_t >= 0.2 then
         es.in_t = now
         local ok, err = pcall(read_events)

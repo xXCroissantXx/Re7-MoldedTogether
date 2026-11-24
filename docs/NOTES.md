@@ -2064,3 +2064,20 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   enemy only attacks its own game's player, so this is how Mia (and Jack's boss fights) get to both. Mia's 2nd battle
   after c01e04_00 stood idle in the bots (waits on player actions): her attacks on the friend aren't bot-verified.
   Not tested: the garage fight (no friend log; my log starts after it), a real Molded spawn in front of the friend.
+- v0.57 (2026-11-15, host runs every enemy, experimental, settings.host_runs_enemies, shared). Prior art: re2coop (RE2
+  1998: host-authoritative enemies, client is an NPC the host's enemies attack, Pl_damage replayed on the client),
+  RE2R Local Couch Co-op / Party Mode (extra real player characters, enemies target the nearest), RE4R Multiplayer
+  (partner is Ashley/Wesker/Leon). RE7 has no player prefab (players are swapped via GameManager.playerChangeRequest
+  Pl0000/Pl2000 unload/load), so the friend stays the VrDummyPlayer ghost. Findings (bottest ghost_attack2.lua,
+  swing_rec.lua, hit_rec.lua, attack_shapes.lua): EnemyThinkBase has Target + targetStatus (ICharacterStatus);
+  setTarget(ghost) alone -> walks up and idles; + set_targetStatus(our PlayerStatus) + aim_hold -> attack sets go
+  live at the ghost (Damage 200/300 at 1.5-2 m, own player 5 m away). Attack shapes: RequestSetCollider
+  get_NumRequestSets / isRegisteredRequestSetFromIndex (live) / getCollidableFromIndex -> get_UserData
+  (app.Collision.AttackUserData.Damage) / get_TransformedShape (first frame reads 0,0,0). Copies (puppets) play
+  the owner's attack clips and their attack shapes go live in the copy's game: the friend took 300/200 hits
+  from copies at 1.2-2 m -> hits are delivered natively; host-side 'hurt' (addManualDamage(newFakeDamageInfo))
+  is kept behind settings.host_sends_hits (default off: double damage). host_fight: no hand-offs; host sends all
+  shared enemies, guest takes all; nearest player with 2 m hysteresis, HF_NOTICE 6 m for idle enemies, wakes
+  slept ones within 15 m of a friend; guest holds (set_brain off) every shared enemy until it's a copy. In the
+  bots copy 0's Molded never attacked copy 0 at all (unknown why); copy 1 as host via udpHost in
+  coopnet_config.json. Bot fights are noisy: not verified end to end; needs a real session.

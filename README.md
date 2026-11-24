@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.56; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.57; formerly coop-re7)
 Created by xXCroissantXx & Kingkiller1195
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
@@ -22,7 +22,7 @@ climb and fight where they do, over Steam (no port forwarding).
 | **Story** | Story progress one of you makes counts for everyone, step by step, the way the game itself steps. Cutscenes play for everyone in first person; phone calls and scripted moves (the fridge, the pot, the sheet metal) play on the player who does them while the others hear them, and they count for all. The host's game leads; a friend who's behind catches up. **VHS tapes:** when your friend puts one in, you follow them into it. |
 | **Doors, drawers, lockers, boxes** | A door unlocked, opened or closed in one game does the same in the others. Drawers and lockers open and shut for all; a breakable box smashed by one disappears for the others (no pieces), and each of you gets its item. Body bags kicked in the morgue swing for everyone. |
 | **Puzzles and key items** | A key item used in its lock (the dog heads, the statue) does its job in every game. The shadow puzzles and the basement cremator are solved for everyone. One-off interactions (the fridge, the van, the pot, switches) happen in every game. |
-| **Giving items** | Give your friend ammo, healing or crafting materials from the co-op screen (**Give items**): it's put on the ground in front of them to pick up, and leaves your inventory once it's there. |
+| **Giving items** | Discard ammo, healing or materials in your inventory and it lands on your friend's ground too, to pick up. |
 | **Supplies** | Each player gets their own ammo, healing and crafting materials. For a harder game, tick **Share supplies**: then there's one copy, and whatever one player picks up disappears for the others. Weapons, keys, files and maps always stay for everyone, so nobody gets stuck; when one of you takes one, the others are told to pick it up too. |
 | **Deaths** | With a friend connected, a fatal hit (also in a grab or a boss fight) puts you **down** instead of a game over, until a friend stands next to you for 3 seconds. It's a real game over only when everyone is down. |
 | **Pausing** | The others see "Your friend paused the game"; enemies your game was running carry on in theirs. |
@@ -115,14 +115,10 @@ The Lobby then says "Full character models: installed".
    Anyone can set **Ready** to No to hold the start back. Saving switches off for a chapter jump or a New Game;
    switch it back on in Options if you want to keep progress. Friends can also join a host directly: a friend
    hosting a lobby is marked in **Friends** (**Join**).
-7. **Quick messages** (in the menu, or F5-F8): "Over here", "Come here", "Wait for me", "Go on ahead", "Help!",
-   and (in the menu) "I need ammo" and "I need healing": your friend is told to give you some under **Give
-   items**, which then has you picked, with your health.
+7. **Quick messages** (F5-F8): "Over here", "Come here", "Wait for me" and "Help!"; your friend sees them on
+   screen.
 8. **You appear as** (main page): how your friends see you (Ethan, Mia, Mia (ship), Clancy, Zoe, Chris, Joe).
-9. **Give items**: pick a friend and how many (one, half or all), then the ammo, healing or material to give.
-   Your friend's game puts it on the ground in front of them, to pick up like any item; only once it's there
-   does it leave yours (if it can't be put down, nothing moves).
-10. **This session**: how long you've played together, and for each of you the enemies taken down, shots, hits
+9. **This session**: how long you've played together, and for each of you the enemies taken down, shots, hits
    taken, times down and back up, heals and items given.
 
 **Play on the same difficulty.** Enemies have different health and damage on Casual, Normal and Madhouse, so
@@ -203,6 +199,7 @@ change for the whole group when any of you changes them.
 | **Bump into your friend** | On | You can't walk through each other (lets go in scripted scenes and when you're stuck). |
 | **Heal your friend** | Off | Use a healing item next to your friend (within about 2.5 m) and it heals them instead of you. |
 | **Your friend's flashlight** (experimental) | Off | In the dark, their flashlight shines where they look (a copy of your own light, so yours has to have been on once). |
+| **Host runs every enemy** (experimental, same for everyone) | Off | The host's game runs every enemy and they go after whichever of you is nearer; your friend's game shows copies that hit them where they really are. No enemy changes games mid-fight. |
 | **Cutscenes wait for both** (experimental) | Off | A cutscene or VHS tape you start waits a moment for your friend's game, then starts for both together. Each of you sets it. |
 | **Menu text size** | Large | Normal, Large or Extra large. |
 | **Key for this menu** | F9 | F9, F10, F11, Home or End. |
@@ -255,8 +252,8 @@ your friend's weapon in hand, ladders, on-screen status and the shared switches)
   hands are found by trying likely file names; he may still have none.
 - **Deaths:** going down has no fall animation (you crouch). The 90-second limit for being down is untested in a
   real session.
-- **Item boxes** are separate per player. **Give items** moves ammo, healing and materials, not weapons or key
-  items (those stay for everyone anyway).
+- **Item boxes** are separate per player. To pass ammo, healing or materials, discard them: they land on your
+  friend's ground too. Weapons and key items stay each player's own.
 - **Your friend's voice** comes from your own character's sounds, placed where your friend is. If it ever sounds
   as if it's your own character (inside your head), turn off **Your friend's voice** and say so in a bug report.
 - Tested on RE7's current (ray-tracing) version. The older non-RT version (Steam beta `dx11_non-rt`) should
@@ -312,7 +309,7 @@ those updates. The scripts:
 | `coop_enemies.lua` | One Molded and one boss for everyone: who runs each enemy, the copies, damage, deaths, pausing |
 | `coop_world.lua` | Shared doors, drawers, lockers, breakable boxes, puzzles, key-item locks and supplies |
 | `coop_talk.lua` | The catch-up list, quick messages, pings, health and the shared options |
-| `coop_menu.lua` | The in-game co-op screen (CO-OP on the title screen, F9 / L3+R3): lobby, friends, quick messages, give items, this session, options, help |
+| `coop_menu.lua` | The in-game co-op screen (CO-OP on the title screen, F9 / L3+R3): lobby, friends, this session, options, help |
 | `coop_gunsound.lua` | Your friend's gunshots, reloads and swings, their voice and their flashlight |
 | `coop_story.lua` | Shared story steps, cutscenes and phone calls; "your friend saved" |
 | `coop_revive.lua` | Downed and revive |

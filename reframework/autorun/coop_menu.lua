@@ -1027,8 +1027,8 @@ re.on_script_reset(function() pcall(hold_game, false) end)
 local CATS = {
     { page = "lobby", label = "Lobby" },
     { page = "friends", label = "Friends" },
-    { page = "talk", label = "Quick messages" },
-    { page = "give", label = "Give items" },
+    -- v0.57: "Quick messages" and "Give items" are no longer sections (the owner's choice). Their pages stay (the
+    -- F5-F8 quick-message keys and an old version's give still work), they just aren't on sheet A.
     { page = "session", label = "This session" },
     { page = "you", label = "Your character" },
     { page = "options", label = "Options" },
@@ -1232,7 +1232,7 @@ function PAGES.lobby()
     if host then
         local why = start_blocker()
         items[#items + 1] = { text = L.state == "started" and "Start again" or "Start", value = why and "waiting" or "everyone's ready",
-            color = why and nil or 0xFF7FFF8C, off = why,
+            color = (not why) and 0xFF7FFF8C or nil, off = why,   -- green only when everyone's ready (was always green)
             on = function()
                 if L.start == "here" then lobby_start()
                 elseif L.start == "new" then ask("Everyone starts a new game from the beginning. Start?", "Start", lobby_start)
@@ -1461,6 +1461,8 @@ function PAGES.options()
         "Use a healing item next to them: it heals them, not you.")
     items[#items + 1] = setting_toggle("Your friend's flashlight (experimental)", "friend_light", false, false,
         "In the dark, their flashlight shines where they look (once your own has been on).")
+    items[#items + 1] = setting_toggle("Host runs every enemy (experimental)", "host_runs_enemies", false, true,
+        "The host's game runs every enemy and they go after whichever of you is nearer; their hits on you are sent to your game. No enemy changes games mid-fight. The same for everyone.")
     items[#items + 1] = setting_toggle("Cutscenes wait for both (experimental)", "scene_ready", false, false,
         "A cutscene or VHS tape you start waits a moment for your friend's game, then starts for both together. Each of you sets it.")
     do

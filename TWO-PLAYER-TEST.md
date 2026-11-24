@@ -184,8 +184,6 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 - [ ] **Your friend's voice**: let an enemy hit your friend, or have them block: you hear their grunt from where
       they are (not as if it's you). Their scream if they die, a grunt when they drop down or climb up, a sound
       when they're revived. If it sounds like it's inside your head, note it and turn off **Friend's voice**.
-- [ ] **Give items**: co-op screen > **Give items**: give your friend one handgun ammo. It's put on the ground in
-      front of them (since v0.55) and leaves yours. Try **All** with healing.
 - [ ] **This session**: after a fight, both of you open **This session**: each sees their own counts and the
       other's (theirs show after about 20 seconds).
 - [ ] **Difficulty**: if you play on different difficulties, the Lobby says so (in red) and a message tells you.
@@ -205,8 +203,6 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
       Note it if nothing moves (the game may keep the mouse to itself in play; the keys still work).
 - [ ] **Esc and F**: on sheet B, Esc goes back to sheet A, Esc again closes; F picks like Enter. The top-left
       line names the menu key you picked (Options).
-- [ ] **I need ammo / I need healing**: one of you picks it under Quick messages; the other sees the message,
-      opens **Give items**, and the one who asked is already picked, with their health.
 - [ ] **The new name**: the co-op screen says Molded Together, and the installer leaves one "Start Molded
       Together" shortcut on the desktop (the old "Start RE7 Co-op" one is gone).
 
@@ -362,8 +358,6 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 
 ## 28. New in v0.55
 
-- [ ] **Give items**: give your friend some ammo and a herb. Each lies on the ground in front of them; they pick it
-      up with the normal button, and it left your inventory. Their game says "it's on the ground in front of you".
 - [ ] **Discard**: discard a herb in the inventory: it's on the ground in front of you and your friend, as before.
 - [ ] **Frame rate**: compare with v0.54 in the same place: it should be a little smoother. The Molded Together
       window's Debug section (Measure) shows the time each part takes, if you want to send us a report.
@@ -381,6 +375,22 @@ Playing from the start of the game. Note for each: works / doesn't / looks odd.
 - [ ] **Title screen**: scroll the tape recorder up and down: every row keeps its own name. Choose CO-OP: the
       sheets are sharp.
 - [ ] **Top left**: one line with your friend, ping, health and saving.
+
+## 30. New in v0.57 (experimental)
+
+- [ ] **Host runs every enemy**: both switch it on in Options (it's the same for both). In a fight with a Molded or
+      Jack, stand closer to it than the host: it comes after you and its hits hurt you. Step back so the host is
+      closer: it turns on them. Note any hit you saw but didn't feel, any you felt without seeing, and any double
+      hits. Switch it off again if a fight goes wrong.
+- [ ] **Story flags**: one of you solves a puzzle or opens something the story needs (a tray, a crest door) while
+      the other is elsewhere. The other's objective should update and their story carry on. In coop_story_log.txt
+      look for "story flag ... set from your friend's game".
+- [ ] **Molded for both**: one of you sets a Molded off while the other is close by, even looking at the spot. The
+      other should see it within a second or two, in the same place. Shoot it: it should flinch in both games.
+      Note any Molded only one of you saw, or one standing frozen.
+- [ ] **Jack's car (garage)**: one of you gets in the car. The other should see that same car move, Jack in it,
+      the windows break as they do for the driver, and get hit if Jack drives it into them. Note where the car
+      looked wrong (place, damage, Jack not in it) and send both logs (coop_enemies_log.txt has "Jack's car" lines).
 
 ## Afterwards
 
