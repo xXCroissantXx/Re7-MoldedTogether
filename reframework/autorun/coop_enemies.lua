@@ -1442,6 +1442,8 @@ local function read_snapshot(now, k)
         if te and not moves_shared(te.name) then id = nil end   -- a boss: ours runs on its own
         if te and seq_hold(te.name) then id = nil end           -- our story sequence plays out (v0.39)
         if id then
+            mv.heard = mv.heard or {}
+            mv.heard[id] = now   -- a friend's game runs it (see claim_unsent)
             -- Friend k runs it. Two games running the same enemy: the lower SteamID keeps it.
             local own, take = mv.own[id], false
             if te and car_pinned(te.name) then
@@ -1712,6 +1714,9 @@ local function known_bank(name, bank)
     return t and t[bank] or nil
 end
 local function ask_bank(e, bank, now)
+    -- Bank 0 (v0.60) isn't a bank: it's what a layer reports while a scene's own animation holds the enemy (a jack
+    -- from outside its body). Nothing to ask for; the owner answered "not found here" every 2 s.
+    if bank == 0 then return end
     local key = e.id .. "#" .. bank
     local a = eb.asked[key]
     if a == nil then a = { n = 0, t = -100 } eb.asked[key] = a end
@@ -1991,6 +1996,35 @@ function check_handoffs(now)
                 mv.mine_since[e.id] = nil
                 hand_off(e, now, best)
             end
+        end
+    end
+end
+
+-- A shared boss nobody sends (v0.60). The guest only sends an enemy handed to it and the host only one that's awake in
+-- its game. In the garage fight (bot test 2026-11-24) the host's Jack slept for 40 s after the opening scene while the
+-- guest's fought: neither game sent him, so each player saw a different Jack until a turn hand-off happened to fix it
+-- (some bot runs never did in 5 minutes). Now a guest whose boss is awake, with nothing from any friend about it for
+-- CLAIM_S, runs it as its own and sends it; the host's game copies it (and hands it back by the usual turns).
+CLAIM_S = 3.0
+local function claim_unsent(now)
+    if mv.role ~= "guest" or host_mode() then return end
+    for k = 1, 3 do if slot_live(k) and friend_in_cutscene(k) then mv.unsent = nil return end end
+    mv.unsent = mv.unsent or {}
+    mv.heard = mv.heard or {}
+    for _, e in pairs(es.tracked) do
+        local id = e.id
+        local ok = BOSS_HANDOFF[e.name] == true and moves_shared(e.name) and not car_pinned(e.name) and not seq_hold(e.name)
+            and mv.own[id] == nil and not e.dup and not e.dead and not mv.puppets[id]
+            and now - (mv.heard[id] or -100) > CLAIM_S and safe(e.go.call, e.go, "get_Update") == true
+        if not ok then
+            mv.unsent[id] = nil
+        elseif mv.unsent[id] == nil then
+            mv.unsent[id] = now
+        elseif now - mv.unsent[id] >= CLAIM_S then
+            mv.unsent[id] = nil
+            mv.own[id], mv.own_t[id], mv.handed[id] = "me", now, nil
+            log(string.format("%s %s: nobody sent it for %.0f s and ours is awake: ours runs it, your friend's game copies ours",
+                e.name, id:sub(1, 12), CLAIM_S))
         end
     end
 end
@@ -2536,6 +2570,8 @@ local function update_movement(now)
     if now - mv.handoff_t >= 0.5 then
         mv.handoff_t = now
         pcall(check_handoffs, now)
+        local cok, cerr = pcall(claim_unsent, now)
+        if not cok and not mv.claim_err then mv.claim_err = true log("claim ERR " .. tostring(cerr)) end
     end
     -- One Molded for both: who it goes after (see aim_regulars).
     local aok, aerr = pcall(aim_regulars, now)

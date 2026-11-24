@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.60 (2026-11-24)
+Jack is shared from the start of the garage fight.
+
+- **One Jack from the first second.** After the garage fight's opening scene, the host's Jack could stay asleep while
+  the guest's was already fighting. The host's game only sends a Jack that's awake there, and the guest's only one
+  it was handed, so nobody sent him: each of you fought a different Jack until he happened to be handed over, which
+  took about 40 seconds in the bot tests and sometimes never happened. Now, when nobody has sent him for 3 seconds
+  and the guest's Jack is awake, the guest's game runs him and the host's game copies it. In bot tests he was
+  shared within 4 seconds of the scene ending, every time. The same goes for Mia's fights.
+- Jack's grabs, seen in real fights now: the headbutt, the knee, the throw, the turn, the shovel lift and the neck
+  finisher all played on the other game's Jack, chosen by Jack himself in bot fights.
+- A copy no longer keeps asking the other game for a "bank 0" while a scene's own animation holds the enemy.
+
 ## v0.59 (2026-11-24)
 Jack's grabs show on your friend's screen.
 

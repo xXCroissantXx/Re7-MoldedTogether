@@ -2111,3 +2111,12 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   copy (drive) runs the same half via its MotionManager with no Delegate (no grab logic, no player half), follows
   state changes and frame drift >20, and clears on the owner's end / release / save / orphan. Bot test
   local/bottest/grab_sync_test.py (grab started on the owner by hand as the game does).
+- v0.60 (2026-11-24, Jack unsent at the garage fight's start). After the opening scene the host's Jack can be
+  asleep (get_Update false) while the guest's fights; the host sends only awake enemies and the guest only ones
+  it owns, so nobody sent him (bot test: ~40 s, some runs never paired). coop_enemies claim_unsent (every 0.5 s,
+  guest, BOSS_HANDOFF bosses, no friend in a cutscene): no line about it from any friend for CLAIM_S=3 s and ours
+  awake for 3 s -> own='me' (sent); the host takes it in read_snapshot (BOSS_HANDOFF own==nil). mv.heard[id] is
+  stamped for every received line. ask_bank skips bank 0 (a layer jacked by a scene object reports bank 0).
+  Bot test local/bottest/jack_share_test.py x3: first pair 0-4 s after the scene (was ~40 s), unshared gaps
+  <=5 s (hand-overs, 6 s quiet take-back when a player is down). Natural grabs on the copy: HeadButt, Knee,
+  ThrowL, Turn, ShovelLift, FinishNeck.
