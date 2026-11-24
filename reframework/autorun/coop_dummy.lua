@@ -2444,7 +2444,7 @@ end
 
 -- Settings shared with coop_saveguard.lua (reframework/data/coop_settings.json).
 if SLOT == 1 then
-settings = { allow_saving = false, hud = true, nameplate = true, footsteps = true }
+settings = { allow_saving = true, hud = true, nameplate = true, footsteps = true }   -- saving on by default (v0.58)
 do
     local ok, s = pcall(json.load_file, "coop_settings.json")
     if ok and type(s) == "table" then for k, v in pairs(s) do settings[k] = v end end
@@ -2836,7 +2836,7 @@ local function draw_connect_body()
     if kv.lastCommand and kv.lastCommand ~= "-" then imgui.text("Last change: " .. kv.lastCommand) end
 
     if imgui.separator then imgui.separator() end
-    -- Saving: off by default. On: the game saves normally; CoopNet backs the save
+    -- Saving: on by default since v0.58. On: the game saves normally; CoopNet backs the save
     -- folder up now and at every launch (Steam Cloud shares saves with the real install).
     local schanged, sv = imgui.checkbox("Allow saving (your saves are backed up automatically)", settings.allow_saving)
     if schanged then
@@ -2989,17 +2989,22 @@ function jump_busy()
     return nil
 end
 
-function jump_to_chapter(e)
+function jump_to_chapter(e, test)
     local busy = jump_busy()
     if busy then
         chapters.last = "not yet: " .. busy
         log("chapters: refused " .. e.name .. " (" .. busy .. ")")
         return
     end
+    if test then chapters.test_jump = true end
     if settings.allow_saving then
         -- A test jump must never be saved over a real save: switch saving off, give
         -- coop_saveguard (re-reads every 2 s) time to see it, then jump.
         settings.allow_saving = false
+        -- v0.58: a jump the co-op makes for you (the lobby's start, following your friend into a tape or the next
+        -- chapter) gets saving back once you're in the main story again (see "Saving back on after a jump").
+        -- Only the developer chapter switcher's test jumps leave it off.
+        settings.saving_off_for_jump = not chapters.test_jump or nil
         save_settings()
         chapters.pending, chapters.pending_t = e, os.clock() + 2.5
         chapters.last = "saving switched OFF for the test jump; jumping to " .. e.name .. " in 2 s"
@@ -3008,6 +3013,8 @@ function jump_to_chapter(e)
     end
     local gm = sdk.get_managed_singleton("app.GameManager")
     local ok, err = pcall(gm.call, gm, "chapterJumpRequest(System.String, System.Boolean, System.String)", e.key, false, "")
+    if chapters.test_jump and settings.saving_off_for_jump then settings.saving_off_for_jump = nil save_settings() end
+    chapters.test_jump = nil
     if ok then
         chapters.jump_t = os.clock()
         -- The chapter starts over (v0.40): what the other scripts kept about it is from the old run.
@@ -3032,6 +3039,37 @@ on_frame_1(function()
     end
 end)
 
+-- Saving back on after a jump (v0.58). Every chapter jump switches saving off so the jump's own internal saves
+-- never land on disk, and nothing switched it back: after the lobby's start, following the friend into a tape or
+-- into the next chapter, the rest of the playthrough wasn't kept unless someone found Allow saving in the menu.
+-- Now, when the jump was one the co-op made, saving comes back on once the game has settled in a main-story
+-- chapter (not a tape: a tape returns to the main story by itself, and comes back here then) for 20 s.
+-- GameManager._CurrentChapter: 4 Chapter 1, 5 Chapter 3, 6 Chapter 4, 13 Chapter123, 14 Chapter324 (0 is the boot logo,
+-- 3 the title screen, 2 / 7 / 10-12 the tapes, 15-17 the opening and ending movies).
+local MAIN_CHAPTERS = { [4] = true, [5] = true, [6] = true, [13] = true, [14] = true }
+local saving_back = { since = nil }
+coop_note{ feature = "Saving", name = "Saving back on after a jump the co-op made",
+    when = "every frame, but it only looks once a second, and only while saving was switched off for such a jump",
+    reads = "settings.saving_off_for_jump, our chapter, whether the game is loading or in a cutscene",
+    writes = "settings.allow_saving = true (coop_settings.json) after 20 s settled in a main-story chapter" }
+on_frame_1(function()
+    if not (settings and settings.saving_off_for_jump) then return end
+    local now = os.clock()
+    if now - (saving_back.check_t or 0) < 1 then return end
+    saving_back.check_t = now
+    if settings.allow_saving then settings.saving_off_for_jump = nil save_settings() return end
+    local ch = local_chapter()
+    local settled = ch ~= nil and MAIN_CHAPTERS[ch] and not (coop_busy and coop_busy()) and not local_cutscene()
+        and chapters.pending == nil and now - (chapters.jump_t or -100) > 20
+    if not settled then saving_back.since = nil return end
+    saving_back.since = saving_back.since or now
+    if now - saving_back.since < 20 then return end
+    settings.allow_saving, settings.saving_off_for_jump = true, nil
+    save_settings()
+    if send_command then pcall(send_command, "backup allow") end
+    log("saving: back on after the chapter jump (in " .. tostring(chapter_name and chapter_name(ch) or ch) .. ")")
+end)
+
 local function draw_chapter_switcher()
     if chapters.list == nil or imgui.button("Refresh chapter list") then chapters.list = list_chapter_jumps() end
     if settings.allow_saving then
@@ -3043,7 +3081,7 @@ local function draw_chapter_switcher()
     end
     imgui.text("Jump straight to a chapter (testing only; nothing is saved):")
     for i, e in ipairs(chapters.list) do
-        if imgui.button(e.name .. "##ch" .. i) then jump_to_chapter(e) end
+        if imgui.button(e.name .. "##ch" .. i) then jump_to_chapter(e, true) end
         if i % 4 ~= 0 and i < #chapters.list then imgui.same_line() end
     end
     if #chapters.list == 0 then imgui.text("(no jump targets reported yet; load into the game and Refresh)") end

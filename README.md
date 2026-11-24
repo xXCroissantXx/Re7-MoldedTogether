@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.57; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.58; formerly coop-re7)
 Created by xXCroissantXx & Kingkiller1195
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
@@ -53,7 +53,8 @@ Made with [coop-anything](https://github.com/cranebeaker/coop-anything). MIT lic
 4. Start RE7 from **Steam** as usual (**Play**): the mod loads with it. The very first start takes a few minutes
    longer while REFramework sets itself up.
 
-Saving stays off until you switch on **Allow saving** (co-op menu > Options).
+Saving is on, as in normal RE7, and your save folder is backed up at every launch. To play without saving, switch
+off **Allow saving** (co-op menu > Options).
 
 **Playing RE7 without the mod:** double-click **Normal RE7 (mod off).cmd**. Your co-op settings stay; run
 **Install.cmd** again to switch it back on.
@@ -89,8 +90,7 @@ The Lobby then says "Full character models: installed".
 
 1. Start RE7 from Steam (**Play**). **Never played RE7?** Start a **New Game** and play
    through the opening drive until you can walk around before connecting; joining from the very first screen
-   (no save yet) leaves the screen black. If the game asks to create save data, switch on **Allow saving** first
-   (co-op menu > Options), then answer Yes.
+   (no save yet) leaves the screen black. If the game asks to create save data, answer Yes.
 2. On the title screen, choose **CO-OP** on the tape recorder (under EXIT). In play, press **F9** (or both sticks,
    **L3+R3**, on a controller). The **co-op screen** opens: two sheets of paper like the game's Options, the
    sections on sheet A, the chosen one on sheet B. Keyboard (arrows or WASD, Enter or F, Esc or Backspace), controller
@@ -112,8 +112,8 @@ The Lobby then says "Full character models: installed".
 
    The host presses **Start**, and every game goes there at once, **from the title screen too**: a game on the
    title screen loads its latest save first (or starts a New Game if it has none) and then goes to the chapter.
-   Anyone can set **Ready** to No to hold the start back. Saving switches off for a chapter jump or a New Game;
-   switch it back on in Options if you want to keep progress. Friends can also join a host directly: a friend
+   Anyone can set **Ready** to No to hold the start back. Saving switches off for a chapter jump or a New Game,
+   and comes back on by itself once you're playing in the story again. Friends can also join a host directly: a friend
    hosting a lobby is marked in **Friends** (**Join**).
 7. **Quick messages** (F5-F8): "Over here", "Come here", "Wait for me" and "Help!"; your friend sees them on
    screen.
@@ -137,8 +137,8 @@ who joins later catches up. The Lobby shows who's behind or ahead. Key items and
 pick up, and the other way in could crash the game).
 
 **Meeting up.** If your friend is in another chapter: co-op menu > **Help and fixes** > **Go to your friend's
-chapter**: you start at the beginning of their chapter, then walk to each other. Nothing from the jump is saved
-(saving is switched off first). **Teleport to your friend** works once you're within 40 m of them.
+chapter**: you start at the beginning of their chapter, then walk to each other. Saving is switched off for the
+jump and comes back on by itself about 20 seconds after you're in the story. **Teleport to your friend** works once you're within 40 m of them.
 
 **The menu key.** If F9 is also your REFramework menu key, pick another in co-op menu > Options > **Key for this
 menu** (F10, F11, Home, End). L3+R3 always works. While the menu is open your character and the game's own menus
@@ -181,8 +181,8 @@ opens next to the REFramework menu. Its sections:
 | **Help** | **Go to my friend's chapter**, **Teleport to my friend**, **Fast-forward this cutscene**, **Fix my friend's character**, **Reload last save**, **Make a bug report**. |
 | **Show developer tools** | Off by default: the test bot and research tools (below). |
 
-**Saving.** **Allow saving** is off by default: nothing you do is saved. Turn it on to save normally. Your save folder is
-backed up automatically (at every launch and when you turn this on; the last 20 backups are kept in
+**Saving.** **Allow saving** is on by default: you save as in normal RE7. Turn it off to play without saving. Your save
+folder is backed up automatically (at every launch and when you turn saving on; the last 20 backups are kept in
 `reframework\data\save_backups`). Co-op and normal RE7 use the same saves (Steam Cloud too). When one of you saves,
 the others see "Your friend saved" so you can all save at the same point.
 
@@ -203,7 +203,7 @@ change for the whole group when any of you changes them.
 | **Cutscenes wait for both** (experimental) | Off | A cutscene or VHS tape you start waits a moment for your friend's game, then starts for both together. Each of you sets it. |
 | **Menu text size** | Large | Normal, Large or Extra large. |
 | **Key for this menu** | F9 | F9, F10, F11, Home or End. |
-| **Allow saving** | Off | Saving is off during co-op so a friend's game can't overwrite yours; switch it on to keep progress. |
+| **Allow saving** | On | Save as in normal RE7 (your saves are backed up at every launch). A chapter jump switches it off for the jump; it comes back on by itself. |
 
 The settings that left this page still work: they're in `coop_settings.json` (co-op folder, `reframework\data`)
 and in REFramework's **Molded Together** window, with the same names as before (the nameplate, footsteps, voice,
@@ -245,7 +245,7 @@ your friend's weapon in hand, ladders, on-screen status and the shared switches)
 - **Story:** phone calls and scripted moves play on the friend's character; how that looks on screen hasn't been
   checked in a real session. Keys and story items are picked up by each player separately (you're told when your
   friend takes one), because some scripted events follow that player's own pickup. If a cutscene ever hangs and you
-  can't move, restart the game and load again (with saving off, nothing is lost).
+  can't move, restart the game and load your last save.
 - **Animations:** your friend's character copies the moves RE7 plays on their body. In a grab RE7 mostly moves the
   camera, not the body, so a grabbed friend looks like they're standing still.
 - **Characters:** Mia (non-ship) has a gap on her left side and dark eyes, even with the full-model mod. Joe's
@@ -278,7 +278,7 @@ your friend's weapon in hand, ladders, on-screen status and the shared switches)
 | Stuck after a cutscene, can't move | Restart the game and load again |
 | Black screen or outside the map after chapter jumps | Restart the game |
 | Black screen but you can move, on a brand-new game | Fixed in v0.52 (you can connect before New Game). If it still happens, it fades back in by itself after 25 seconds; tell us in a bug report |
-| "Create save data?" keeps coming back | F9 > **Options** > **Allow saving**, then Yes |
+| "Create save data?" keeps coming back | F9 > **Options**: check **Allow saving** is on, then Yes |
 | An extra mouse pointer on screen | The REFramework menu is open: close it with Insert (or your menu key, see *No Insert key*) |
 | The co-op menu's text is too small (or too big) | Options > **Menu text size**: Normal, Large (the default) or Extra large. It also follows your screen's size, and the on-screen status lines use it too |
 | F9 opens REFramework's menu too | F9 is your REFramework menu key: pick another for the co-op menu (Options > **Key for this menu**) |
@@ -313,7 +313,7 @@ those updates. The scripts:
 | `coop_gunsound.lua` | Your friend's gunshots, reloads and swings, their voice and their flashlight |
 | `coop_story.lua` | Shared story steps, cutscenes and phone calls; "your friend saved" |
 | `coop_revive.lua` | Downed and revive |
-| `coop_saveguard.lua` | Blocks saving unless you allow it |
+| `coop_saveguard.lua` | Blocks saving when you switch it off |
 | `CoopNet.cs` | The network plugin (Steam relay, bot, save backups, bug reports) |
 
 Details and everything learned along the way are in [docs/NOTES.md](docs/NOTES.md) and the coop-anything

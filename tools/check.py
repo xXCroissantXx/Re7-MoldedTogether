@@ -51,7 +51,7 @@ for test, marker in (('story_test.py', 'all passed'), ('menu_test.py', 'checks p
                      ('drop_test.py', 'checks passed'),
                      ('link_test.py', 'checks passed'), ('look_test.py', 'checks passed'), ('log_test.py', 'checks passed'),
                      ('voice_test.py', 'checks passed'), ('light_test.py', 'checks passed'), ('plugin_test.py', 'checks passed'),
-                     ('debug_test.py', 'checks passed')):
+                     ('debug_test.py', 'checks passed'), ('save_test.py', 'checks passed')):
     r = run([os.path.join(HARNESS, test), SCRIPTS])
     fails = [l for l in r.stdout.splitlines() if l.startswith('FAIL')]
     step(test.replace('_test.py', '') + ' scenarios', r.returncode == 0 and marker in r.stdout,

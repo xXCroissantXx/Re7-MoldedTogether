@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.58 (2026-11-24)
+Play the whole story in co-op on the default settings.
+
+- **Saving is on by default.** It used to be off until you found **Allow saving** in Options, so a whole evening's
+  progress was lost at every quit (and with no settings file yet, every save was skipped). Saving now works as in
+  normal RE7, and your save folder is still backed up at every launch. Switch it off in Options to play without
+  saving.
+- **Saving comes back after a chapter jump.** Starting from the lobby, following your friend into a tape or into
+  the next chapter switched saving off for the jump and left it off for good. It now comes back on by itself about
+  20 seconds after you're playing in the story again.
+- **The serum choice is shared.** At the end of Chapter 3 Ethan gives the one serum to Mia or to Zoe, and the game
+  remembers it to the end: which scene plays on the pier, which doors open on the ship and whether you fight there,
+  and the ending. Each game asked its own player, so the two of you could pick differently and play different routes
+  from then on. Now whoever chooses first chooses for both (if you both choose at the same moment, the host's choice
+  stays), and the other game is told on screen.
+- **A shared story milestone waits while you're loading or in a scene.** At the start of Chapter 4 the host's
+  "Mia's scene is over" reached the friend's game a second into its load, moved its story on at once, and cut short
+  that moment's own work: Mia's opening scene never started there and her inventory was never set up. Milestones from
+  your friend now wait, like their story steps already did, until your load or scene is over.
+- **Saved story timelines are shared.** A story object that plays a saved animation once (a door swung open, a
+  shelf pushed aside) is at the same point in both games, so neither of you finds it back where it started.
+- **Jack and the bosses move properly on your friend's screen.** A copy of Jack whose body lacked one of his
+  animation banks waited for the other game to send it, and sometimes got nothing. It now adds the bank at once from
+  the list Kingkiller1195 read from the game (Jack, the morgue Jack, his mutated form, Marguerite and Eveline's forms).
+
 ## v0.57 (2026-11-15)
 An experimental way to play: the host's game runs every enemy.
 
@@ -26,6 +51,8 @@ An experimental way to play: the host's game runs every enemy.
   props a scene moved: about 50 in the main house) are now shared: a change that stays for 2 s outside a cutscene
   reaches your friend, and a friend who joins gets the host's. On the test copies one of them (the collision that
   stops you falling in a boss area) had been on in one game and off in the other.
+- **Story effects that stay are shared too.** The few timelines the game saves (like the bathroom's water in
+  Chapter 3) are set to their end in your friend's game once they've played in yours, without replaying them.
 - **The Molded always show up for both of you (stand-ins).** Your friend only saw a Molded once their own game
   brought one out at that spot, and the game won't while the spot is in view, so it often waited a minute or never
   came ("the Molded never spawned in for my friend"). Now a Molded the other game runs that yours has no body for

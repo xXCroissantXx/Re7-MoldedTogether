@@ -70,7 +70,10 @@ end)
 
 -- Re-read the shared settings now and then, so the menu switch applies live.
 -- Default is "strict": "write" mode let a chapter jump's save reach disk (21:22).
-local allow, mode, next_read = false, "strict", 0
+-- v0.58: saving is ON unless the player turned it off ("allow_saving": false). Blocked by default, a whole
+-- playthrough lost its progress at every quit (the owner's Steam install had no settings file at all, so every
+-- save was skipped). CoopNet still backs the save folder up at every launch.
+local allow, mode, next_read = true, "strict", 0
 local forced_strict = false   -- set when the disk-write hooks couldn't be installed
 local function refresh()
     local now = os.clock()
@@ -80,7 +83,7 @@ local function refresh()
     -- Caught mid-write (empty file, 33 times in the friend's 2026-11-02 log): keep what we
     -- had instead of flipping saving off for 2 s.
     if not ok or type(s) ~= "table" then return end
-    local want = s.allow_saving == true
+    local want = s.allow_saving ~= false
     local want_mode = (not forced_strict and s.save_block_mode == "write") and "write" or "strict"
     if want ~= allow or want_mode ~= mode then
         allow, mode = want, want_mode

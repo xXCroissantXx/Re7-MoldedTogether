@@ -2081,3 +2081,22 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   slept ones within 15 m of a friend; guest holds (set_brain off) every shared enemy until it's a copy. In the
   bots copy 0's Molded never attacked copy 0 at all (unknown why); copy 1 as host via udpHost in
   coopnet_config.json. Bot fights are noisy: not verified end to end; needs a real session.
+- v0.58 (2026-11-24, a full playthrough on default settings). Saving on by default (coop_saveguard allow=true,
+  allow_saving ~= false; the owner's Steam install had no coop_settings.json, so every save was skipped).
+  jump_to_chapter sets settings.saving_off_for_jump for co-op jumps (not the dev switcher's test jumps);
+  coop_dummy turns saving back on 20 s after settling in a main chapter (_CurrentChapter 4/5/6/13/14; 0 boot,
+  3 title, 2/7/10-12 tapes, 15-17 movies) at least 20 s after the jump, not in a cutscene or while busy
+  (harness/save_test.py). Saved story timelines (gtl, settings.share_story_timelines) from round 2.
+  coop_enemies KNOWN_BANKS: Kingkiller's Em3000/Em8000 (17 banks), Em3100 (6), Em3300, Em3390 motion lists by
+  bank id; a copy missing a known bank adds it locally first (ebankreq only if still missing 2 s later), and the
+  owner answers from the table when its own body lacks the bank. Bot story runner: --flags (set the step's
+  milestone flag in the host, as a player does) and --gimmicks (compare 1,400+ gimmick/flag/door/FSM states).
+  Serum choice (coop_story 'choice <1|0> <ch>'): c03_5_Flag/Choice_Mia (true Mia, false Zoe) read at c03_5 1200
+  (1200_MiaChoice/1200_ZoiChoice), c04_2 (100_MiaZoiSelectBunki: MiaChoiceMoldDoorChange vs
+  ZoiChoiceMoldDoorRelease, 150_ZoiChoiceBattle) and the ending; first chooser wins, the host on a tie; a copied
+  c03_5 step to 1200 waits up to CHOICE_HOLD_S 5 s for the choice; sent again to a friend who connects
+  (bot test local/bottest/choice_test.py).
+  Flag hold: gf_apply defers a friend's gflag/gfall (gf.held) while busy_here() is loading/faded out/in a
+  cutscene or hold_for_cutscene(); bot run 2026-11-24 at Chapter324_Start: the host's C04_1_Main_MiaEventEnd
+  reached the loading guest, c04_1 0 -> 25 at once, and the guest's step-0 FSMs were switched off half done
+  (0_4-1MiaEventStart at KickEvent, 0_Init_Inventory4-1Start at StartState; host: end / Set).

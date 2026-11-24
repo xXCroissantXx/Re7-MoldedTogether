@@ -1010,6 +1010,8 @@ re.on_frame(function()
             local fm = flow_mgr()
             local var = fm and fm:call("getProgressiveNo(System.UInt32)", hash)
             local cur = var and var:call("get_S32") or 0
+            -- The serum choice (v0.58): a step past it waits a few seconds for the friend's choice to arrive.
+            if ss.choice_holds and ss.choice_holds(hash, cur, v, now) then return end
             local okn, nx = pcall(next_state, hash, cur, v)
             if not okn or nx == nil or nx >= v then
                 nx = v
@@ -1535,7 +1537,7 @@ ss.obj_apply = apply_objdone
 -- ("gfall"). Per-moment flags (the *_Flag sets: car positions, a cut leg), boss working state, timers, failures and
 -- deaths stay each game's own. Every story flag change is logged by name (coop_story_log.txt).
 local function gsafe(f, ...) local ok, r = pcall(f, ...) if ok then return r end return nil end
-local gf = { list = nil, by_key = {}, scan_t = -100, poll_t = 0, pending = {}, sent = 0, applied = 0, digest_due = false }
+local gf = { list = nil, by_key = {}, scan_t = -100, poll_t = 0, pending = {}, held = {}, sent = 0, applied = 0, digest_due = false }
 story_flags = gf
 GF_POLL_S = 0.5
 local GF_SET_OK = { "_Main_Flag$", "_Main_A_Flag$", "_Main_B_Flag$", "Objective_Flag$" }
@@ -1594,7 +1596,21 @@ local function gf_apply(key, ch, why)
     end
     gf.pending[key] = nil
     local cur = gsafe(e.v.call, e.v, "get_Bool")
-    if cur == true then e.on = true return true end
+    if cur == true then e.on = true gf.held[key] = nil return true end
+    -- Not while we're loading, in our own scene or just after one (v0.58), as with the friend's steps: a milestone
+    -- set then moves our story on before this step's own pieces have run. Chapter 4's start in a bot run: the host's
+    -- C04_1_Main_MiaEventEnd reached the guest a second into its load, the guest's c04_1 went 0 -> 25 at once, and
+    -- its step-0 pieces were switched off half done (Mia's opening scene never kicked, 0_Init_Inventory4-1Start
+    -- never set her inventory). Held, our own step 0 runs first, and the flag is set afterwards if still needed.
+    local b = busy_here()
+    if b == "loading" or b == "faded out" or b == "in a cutscene" or hold_for_cutscene() then
+        if not gf.held[key] then
+            gf.held[key] = ch
+            log(string.format("story flag %s from your friend waits (%s)", e.name, b or "your scene just ended"))
+        end
+        return true
+    end
+    gf.held[key] = nil
     local ok = pcall(e.v.call, e.v, "set_Bool", true)
     e.on = true
     gf.applied = gf.applied + 1
@@ -1625,6 +1641,11 @@ local function gf_tick(now)
     -- Ones that came for another chapter, now that we're in it.
     for key, pch in pairs(gf.pending) do
         if pch == ch and gf_sharing() then gf_apply(key, pch, " (held until we got to that chapter)") end
+    end
+    -- Ones held while we were loading or in a scene (v0.58).
+    for key, hch in pairs(gf.held) do
+        if hch ~= ch then gf.held[key] = nil
+        elseif gf_sharing() then gf_apply(key, hch, " (held until your scene or load was over)") end
     end
     -- A friend just connected: every milestone that's true here, 40 to an event.
     if gf.digest_due and gf_sharing() then
@@ -1784,6 +1805,213 @@ local function gos_on_event(text)
     return false
 end
 
+-- Saved story timelines (v0.57). ---------------------------------------------------------------------------------
+-- app.TimeLineKicker plays a timeline (a gimmick's animation or effect); the 34 in the main house are mostly scene
+-- lights, scene cameras and enemy effects, which belong to each game's own moment. The few the game SAVES (IsSave:
+-- three there, ShallowWater_bath and two Chapter 3-2 scene effects) are story state: once played (PlayStamp) they
+-- stay played. One played here is sent ("gtl <guid> <chapter> <name>"); the other game jumps it to its last frame
+-- (setLastFrame, the state a save loads it in) and marks it played, outside a cutscene. Never replayed (no camera
+-- or sound on the friend). Logged by name.
+local gtl = { list = nil, by_id = {}, scan_t = -100, poll_t = 0, pend = {}, sent = 0, applied = 0 }
+story_timelines = gtl
+local function gtl_sharing() return sharing() and settings.share_story_timelines ~= false end
+local function gtl_scan(now)
+    gtl.scan_t = now
+    local sc = sdk.call_native_func(sdk.get_native_singleton("via.SceneManager"), sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
+    local arr = sc and gsafe(sc.call, sc, "findComponents(System.Type)", sdk.typeof("app.TimeLineKicker"))
+    if arr == nil then return end
+    local list, by_id = {}, {}
+    for _, k in ipairs(arr_items(arr)) do
+        if gsafe(k.get_field, k, "IsSave") == true then
+            local id = gos_guid(gsafe(k.get_field, k, "SaveGUID"))
+            local go = id and gsafe(k.call, k, "get_GameObject")
+            if go then
+                local old = gtl.by_id[id]
+                local e = { id = id, k = k, name = tostring(gsafe(go.call, go, "get_Name") or "?"),
+                    on = old and old.on or (gsafe(k.get_field, k, "PlayStamp") == true) }
+                list[#list + 1] = e
+                by_id[id] = e
+            end
+        end
+    end
+    gtl.list, gtl.by_id = list, by_id
+end
+local function gtl_apply(id, ch)
+    local e = gtl.by_id[id]
+    if e == nil or ch ~= chapter() then return false end
+    if gsafe(e.k.get_field, e.k, "PlayStamp") == true then e.on = true return true end
+    if local_cutscene and local_cutscene() then return false end
+    local ok = pcall(e.k.call, e.k, "setLastFrame")
+    pcall(e.k.set_field, e.k, "PlayStamp", true)
+    e.on = true
+    gtl.applied = gtl.applied + 1
+    log(string.format("story timeline %s: played in your friend's game, set to its end here%s", e.name, ok and "" or " (ERR)"))
+    return true
+end
+local function gtl_tick(now)
+    if now - gtl.poll_t < 1.0 then return end
+    gtl.poll_t = now
+    if gtl.list == nil or now - gtl.scan_t > 10 then gtl_scan(now) end
+    if gtl.list == nil then return end
+    local ch = chapter()
+    for _, e in ipairs(gtl.list) do
+        local on = gsafe(e.k.get_field, e.k, "PlayStamp") == true
+        if on and not e.on then
+            e.on = true
+            log(string.format("story timeline %s played here", e.name))
+            if gtl_sharing() then send(string.format("gtl %s %d %s", e.id, ch, e.name)) gtl.sent = gtl.sent + 1 end
+        elseif not on and e.on then
+            e.on = false
+        end
+    end
+    for id, pch in pairs(gtl.pend) do
+        if gtl_apply(id, pch) then gtl.pend[id] = nil end
+    end
+end
+dbg_note{ feature = "Shared story", name = "Watch the saved story timelines and share the ones played",
+    when = "every frame; its work once a second (and a rescan every 10 s)",
+    reads = "every app.TimeLineKicker the game saves (IsSave): PlayStamp (a few per area)",
+    writes = "logs; sends 'gtl' when one is played here; on the friend's, jumps theirs to its last frame" }
+re.on_frame(function()
+    local ok, err = pcall(gtl_tick, os.clock())
+    if not ok and not gtl.err then gtl.err = true log("story timelines ERR " .. tostring(err)) end
+end)
+local function gtl_on_event(text)
+    local id, ch = text:match("^gtl (%x+) (%-?%d+)")
+    if not id then return false end
+    if gtl_sharing() then
+        if gtl.list == nil then pcall(gtl_scan, os.clock()) end
+        if not gtl_apply(id, tonumber(ch)) then gtl.pend[id] = tonumber(ch) end
+    end
+    return true
+end
+
+-- The serum choice (v0.58). -----------------------------------------------------------------------------------------
+-- At the end of Chapter 3 (c03_5, step 1000) Ethan gives the one serum to Mia or to Zoe. The game keeps the answer in
+-- one flag, c03_5_Flag/Choice_Mia (true Mia, false Zoe), and reads it at c03_5 step 1200 (1200_MiaChoice /
+-- 1200_ZoiChoice: which scene plays), in Chapter 4 (c04_2's 100_MiaZoiSelectBunki: which doors open, and the fight on
+-- the Zoe route) and for the ending. Each game asked its own player, so two players could choose differently and play
+-- different routes to the end. The story flag sync can't carry it (it shares flags turning true, and choosing Zoe
+-- leaves this one false), so the choice goes as its own message: the first game to make it sends "choice <1|0> <ch>"
+-- and the other takes it; when both chose at the same moment, the host's choice stays. A step to 1200 copied from the
+-- friend waits up to CHOICE_HOLD_S for their choice, so the scene at 1200 reads the right answer.
+local CHOICE_SET, CHOICE_FLAG, CHOICE_PART = "c03_5_Flag", "Choice_Mia", "c03_5_Main"
+local CHOICE_WAIT, CHOICE_MADE = 1000, 1200
+CHOICE_HOLD_S = 5
+local sch = { poll_t = 0, scan_t = -100, flag = nil, step = nil, hash = nil, prev = nil, made = nil, got = nil,
+    pend = nil, digest_due = false }
+story_choice = sch
+local function sch_scan(now)
+    sch.scan_t = now
+    sch.flag, sch.step, sch.hash = nil, nil, nil
+    local hub = gf_hub()
+    if hub == nil then return end
+    for i = 0, (tonumber(gsafe(hub.call, hub, "getUserVariablesCount")) or 0) - 1 do
+        local uv = gsafe(hub.call, hub, "getUserVariables", i)
+        local sn = uv and tostring(gsafe(uv.call, uv, "get_Name") or "")
+        if sn == CHOICE_SET or sn == "ProgressiveNumber" then
+            for j = 0, (tonumber(gsafe(uv.call, uv, "getVariableCount")) or 0) - 1 do
+                local v = gsafe(uv.call, uv, "getVariable", j)
+                local name = v and tostring(gsafe(v.call, v, "get_Name") or "")
+                if sn == CHOICE_SET and name == CHOICE_FLAG then sch.flag = v end
+                if sn == "ProgressiveNumber" and name == CHOICE_PART then
+                    sch.step = v
+                    sch.hash = (tonumber(gsafe(v.call, v, "get_NameHash")) or 0) & 0xFFFFFFFF
+                end
+            end
+        end
+    end
+end
+local function sch_read()
+    local step = sch.step and tonumber(gsafe(sch.step.call, sch.step, "get_S32"))
+    local mia = sch.flag and gsafe(sch.flag.call, sch.flag, "get_Bool")
+    if type(mia) ~= "boolean" then mia = nil end   -- (not "x and mia or nil": that turns Zoe, false, into nil)
+    return step, mia
+end
+local function who(v) return v and "Mia" or "Zoe" end
+local function sch_set(v, why)
+    local _, cur = sch_read()
+    if cur == v then return end
+    local ok = sch.flag and pcall(sch.flag.call, sch.flag, "set_Bool", v)
+    log(string.format("serum choice: %s here too (%s)%s", who(v), why, ok and "" or " ERR"))
+end
+local function sch_apply(v, ch)
+    if ch ~= chapter() then sch.pend = { v = v, ch = ch } return end
+    sch.pend = nil
+    if sch.flag == nil then sch_scan(os.clock()) end
+    if sch.flag == nil then sch.pend = { v = v, ch = ch } return end
+    local step = sch_read()
+    if sch.made ~= nil and sch.made ~= v and not follower() then
+        -- We both chose at the same moment: the host's choice stays (the friend's game takes ours when it arrives).
+        log(string.format("serum choice: your friend chose %s at the same moment you chose %s; yours stays (host)", who(v), who(sch.made)))
+        return
+    end
+    sch.got, sch.made = v, v
+    if (step or 0) >= CHOICE_MADE then
+        sch_set(v, "your friend's choice, after yours here")
+    else
+        sch_set(v, "your friend's choice")
+        note("your friend gave the serum to " .. who(v))
+    end
+end
+-- A copied step to 1200 or beyond waits for the friend's choice (called by the step copier above).
+ss.choice_holds = function(hash, cur, value, now)
+    if sch.hash == nil or hash ~= sch.hash or cur >= CHOICE_MADE or value < CHOICE_MADE then return false end
+    if sch.got ~= nil or sch.made ~= nil then return false end
+    sch.hold_t = sch.hold_t or now
+    if now - sch.hold_t < CHOICE_HOLD_S then return true end
+    log("serum choice: your friend's step went past the choice but no choice came; the step goes on")
+    return false
+end
+local function sch_tick(now)
+    if now - sch.poll_t < 0.25 then return end
+    sch.poll_t = now
+    if sch.flag == nil or sch.step == nil or now - sch.scan_t > 10 then
+        if now - sch.scan_t > 2 then sch_scan(now) end
+    end
+    local step, mia = sch_read()
+    if step == nil or mia == nil then sch.prev = nil return end
+    if step < CHOICE_WAIT then sch.made, sch.got, sch.hold_t = nil, nil, nil end   -- an earlier save, or not there yet
+    local prev = sch.prev
+    sch.prev = step
+    if prev == nil and step >= CHOICE_MADE and sch.made == nil then sch.made = mia end   -- a save from after the choice
+    if sch.pend and sch.pend.ch == chapter() and gf_sharing() then sch_apply(sch.pend.v, sch.pend.ch) end
+    if prev and prev < CHOICE_MADE and step >= CHOICE_MADE then
+        local applied = ss.applying[string.format("pg:%08x", sch.hash or 0)]
+        if sch.got ~= nil then
+            sch_set(sch.got, "your friend's choice")
+        elseif applied and now - applied < 5 then
+            log(string.format("serum choice: the step came from your friend's game with no choice; %s kept here", who(mia)))
+            sch.made = mia
+        else
+            sch.made = mia
+            log(string.format("serum choice: you gave the serum to %s%s", who(mia), gf_sharing() and "; sent to your friend" or ""))
+            if gf_sharing() then send(string.format("choice %d %d", mia and 1 or 0, chapter())) end
+        end
+    end
+    if sch.digest_due and gf_sharing() then
+        sch.digest_due = false
+        if sch.made ~= nil and step >= CHOICE_MADE then send(string.format("choice %d %d", sch.made and 1 or 0, chapter())) end
+    end
+end
+dbg_note{ feature = "Shared story", name = "The serum choice (Mia or Zoe)",
+    when = "every frame; its work 4 times a second (and a look-up of two story variables every 10 s)",
+    reads = "the global variables hub: ProgressiveNumber/c03_5_Main and c03_5_Flag/Choice_Mia",
+    writes = "sends 'choice' when you make the choice here; sets Choice_Mia to the friend's choice" }
+re.on_frame(function()
+    local ok, err = pcall(sch_tick, os.clock())
+    if not ok and not sch.err then sch.err = true log("serum choice ERR " .. tostring(err)) end
+end)
+local function sch_on_event(text)
+    local v, ch = text:match("^choice ([01]) (%-?%d+)")
+    if not v then return false end
+    if gf_sharing() then
+        local ok, err = pcall(sch_apply, v == "1", tonumber(ch))
+        if not ok then log("serum choice ERR " .. tostring(err)) end
+    end
+    return true
+end
+
 function story_flags_status()
     local n, on = 0, 0
     for _, e in ipairs(gf.list or {}) do n = n + 1 if e.on then on = on + 1 end end
@@ -1793,6 +2021,8 @@ end
 function coop_story_on_event(text)
     if gf_on_event(text) then return true end
     if gos_on_event(text) then return true end
+    if gtl_on_event(text) then return true end
+    if sch_on_event(text) then return true end
     local oid, och = text:match("^objdone (%x+) (%-?%d+)$")
     if oid then
         local ok, err = pcall(apply_objdone, oid, tonumber(och))
@@ -1803,7 +2033,7 @@ function coop_story_on_event(text)
     if pch then
         -- A friend we hadn't heard from for 20 s+ (just connected, or back): our story flags go to them (gfall).
         local prev = ss.spos[coop_event_slot or 1]
-        if prev == nil or os.clock() - prev.t > 20 then gf.digest_due, gos.digest_due = true, true end
+        if prev == nil or os.clock() - prev.t > 20 then gf.digest_due, gos.digest_due, sch.digest_due = true, true, true end
         ss.spos[coop_event_slot or 1] = { ch = tonumber(pch), clock = tonumber(pclock), t = os.clock(), diff = tonumber(pdiff) }
         pcall(check_difficulty, coop_event_slot or 1)
         return true

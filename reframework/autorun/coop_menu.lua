@@ -1503,7 +1503,7 @@ function PAGES.options()
                     end)
             end
         end,
-        hint = "Off by default. A chapter jump switches it off again." }
+        hint = "On by default; your saves are backed up at every launch. A chapter jump switches it off for the jump, and it comes back on once you're back in the story." }
     return "Options", items
 end
 

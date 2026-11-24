@@ -1561,11 +1561,60 @@ local function copy_has_clip(e, bank, mid)
     if not ok then return true end   -- can't tell: play it, as before
     return r == true
 end
+-- v0.58: the bosses' motion lists by bank, read from the live game by Kingkiller1195's dump request
+-- (package/kingkiller-requested-dumps.txt). A body that's asleep, or whose AI is off (a copy), has no banks
+-- loaded, so a copy of Jack could miss the very bank the owner's Jack plays from, and when the owner's answer
+-- was "not found here" the copy never got it. A bank listed here is added at once, without asking.
+local EM3000 = "Animation/Enemy/em3000/motlist/"
+local KNOWN_BANKS = {
+    Em3000 = {
+        [5] = EM3000 .. "UpperBlend/em3000UpperBlend.motlist",
+        [10] = EM3000 .. "Common/Basic/em3000Basic.motlist",
+        [11] = EM3000 .. "Chapter3_1/Basic/em3000Chapter3_1_Basic.motlist",
+        [15] = EM3000 .. "Chapter3_2_Final/Basic/em3000Chapter3_2_Final_Basic.motlist",
+        [20] = EM3000 .. "Common/Move/em3000Move.motlist",
+        [25] = EM3000 .. "Chapter3_2_Final/Move/em3000Chapter3_2_Final_Move.motlist",
+        [30] = EM3000 .. "Common/Attack/em3000Attack.motlist",
+        [31] = EM3000 .. "Chapter3_1/Attack/em3000Chapter3_1_Attack.motlist",
+        [32] = EM3000 .. "Chapter3_2/Attack/em3000Chapter3_2_Attack.motlist",
+        [35] = EM3000 .. "Chapter3_2_Final/Attack/em3000Chapter3_2_Final_Attack.motlist",
+        [40] = EM3000 .. "Common/Damage/em3000Damage.motlist",
+        [41] = EM3000 .. "Chapter3_1/Damage/em3000Chapter3_1_Damage.motlist",
+        [45] = EM3000 .. "Chapter3_2_Final/Damage/em3000Chapter3_2_Final_Damage.motlist",
+        [50] = EM3000 .. "Common/Dead/em3000Dead.motlist",
+        [51] = EM3000 .. "Chapter3_1/Dead/em3000Chapter3_1_Dead.motlist",
+        [52] = EM3000 .. "Chapter3_2/Dead/em3000Chapter3_2_Dead.motlist",
+        [55] = EM3000 .. "Chapter3_2_Final/Dead/em3000Chapter3_2_Final_Dead.motlist",
+    },
+    Em3100 = {
+        [10] = "Animation/Enemy/em3100/motlist/em3100Basic.motlist",
+        [20] = "Animation/Enemy/em3100/motlist/em3100Move.motlist",
+        [30] = "Animation/Enemy/em3100/motlist/em3100Attack.motlist",
+        [40] = "Animation/Enemy/em3100/motlist/em3100Damage.motlist",
+        [50] = "Animation/Enemy/em3100/motlist/em3100Dead.motlist",
+        [60] = "Animation/Enemy/em3100/motlist/em3100Environment.motlist",
+    },
+    Em3300 = { [10] = "Animation/Enemy/em3300/motlist/em3300Basic.motlist" },
+    Em3390 = { [10] = "Animation/Enemy/em3390/motlist/em3390Basic.motlist" },
+}
+KNOWN_BANKS.Em8000 = KNOWN_BANKS.Em3000   -- the morgue Jack uses Jack's motion bank asset (em3000.motbank)
+local function known_bank(name, bank)
+    local t = name and KNOWN_BANKS[name]
+    return t and t[bank] or nil
+end
 local function ask_bank(e, bank, now)
     local key = e.id .. "#" .. bank
     local a = eb.asked[key]
     if a == nil then a = { n = 0, t = -100 } eb.asked[key] = a end
     if a.n >= 4 or now - a.t < 2 then return end
+    local kp = known_bank(e.name, bank)
+    if kp and not a.known then
+        -- Known (v0.58): added here at once; the friend's game is asked only if the clip is still missing 2 s later.
+        a.known, a.t = true, now
+        log(string.format("%s copy: the owner's clip is in bank %d, which isn't here: added it from the known list", e.name, bank))
+        if coop_enemy_bank then pcall(coop_enemy_bank, e.id, chapter(), bank, 1, kp) end
+        return
+    end
     a.n, a.t = a.n + 1, now
     send_event(string.format("ebankreq %s %d %d", e.id, chapter(), bank))
     if a.n == 1 then log(string.format("%s copy: the owner's clip is in bank %d, which isn't here: asked for it", e.name, bank)) end
@@ -1597,6 +1646,7 @@ function coop_enemy_bank_req(id, ch, bank)
     local e = find_tracked(id)
     if e == nil then return end
     local p, ow = bank_path(e, bank)
+    if p == nil and known_bank(e.name, bank) then p, ow = known_bank(e.name, bank), 1 end   -- v0.58: not loaded on ours either
     if p and p:match("^%S+$") then
         send_event(string.format("ebank %s %d %d %d %s", id, ch, bank, ow, p))
         log(string.format("%s: friend's copy asked for bank %d: sent %s", e.name, bank, p))
