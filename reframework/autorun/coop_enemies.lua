@@ -981,6 +981,22 @@ local SNAP_EVERY = 1 / 15
 -- v0.56: snapshots come 15 a second; their file was read 30 times a second (each fs.read ~1.8 ms). 20 a second
 -- still sees every one (a read with nothing new stops at the "seq" line).
 local SNAP_READ_EVERY = 1 / 20
+-- v0.64: with nothing to follow (every friend's last snapshot had no enemy in it, or nothing new came for a second),
+-- the file is looked at twice a second instead of 20 times; each look costs 1-2 ms of the frame (a file open on
+-- Windows). The first enemy a friend sends is then seen within half a second. The sending side, with nothing to
+-- send, writes one empty snapshot and then nothing (write_snapshot).
+SNAP_IDLE_READ = 0.5
+local function snap_read_every(now)
+    if next(mv.puppets) ~= nil then return SNAP_READ_EVERY end
+    for k = 1, 3 do
+        if k == 1 or (coop_slot_in_use and coop_slot_in_use(k)) then
+            local idle = mv.in_idle and mv.in_idle[k]
+            local new_t = mv.in_new_t and mv.in_new_t[k]
+            if idle == false and new_t and now - new_t <= 1 then return SNAP_READ_EVERY end
+        end
+    end
+    return SNAP_IDLE_READ
+end
 local function move_delay()
     local st = coop_net_state and coop_net_state()
     local d = st and tonumber(st.delay)
@@ -1350,6 +1366,14 @@ local function write_snapshot(now)
     -- Jack's car (v0.57): one "car ..." line while our game runs it.
     local cl = coop_car_line and safe(coop_car_line)
     if cl then lines[#lines + 1] = cl end
+    -- v0.64: nothing of ours to send: one empty snapshot (the friend sees we stopped), then no more writes until
+    -- there is (each write is a file open, 1-2 ms of the frame; the friend's game reads idly meanwhile).
+    if #list == 0 and not cl then
+        if mv.empty_out then return end
+        mv.empty_out = true
+    else
+        mv.empty_out = nil
+    end
     -- "end" closes a whole snapshot: CoopNet sends only whole ones (v0.39).
     lines[#lines + 1] = "end"
     mv.seq = mv.seq + 1
@@ -1430,6 +1454,11 @@ local function read_snapshot(now, k)
     local seq = text:match("^seq (%d+)")
     if seq == nil or seq == mv.last_in_seq_s[k] then return end
     mv.last_in_seq_s[k] = seq
+    -- v0.64 (see SNAP_IDLE_READ): a snapshot with no enemy and no car in it is "idle".
+    mv.in_idle = mv.in_idle or {}
+    mv.in_idle[k] = text:find("\n[sg]:", 1) == nil and text:find("\ncar ", 1, true) == nil
+    mv.in_new_t = mv.in_new_t or {}
+    mv.in_new_t[k] = now
     local t, ch = text:match("\nt (%S+) ch (%-?%d+)")
     t, ch = tonumber(t), tonumber(ch)
     if t == nil or ch ~= chapter() then return end
@@ -2544,7 +2573,7 @@ local function update_movement(now)
             mv.snap_t = now
             pcall(write_car_only, now)
         end
-        if not mv.replay and now - mv.in_t >= SNAP_READ_EVERY then
+        if not mv.replay and now - mv.in_t >= snap_read_every(now) then
             mv.in_t = now
             for k = 1, 3 do if slot_live(k) then pcall(read_snapshot, now, k) end end
         end
@@ -2564,7 +2593,7 @@ local function update_movement(now)
         local ok2, err2 = pcall(coop_enemy_check_skips, now)
         if not ok2 and not mv.skip_err then mv.skip_err = true log("skip check ERR " .. tostring(err2)) end
     end
-    if not mv.replay and now - mv.in_t >= SNAP_READ_EVERY then
+    if not mv.replay and now - mv.in_t >= snap_read_every(now) then
         mv.in_t = now
         for k = 1, 3 do
             local ok, err = true, nil

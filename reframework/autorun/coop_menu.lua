@@ -1465,6 +1465,8 @@ function PAGES.options()
         "The host's game runs every enemy and they go after whichever of you is nearer; their hits on you are sent to your game. No enemy changes games mid-fight. The same for everyone.")
     items[#items + 1] = setting_toggle("Cutscenes wait for both (experimental)", "scene_ready", false, false,
         "A cutscene or VHS tape you start waits a moment for your friend's game, then starts for both together. Each of you sets it.")
+    items[#items + 1] = setting_toggle("Status text in the corners", "corner_text", false, false,
+        "Off: nothing in the top and bottom left of the screen (invites and joining show for a moment at the top instead; it's all in this menu). On: the connection, your friends and the hints there, as before v0.64.")
     do
         local cur = text_size_index()
         local function pick(d)
@@ -2401,6 +2403,14 @@ local function draw_prompts(now)
     local inv = pending_invite and safe(pending_invite)
     local how = (on_title() and TITLE.idx) and "choose CO-OP" or ("press " .. menu_key().name)
     if inv then lines[#lines + 1] = { inv.name .. (inv.lobby and " invited you to their lobby" or " invited you to co-op") .. ": " .. how .. " to answer", 0xFF7FFF8C } end
+    -- v0.64: with the corner text off (the default), a new invite is shown once at the top of the screen instead.
+    local inv_key = inv and (tostring(inv.name) .. (inv.lobby and "#l" or "")) or nil
+    if inv_key and inv_key ~= M.inv_shown and coop_talk_show then
+        M.inv_shown = inv_key
+        pcall(coop_talk_show, lines[#lines][1], 0xFF7FFF8C)
+    elseif not inv_key then
+        M.inv_shown = nil
+    end
     if L.state == "open" and not i_host() and not L.ready then
         lines[#lines + 1] = { host_name() .. "'s lobby is waiting: " .. how .. " to get ready", 0xFF7FFF8C }
     end
@@ -2425,7 +2435,7 @@ local function draw_prompts(now)
     elseif (M.first_hint_until or 0) > now then
         lines[#lines + 1] = { "Molded Together: " .. menu_key().name .. " or L3+R3 opens the co-op menu", 0xFFBFBFBF }
     end
-    if #lines == 0 then return end
+    if #lines == 0 or not (settings and settings.corner_text == true) then return end   -- v0.64: off by default
     -- v0.56: one soft panel behind the lines, like the status block at the top left (it was a strip per line).
     local lh = line_h("small")
     local y = h - 40 - lh * #lines

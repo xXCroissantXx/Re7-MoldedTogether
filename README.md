@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.63; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.64; formerly coop-re7)
 Created by xXCroissantXx & Kingkiller1195
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
@@ -29,7 +29,7 @@ climb and fight where they do, over Steam (no port forwarding).
 | **Saving** | Each player saves their own game; when one saves, the others are told, so you can all save at the same point. |
 | **Pushed objects** | Chairs, bottles and other loose props one of you knocks around move for the others too. |
 | **Catching up** | Each game keeps a list of the lasting changes it made (doors, boxes, drawers, puzzles, story steps, supplies taken, Molded killed) for 12 hours. When your friend joins or rejoins, the list is sent and their game catches up, including what you did while they were away. |
-| **Talking** | Quick messages with **F5** (ping: "Over here"), **F6** (Come here), **F7** (Wait for me) and **F8** (Help!): your friend sees them at the top of the screen, and a marker for pings, Come here and Help. Each other's **health** shows on the status line and nameplate. |
+| **Talking** | Quick messages with **F5** (ping: "Over here"), **F6** (Come here), **F7** (Wait for me) and **F8** (Help!): your friend sees them at the top of the screen, and a marker for pings, Come here and Help. Each other's **health** shows on the nameplate (and the corner status text, if you switch it on). |
 | **Gunshots and swings** | Each of your friend's guns makes its own bang (handguns, shotgun, magnum and the rest), with the muzzle flash and smoke at their gun; their reloads and their knife and axe swings are heard too. |
 | Not shared | Item boxes (each player has their own). |
 
@@ -97,10 +97,10 @@ The Lobby then says "Full character models: installed".
    (D-pad or left stick, A, B) or mouse (point at a row, click to pick it, right click to go back). The first
    time, it explains the basics.
 3. **Friends**: pick your friend and **Invite** them. (Friends appear once they've started Molded Together too.)
-4. Your friend sees "*<your name>* invited you to co-op: press F9 to answer" at the bottom left. They press F9 and
-   **Accept**.
-5. The top-left corner shows **Co-op: connected to <name> - <ping> ms**, and they appear with their name over
-   their head.
+4. Your friend sees "*<your name>* invited you to co-op: press F9 to answer" at the top of the screen. They press F9
+   and **Accept**.
+5. They appear with their name over their head; the co-op menu shows the connection and the ping. (Since v0.64
+   nothing is written in the corners of the screen; Options > **Status text in the corners** brings it back.)
 6. **Lobby**: once you're connected, open the co-op menu (or **CO-OP** on the title screen's tape recorder) and
    pick **Lobby**: whoever opens it first is the host, and everyone else is in it and ready by themselves. The
    host picks where to start:
@@ -274,7 +274,7 @@ your friend's weapon in hand, ladders, on-screen status and the shared switches)
 
 | What you see | Try |
 |---|---|
-| "Molded Together's network plugin isn't running" (red, top left), or **Test with bot** / **Invite** do nothing | REFramework's C# plugins didn't load. Run **Install.cmd** again (with the game closed). If that doesn't help, the usual cause is Windows 11's **Smart App Control**, which blocks REFramework's unsigned files (REFramework's log, `re2_framework_log.txt` in RE7's Steam folder, then says *"An Application Control policy has blocked this file"*; the installer warns when Smart App Control is on). It's a Windows security setting, so it's your call: Windows Security > App & browser control > Smart App Control settings. On many Windows versions it can't be switched back on afterwards without reinstalling Windows. Also check that the **.NET 10 runtime** is installed (see Install). |
+| "Molded Together's network plugin isn't running" (red, at the top of the screen once a minute), or **Test with bot** / **Invite** do nothing | REFramework's C# plugins didn't load. Run **Install.cmd** again (with the game closed). If that doesn't help, the usual cause is Windows 11's **Smart App Control**, which blocks REFramework's unsigned files (REFramework's log, `re2_framework_log.txt` in RE7's Steam folder, then says *"An Application Control policy has blocked this file"*; the installer warns when Smart App Control is on). It's a Windows security setting, so it's your call: Windows Security > App & browser control > Smart App Control settings. On many Windows versions it can't be switched back on afterwards without reinstalling Windows. Also check that the **.NET 10 runtime** is installed (see Install). |
 | Your friend isn't in the list | They need Molded Together running and to be your Steam friend; or tick **Show all online friends** |
 | "Waiting for your friend" | They need to **Accept** in their co-op screen; if their game is closed, it clears by itself after 30 seconds |
 | "different version" or "Friend's packets don't match" | You're on different versions; everyone installs the same release |
@@ -286,7 +286,7 @@ your friend's weapon in hand, ladders, on-screen status and the shared switches)
 | Black screen but you can move, on a brand-new game | Fixed in v0.52 (you can connect before New Game). If it still happens, it fades back in by itself after 25 seconds; tell us in a bug report |
 | "Create save data?" keeps coming back | F9 > **Options**: check **Allow saving** is on, then Yes |
 | An extra mouse pointer on screen | The REFramework menu is open: close it with Insert (or your menu key, see *No Insert key*) |
-| The co-op menu's text is too small (or too big) | Options > **Menu text size**: Normal, Large (the default) or Extra large. It also follows your screen's size, and the on-screen status lines use it too |
+| The co-op menu's text is too small (or too big) | Options > **Menu text size**: Normal, Large (the default) or Extra large. It also follows your screen's size, and the corner status text (if on) uses it too |
 | F9 opens REFramework's menu too | F9 is your REFramework menu key: pick another for the co-op menu (Options > **Key for this menu**) |
 | The lobby's Start says "waiting" | It names who it waits for: a friend who hasn't been heard from yet (wait a few seconds) or who set **Ready** to No |
 | Pause menu won't open | Wait 5 seconds out of any cutscene (the mod clears a stuck video flag), or restart |

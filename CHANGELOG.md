@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.64 (2026-11-25)
+A clear screen, and less work per frame.
+
+- **Nothing in the corners.** The status block in the top left (the connection, your friends, hints) and the lines
+  in the bottom left (invites, the lobby, "press F9") are gone. An invite and joining your friend now show for a
+  few seconds at the top of the screen, where quick messages do; everything else is in the co-op menu. Two warnings
+  still come up there once a minute while they last: the network plugin not running, and your friend's version not
+  matching. Options > **Status text in the corners** brings the old corners back.
+- **About half the mod's cost per frame.** Measured on the test copies with the Debug section's timer: the mod's
+  own work went from about 190 to about 95 ms per second of play, and that copy's frame rate from 22.6 to 26.7 fps.
+  The cost wasn't the map scans (all of them together are about 15 ms a second) but small files: the mod talks to
+  its network plugin through files, and on Windows every file the game opens costs it 1-2 ms of the frame. So:
+  - your position goes to your friend 20 times a second instead of 30 (their character is smoothed, so it moves
+    the same; it may trail by a few hundredths of a second more);
+  - a game with no shared enemy to send writes one empty enemy update and then nothing, and a game whose friend
+    sends none looks for one twice a second instead of 20 times (the first enemy is still picked up within half a
+    second).
+
 ## v0.63 (2026-11-25)
 Drop in, drop out.
 

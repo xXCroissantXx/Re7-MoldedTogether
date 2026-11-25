@@ -2150,3 +2150,13 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   friend 1 at once (never fired in jack_share_test x2: 4 s and 5 s unshared; one 6 s quiet take-back remained). Bot tests: dropin_test.py (Chapter 4 guest -> host's Chapter 3, warped 52 m, host stayed
   put, inventory same), dropout_test.py (guest closed mid garage fight: host had Jack back after 4.9 s).
   Marguerite's insects (Em5400/5510/5511/5520) never spawned on the bots, so they stay per game.
+- v0.64 (2026-11-25, clear corners, frame cost). settings.corner_text (default off) gates the top-left HUD
+  (coop_dummy) and the bottom-left prompts (coop_menu draw_prompts); new invites and drop-in moments go through
+  coop_talk_show (top centre); red HUD lines (plugin dead, version mismatch) shown there once a minute. Cost
+  (local/bottest/perf_test.py, coop_dbg_set_measure, rows nest: ghost callback includes net_io, enemy scheduler
+  includes movement): file opens dominate, ~1.8 ms per fs.read/fs.write on this PC (missing file 0.75 ms; io.open
+  the same). LINK_HZ 30 -> 20 (net_io read and write); write_snapshot skips repeated empty snapshots; read gate
+  snap_read_every: SNAP_IDLE_READ 0.5 s unless a friend's last snapshot (within 1 s) had enemies or we have
+  puppets. Copy 1: link 98 -> 55 ms/s, enemy scheduler 60 -> 18, ~190 -> ~95 ms/s top-level, 22.6 -> 26.7 fps.
+  Scans (doors, props, items, puzzles, enemies) total ~15 ms/s: left as they were. Next big win: one file each
+  way per tick (plugin merging samples, snapshots and events).

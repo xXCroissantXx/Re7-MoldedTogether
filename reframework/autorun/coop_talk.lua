@@ -271,6 +271,9 @@ local KEY_ORDER = { { vk = 0x74, kind = "ping", name = "F5" }, { vk = 0x75, kind
 local function show_msg(text, color)
     talk.msg, talk.msg_t, talk.msg_color = text, os.clock(), color or 0xFFFFFFFF
 end
+-- v0.64: other scripts' one-off notices (an invite, joining your friend) at the top of the screen, where the quick
+-- messages show, now that the corner status text is off by default.
+function coop_talk_show(text, color) show_msg(tostring(text), color) end
 
 function coop_talk_send(kind)
     local def = KINDS[kind]

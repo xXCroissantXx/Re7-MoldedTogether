@@ -1035,6 +1035,7 @@ local function action_fields(player)
     return a, b
 end
 
+LINK_HZ = 20   -- v0.64: player samples written and read per second (see below)
 local function net_io()
     if not net.enabled then return end
     local now = os.clock()
@@ -1047,7 +1048,11 @@ local function net_io()
     -- (~65 ms of game-thread time per second, the biggest single cost of the mod) though only 30 samples a second
     -- come in, so many reads found nothing new. A read takes every sample in the file, and the playback delay
     -- (net.update_delay) covers the few ms a sample may now wait.
-    if now - (net.last_rd or 0) < 1 / 30 - 0.004 then return end
+    -- v0.64: 20 a second (was 30). Every file open costs 1-2 ms of the game's frame on Windows (fs.read 1.8 ms,
+    -- fs.write 1.9 ms, a missing file 0.75 ms; io.open the same: bot test 2026-11-25), and this pair of files was the
+    -- mod's biggest cost (~85 ms of game-thread time per second at 30). The friend's body is interpolated, so 20
+    -- samples a second keep it smooth; the plugin only sends a new sample, so it sends 20 a second too.
+    if now - (net.last_rd or 0) < 1 / LINK_HZ - 0.004 then return end
     net.last_rd = now
     -- Friend slots 2 and 3 with nobody in them read nothing (v0.55, see coop_slot_in_use): old samples
     -- still age out, so a friend who left fades as before.
@@ -1055,7 +1060,7 @@ local function net_io()
         while #net.history > 0 and net.history[1].t < now - KEEP do table.remove(net.history, 1) end
         return
     end
-    local do_write = now - net.last_io >= 1 / 30 - 0.004
+    local do_write = now - net.last_io >= 1 / LINK_HZ - 0.004
     if do_write then net.last_io = now end
 
     local player = (do_write and SLOT == 1) and get_player() or nil   -- friends 2-3: read only
@@ -2848,9 +2853,11 @@ DROPIN_SETTLE = 20    -- s after landing (or connecting) before the warp
 DROPIN_NEAR = 40      -- m: closer than this, no warp
 local MAIN_V = { [4] = true, [5] = true, [6] = true }
 dropin = dropin or { msg = nil, msg_t = 0 }
-local function dropin_say(s)
+local function dropin_say(s, top)
     if dropin.msg ~= s then log("drop-in: " .. s) end
     dropin.msg, dropin.msg_t = s, os.clock()
+    -- v0.64: the corner text is off by default, so the moments that matter show at the top of the screen.
+    if top and coop_talk_show then pcall(coop_talk_show, s, 0xFF7FE6FF) end
 end
 function coop_dropin_hud()
     if dropin.msg and os.clock() - dropin.msg_t < 6 then return dropin.msg end
@@ -2884,13 +2891,15 @@ on_frame_1(function()
         dropin.want_t = dropin.want_t or now
         local left = DROPIN_WAIT - (now - dropin.want_t)
         if left > 0 then
-            dropin_say(string.format("Joining your friend's game: going to %s in %d s", chapter_name(theirs), math.ceil(left)))
+            -- Shown at the top once, when the countdown starts (it lasts about as long as a message shows there).
+            dropin_say(string.format("Joining your friend's game: going to %s in %d s", chapter_name(theirs), math.ceil(left)),
+                left > DROPIN_WAIT - 1)
             return
         end
         if local_cutscene() then return end
         if join_friend() then
             dropin.jump_t = now
-            dropin_say("Joining your friend's game: going to " .. chapter_name(theirs))
+            dropin_say("Joining your friend's game: going to " .. chapter_name(theirs), true)
         end
         return
     end
@@ -2904,7 +2913,7 @@ on_frame_1(function()
     if d <= DROPIN_NEAR then dropin.done = true log(string.format("drop-in: together (%.0f m apart)", d)) return end
     if teleport_to_friend(1e9) then
         dropin.done = true
-        dropin_say(string.format("Joined your friend's game (you were %d m apart)", math.floor(d)))
+        dropin_say(string.format("Joined your friend's game (you were %d m apart)", math.floor(d)), true)
     else
         dropin.tries = (dropin.tries or 0) + 1
         if dropin.tries >= 10 then dropin.done = true log("drop-in: gave up warping to the host: " .. tostring(join.msg)) end
@@ -4984,7 +4993,27 @@ coop_note{ feature = "On-screen status (HUD)", name = "Draw the status lines in 
     reads = "link state, friends' health, chapter names, messages from every script's *_hud() function, settings",
     writes = "draw.text lines on screen only (builds a new table and several strings each frame)" }
 on_frame_1(function()
-    if not (settings and settings.hud) then return end
+    -- v0.64: only with "Status text in the corners" on (off by default; the owner wanted the corners clear). With it
+    -- off, the red warnings (the network plugin not running, mismatched versions) still show at the top of the screen,
+    -- a few seconds once a minute while they last: without them a broken install gives no clue at all.
+    if not (settings and settings.hud and settings.corner_text == true) then
+        local now = os.clock()
+        if now - (hud.warn_check_t or -100) < 2 then return end
+        hud.warn_check_t = now
+        local ok, lines = pcall(hud_lines)
+        if not ok then return end
+        for _, l in ipairs(lines) do
+            if l[2] == 0xFF6B6BFF and coop_talk_show then
+                hud.warn_shown = hud.warn_shown or {}
+                if now - (hud.warn_shown[l[1]] or -100) > 60 then
+                    hud.warn_shown[l[1]] = now
+                    pcall(coop_talk_show, l[1], 0xFF6B6BFF)
+                end
+                break
+            end
+        end
+        return
+    end
     -- Not over the co-op screen (v0.54): it is the game's own Options sheet now, and these lines sat on its title.
     if coop_menu and coop_menu.open then return end
     local ok, err = pcall(function()

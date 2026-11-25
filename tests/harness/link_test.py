@@ -40,8 +40,8 @@ def check(cond, msg):
 
 
 def run_link(seconds, late_every=0, late_by=0.0, mutate=None):
-    """A friend sending 30 samples a second over one path, so a hold-up delays everything behind it too
-    (samples reach us in order, as Steam's channel delivers them). Every late_every-th sample is held
+    """A friend sending 20 samples a second (v0.64, LINK_HZ; was 30) over one path, so a hold-up delays everything
+    behind it too (samples reach us in order, as Steam's channel delivers them). Every late_every-th sample is held
     late_by seconds, and what was sent in that time arrives with it."""
     L, g = new_game()
     net = g.coop_net_state()
@@ -49,7 +49,7 @@ def run_link(seconds, late_every=0, late_by=0.0, mutate=None):
     frames = int(seconds * 60)
     for i in range(frames):
         now = g.FAKE_T + 1 / 60            # the clock the game will see in this frame
-        if i % 2 == 0:
+        if i % 3 == 0:
             seq += 1
             sent = now - 0.03 - CLOCK_SKEW          # 30 ms one way, the sender's clock is 10 s behind
             line = "%d %.4f 1.0 0.0 %.3f 0 0 0 1 4 1 0 0 0" % (seq, sent, seq * 0.01)
@@ -77,8 +77,9 @@ check(len(net.history) > 20, 'clean link: samples reach the history (%d)' % len(
 
 # 2. A link that holds one sample in ten back 120 ms: the delay rises to cover it, quickly.
 L, g, net = run_link(8, late_every=10, late_by=0.12)
-check(0.15 <= net.delay <= 0.2, 'late tail 120 ms: delay rose to cover it (%.3f s, wanted %.3f)' % (net.delay, net.delay_target))
-check(0.11 <= net.jitter <= 0.14, 'late tail 120 ms: measured as such (%.3f s)' % net.jitter)
+# v0.64: at 20 samples a second (one gap 50 ms, was 33) both come out about one gap higher than at 30.
+check(0.15 <= net.delay <= 0.22, 'late tail 120 ms: delay rose to cover it (%.3f s, wanted %.3f)' % (net.delay, net.delay_target))
+check(0.11 <= net.jitter <= 0.16, 'late tail 120 ms: measured as such (%.3f s)' % net.jitter)
 
 # 3. A very bad link: the delay is capped.
 L, g, net = run_link(15, late_every=4, late_by=0.6)
@@ -96,6 +97,7 @@ check(net.RISE_PER_S > 3 * net.FALL_PER_S, 'rises faster than it falls')
 
 # 6. The file is parsed only when it changed: a file that stays the same adds no samples.
 L, g, net = run_link(3)
+g.harness_frames(4)   # the last write is read at the next 20-a-second look
 n0, seen0, p0 = net.rx_count, len(net.history), net.parses
 g.harness_frames(120)
 check(net.rx_count == n0 and len(net.history) == seen0 and net.parses == p0,
