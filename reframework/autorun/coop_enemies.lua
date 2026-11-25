@@ -164,6 +164,12 @@ dbg_note{ feature = "One boss for both players", name = "Switch Jack and Mia han
 re.on_frame(function()
     local on = settings ~= nil and settings.share_jack_fight ~= false
     BOSS_HANDOFF.Em8000 = on or nil
+    -- Marguerite (v0.62, Em3100: the lantern, the Old House stalker; Kingkiller1195's bank list has her) is run by one
+    -- game and copied in the other, like the morgue Jack: before, each game ran its own, so each player saw her
+    -- somewhere else and she only went after her own game's player. Her boss forms (Em3300, Em3390) aren't on this list:
+    -- their fight may be driven by its own script, which a copy with its brain off would hold up.
+    BOSS_HANDOFF.Em3100 = on or nil
+    if (BOSS_FOLLOW.Em3100 == true) ~= on then BOSS_FOLLOW.Em3100 = on or nil end
     -- Mia's fights were copied from the host's game since v0.32, so she could only ever go for the host:
     -- the same switch hands her to whoever is nearer too (not bot-tested: no save has her fight).
     BOSS_HANDOFF.Em2000, BOSS_HANDOFF.Em2100 = on or nil, on or nil

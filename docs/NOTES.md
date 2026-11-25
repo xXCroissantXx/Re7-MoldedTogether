@@ -2130,3 +2130,10 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   never ends); a 4-door lock split appeared only after a crash recovery (Chapter4_Start replay), not in a clean run
   (both games lockDoor at step 400). Two silent host freezes a few s into Mia scenes (c04e12_00, c04e71_00) in one
   run, none in the next: no dump, no WER entry, cause unknown.
+- v0.62 (2026-11-25, Marguerite). Boss survey (story_run 'awake:' and SR.bodies): Em3100 = Marguerite (Em3100Think,
+  Em3100Grapple, lantern on the parked c03_2 body); her Old House body is in Chapter3/Enemy_c03/Enemy_c03_3, which forced
+  steps don't load (Folder.activate does, test-only), with insect spawns Em5400/5510/5511/5520 and BossBattle1/2 at
+  22,-1,72. LoadEnemyScene lists Em3000 3100 3300 3600 4000 4100 4200 5400 55xx 8000 8100 8900 8940 2000 2000Chapter4.
+  coop_enemies: BOSS_HANDOFF/BOSS_FOLLOW.Em3100 with 'One boss for both' (share_jack_fight). Em3300/Em3390 left out
+  (possibly script-driven fight). Bot test local/bottest/marg_test.py: 25/25 one owner + copy within 0.1 m, turns
+  every ~20 s; she stays idle (clip 10/1000) even with setTarget, so chase/grab not seen.

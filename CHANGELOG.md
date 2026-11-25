@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.62 (2026-11-25)
+One Marguerite for both of you.
+
+- **Marguerite is shared.** In the Old House each game ran its own Marguerite, so each of you saw her somewhere
+  else and she only went after the player in her own game. Now one game runs her and the other shows a copy of
+  that one, as with Jack: she goes to whoever is nearer, and when you're both close she takes turns between you.
+  This is part of "One boss for both" (on by default). Her insects, and her later forms in the boss fight, are
+  still each game's own (their health is shared).
+- Checked on the test bots with Marguerite woken by hand in the Old House: one game ran her and the other showed
+  her in the same place, every time, handing her over cleanly. She didn't chase anyone there (the bots can't play
+  the Old House's story), so her chase and grabs haven't been seen yet.
+
 ## v0.61 (2026-11-24)
 Both of you reach the ending.
 
