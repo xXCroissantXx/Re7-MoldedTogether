@@ -2179,3 +2179,25 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   to reframework.re7mp-backup-<stamp>, restore data\coopnet_config.json / coop_settings.json / coop_catchup.txt;
   dinput8.dll SHA-256 not cb1acc11... (nightly-01433) -> Read-Host replace? (n: Fail), dinput8.dll.backup-<stamp>.
   Tested on fake folders (scratchpad installer_precheck_test.ps1: RE7MP, unknown, ours, none).
+- v0.67 (2026-11-25, Jack hand-offs, stuck Jack, revive view, still samples).
+  Stuck Jack (morgue fight, bot test): Em3000Order think -> app.AI.ThinkBase.ThinkOffOwners (List<Object>); a game
+  that copied Jack through a scripted throw kept a GameEventActionController entry (not Jack's own; isPlay false,
+  isEventActive false) after the hand-off, isThinkOff stayed true. EnemyOrder.requestThinkOn(<that very object>)
+  empties it (our 'coop-re7' string or a new instance don't). coop_enemies free_stale_thinkoff (every 0.5 s, shared
+  bosses our game runs: not a copy, not friend_owned; es.tracked is keyed by address, use e.id): such an entry for
+  THINKOFF_STALE_S 2 s -> released + logged. Verified by planting one (player's GEA) on both games: released on the
+  runner in 2 s, left on the copy. Seen too: Jack frozen on the last frame of bank 10 motion 31 with a GEA of another
+  'Em8000' object still isPlay true, after the bots' forced step 600 (game never copied him): not touched.
+  Hand-offs: a turn went back after the 5 s minimum (Jack still nearer the other player) = two jolts per turn;
+  BOSS_HOLD_S 12 for BOSS_HANDOFF bosses. New copies ease in (puppetize stores blend_from; drive smoothsteps over
+  BLEND_S 0.3 s unless the gap >= BLEND_MAX 3 m); the recording had 0.6 m one-frame snaps at each hand-off.
+  Tool: local/bottest/jack_smooth_test.py (per-frame recorder, snaps / jitter / stuck / owner changes).
+  Head-off kill = Em8000 grab Chapter3Battle1NeckSlash (child _EM/_PL objects; Em3000Grapple.requestGrapple
+  refuses outside his AI: canGrapple false). Camera rides the Head joint (1.6 m above the feet standing). coop_revive:
+  after get_up following a refused game over, view under VIEW_MIN 0.75 m for VIEW_S 3 s, not crouching ->
+  die_for_real (logged). revive_view_test.py: a normal revive keeps 1.6 m, no death.
+  Link: net_io skips a sample like the last written one (pos 2 mm, rot 1e-4, look 0.003 rad, same stance and
+  chapter) after it went twice, until STILL_SEND_GAP 0.25 s; an enemy snapshot or new ack still writes. Bots:
+  link 56 -> 36 ms/s on the focused copy. Not a bug: TutorialCheck_Flag Can* host false = 700_MSG_WatchDeadJack
+  waiting at PositionCheck (the bot never walks to Jack's body). Em3300 = Eveline (Fsm_em3300_Appear);
+  Em3600 = Long-Hand Marguerite (c03_3 600 EmLoadAction, 950-1000 battle); forced steps skip her fight.

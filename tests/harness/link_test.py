@@ -111,5 +111,32 @@ log = g.fsfiles['coop_dummy_log.txt'] or ''
 n = log.count('link: round trip')
 check(2 <= n <= 3, 'a link line about every 30 s (%d in 75 s)' % n)
 
-print('link scenarios: ' + ('all %d checks passed' % 12 if not fails else '%d failed' % len(fails)))
+# 8. v0.67: standing still, our sample isn't written 20 times a second (each write is a ~1.9 ms file open):
+# twice (so the friend's game sees we stopped), then 4 a second. Moving, every 20-a-second tick writes.
+def tx_writes(L, g, seconds):
+    L.execute('''
+        harness_tx_n = 0
+        local w = fs.write
+        fs.write = function(p, s) if p == "coopnet_tx.txt" then harness_tx_n = harness_tx_n + 1 end return w(p, s) end
+    ''')
+    g.harness_frames(int(seconds * 60))
+    return g.harness_tx_n
+L, g, net = run_link(2)
+still = tx_writes(L, g, 4)
+check(12 <= still <= 20, 'standing still: about 4 samples a second written (%d in 4 s)' % still)
+L, g, net = run_link(2)
+L.execute('HARNESS_POS = function() return Vector3f.new(FAKE_T * 1.5, 0, 0) end')
+moving = tx_writes(L, g, 4)
+check(70 <= moving <= 82, 'moving: 20 samples a second written (%d in 4 s)' % moving)
+L, g, net = run_link(2)
+tx_writes(L, g, 2)
+L.execute('HARNESS_POS = function() return Vector3f.new(5, 0, 0) end')   # one step, then still again
+g.harness_frames(4)
+tx = g.fsfiles['coopnet_tx.txt'] or ''
+check(' 5.00000 ' in tx, 'a move after standing still goes out at once')
+L.execute('coop_io.tx_es = "seq 1\\nend\\n"')
+g.harness_frames(4)
+check('seq 1' in (g.fsfiles['coopnet_tx.txt'] or ''), 'standing still: a waiting enemy snapshot still goes at once')
+
+print('link scenarios: ' + ('all %d checks passed' % 16 if not fails else '%d failed' % len(fails)))
 sys.exit(1 if fails else 0)

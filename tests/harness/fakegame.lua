@@ -27,7 +27,11 @@ local function ret(name)
     return nil
 end
 local methods = {}
-function methods.call(self, name, ...) return ret(tostring(name)) end
+function methods.call(self, name, ...)
+    -- A test can move the player (v0.67, link_test): HARNESS_POS() gives what every get_Position returns.
+    if name == "get_Position" and HARNESS_POS then return HARNESS_POS() end
+    return ret(tostring(name))
+end
 function methods.get_field(self, name) return ret(tostring(name)) end
 function methods.set_field() end
 function methods.get_address(self) return self.__addr end

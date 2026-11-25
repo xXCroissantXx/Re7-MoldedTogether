@@ -32,6 +32,7 @@ local REVIVE_DIST = 2.8    -- m (the follow-me bot waits 2.5 m away)
 local REVIVE_TIME = 3.0    -- s next to you
 local REVIVE_HEALTH = 0.35 -- of max health
 local DOWN_LIMIT = 90      -- s alone before it's a real death
+local VIEW_MIN, VIEW_S = 0.75, 3.0   -- v0.67: after a refused scripted kill, a view this low (m above the feet) this long ends the life
 
 -- Lines are collected and appended once a second (was a full read + rewrite per line).
 local log_buf, log_t, log_tail = {}, 0, nil
@@ -173,6 +174,8 @@ local function get_up(why)
     end
     send("up")
     note(why)
+    -- v0.67: watch the view for a while after a scripted kill was refused (see VIEW_MIN in the frame callback).
+    if rv.gameover_t then rv.view_watch_t, rv.view_low_t = os.clock(), nil end
 end
 
 local function die_for_real(why)
@@ -283,6 +286,34 @@ re.on_frame(function()
         if (dc and safe(dc.call, dc, "get_isDead") == true) or (ps and safe(ps.call, ps, "get_IsDead") == true) then
             die_for_real("still dead after being helped up")
         end
+    end
+    -- v0.67: helped up after a refused game over, but the view stayed on the floor (bot windows 2026-11-25: Jack's
+    -- head-off kill, Chapter3Battle1NeckSlash; "revived but his camera still stayed down like his head was cut off").
+    -- The first-person camera rides the head bone (probe: camera and Head joint both 1.6 m above the feet standing), and
+    -- the kill's motion leaves that bone where the head fell; nothing in getting up puts it back. Same as the rule
+    -- above: a view under VIEW_MIN above the feet for VIEW_S while not crouching ends this life the game's way (the
+    -- checkpoint loads) instead of leaving a player who can't see to play. The heights go in the log.
+    if not rv.downed and rv.view_watch_t and now - rv.view_watch_t < 20 then
+        local p = player()
+        local cam = sdk.get_primary_camera()
+        local cgo = cam and safe(cam.call, cam, "get_GameObject")
+        local cp = cgo and safe(function() return cgo:call("get_Transform"):call("get_Position") end)
+        local pp = p and safe(function() return p:call("get_Transform"):call("get_Position") end)
+        local pm = p and safe(p.call, p, "getComponent(System.Type)", sdk.typeof("app.PlayerMovement"))
+        local crouch = pm and safe(pm.call, pm, "get_isCrouch") == true
+        local h = (cp and pp) and (cp.y - pp.y) or nil
+        if h and h < VIEW_MIN and not crouch then
+            rv.view_low_t = rv.view_low_t or now
+            if now - rv.view_low_t >= VIEW_S then
+                rv.view_watch_t, rv.view_low_t = nil, nil
+                log(string.format("view stuck low after being helped up: camera %.2f m above the feet", h))
+                die_for_real("the view stayed on the floor after being helped up")
+            end
+        else
+            rv.view_low_t = nil
+        end
+    elseif rv.view_watch_t then
+        rv.view_watch_t, rv.view_low_t = nil, nil
     end
     if not rv.downed then return end
     local ok, err = pcall(function()

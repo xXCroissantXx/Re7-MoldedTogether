@@ -1647,6 +1647,10 @@ local function puppetize(e)
     e.vis_t = os.clock()
     set_brain(e, false)
     mv.puppets[e.id] = e
+    -- v0.67: where it stood when it became a copy, so drive() eases it onto the friend's game's position (see BLEND_S).
+    local tr = safe(e.go.call, e.go, "get_Transform")
+    local p0 = tr and safe(tr.call, tr, "get_Position")
+    e.blend_from, e.blend_t0 = p0 and { x = p0.x, y = p0.y, z = p0.z } or nil, os.clock()
     log("puppet on: " .. e.name .. " " .. e.id)
 end
 
@@ -1864,6 +1868,20 @@ local function drive(e, h, now)
     end
     local k = (b.t > a.t) and math.max(0, math.min(1, (t - a.t) / (b.t - a.t))) or 1
     local x, y, z = a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k, a.z + (b.z - a.z) * k
+    -- v0.67: just made a copy (a hand-off), it eases from where it stood onto the friend's game's position over BLEND_S
+    -- instead of jumping there in one frame (0.6 m snaps at each hand-off in the morgue fight recording). A gap of
+    -- BLEND_MAX or more is a real move (a warp, a scene) and still jumps.
+    local bf = e.blend_from
+    if bf then
+        local u = (now - (e.blend_t0 or now)) / BLEND_S
+        local gap = math.sqrt((x - bf.x) ^ 2 + (z - bf.z) ^ 2)
+        if u >= 1 or gap >= BLEND_MAX then
+            e.blend_from = nil
+        else
+            u = u * u * (3 - 2 * u)   -- smoothstep
+            x, y, z = bf.x + (x - bf.x) * u, bf.y + (y - bf.y) * u, bf.z + (z - bf.z) * u
+        end
+    end
     local yaw = lerp_angle(a.yaw, b.yaw, k)
     local mc = e.mc or safe(e.go.call, e.go, "getComponent(System.Type)", sdk.typeof("app.MovementController"))
     e.mc = mc
@@ -1958,6 +1976,8 @@ end
 
 -- A boss's turn with each game (v0.56, see check_handoffs).
 local BOSS_TURN_S, BOSS_TURN_R = 20, 12
+BOSS_HOLD_S = 12   -- v0.67: a shared boss stays at least this long with the game that got it (see hand-offs below)
+BLEND_S, BLEND_MAX = 0.3, 3.0   -- v0.67: a new copy eases onto the friend's position over 0.3 s (under 3 m; see drive)
 mv.mine_own = mv.mine_own or {}
 local function hand_off(e, now, k)
     k = k or 1
@@ -2025,7 +2045,12 @@ function check_handoffs(now)
             if dm < HOLD_R and not we_down then best = nil end
             -- A boss stays at least 5 s with the game that got it (v0.51): with both players close, the bot test
             -- had Mia change games every 3 s, each change a jolt on both screens.
-            if (BOSS_FOLLOW[e.name] or BOSS_HANDOFF[e.name]) and not we_down and now - (mv.own_t[e.id] or -100) < 5 then best = nil end
+            -- v0.67: BOSS_HOLD_S (12 s) for a boss both games run. Recorded in the morgue fight (jack_smooth_test, bot
+            -- windows "Jack very jittery"): a turn gave Jack to the friend's game, which handed him back the moment its
+            -- 5 s were up because he was still nearer our player, so he never walked over to theirs; each turn was only
+            -- two hand-offs, two jolts. Held 12 s he goes after the friend for real. Going down still hands him on at once.
+            local hold = BOSS_HANDOFF[e.name] and BOSS_HOLD_S or 5
+            if (BOSS_FOLLOW[e.name] or BOSS_HANDOFF[e.name]) and not we_down and now - (mv.own_t[e.id] or -100) < hold then best = nil end
             -- Taking turns (v0.56): "the Mia fights didn't have her attacking my friend" (2026-11-14 session). A boss
             -- only changed games when the friend was clearly nearer and she wasn't on top of whoever had her; in a
             -- fight she's on one player nearly all the time, so she went after that one for the whole fight. Now a
@@ -2072,6 +2097,48 @@ local function claim_unsent(now)
             mv.own[id], mv.own_t[id], mv.handed[id] = "me", now, nil
             log(string.format("%s %s: nobody sent it for %.0f s and ours is awake: ours runs it, your friend's game copies ours",
                 e.name, id:sub(1, 12), CLAIM_S))
+        end
+    end
+end
+
+-- A boss left brain-dead by a copy's scene (v0.67). Bot windows, morgue fight (2026-11-25, "Jack ... getting stuck"):
+-- one game copied Jack through a scripted throw; a game event action put his AI off (app.AI.ThinkBase.ThinkOffOwners
+-- held another object's app.GameEventActionController) and, his own motion being the friend's while he was a copy, never
+-- put it back on. Handed to that game seconds later, Jack stood still for good (isThinkOff true; the game that had run
+-- him had only our own "coop-re7" entry). Now, every 0.5 s, for a shared boss our game runs: an entry from an event action
+-- that plays nothing (isPlay and isEventActive false) and has stayed THINKOFF_STALE_S is given back the game's way
+-- (EnemyOrder.requestThinkOn with that very object; bot test: the list emptied and isThinkOff went false). Our own entry
+-- and an event that is really playing are left alone.
+THINKOFF_STALE_S = 2.0
+function free_stale_thinkoff(now)
+    mv.think_seen = mv.think_seen or {}
+    for _, e in pairs(es.tracked) do   -- keyed by object address; the enemy's id is e.id
+        local id = e.id
+        -- Ours to run: not a copy and no friend's game runs it (the host runs its bosses with no "me" mark at all).
+        if id and BOSS_HANDOFF[e.name] and not e.dup and not e.dead and mv.puppets[id] == nil and not friend_owned(id) then
+            local od = order_of(e)
+            local th = od and safe(od.call, od, "get_think")
+            local list = th and safe(th.get_field, th, "ThinkOffOwners")
+            local n = list and safe(list.call, list, "get_Count") or 0
+            local stale = nil
+            for i = 0, n - 1 do
+                local el = safe(list.call, list, "get_Item", i)
+                local td = el and el.get_type_definition and el:get_type_definition()
+                if td and td:get_full_name() == "app.GameEventActionController"
+                    and safe(el.call, el, "get_isPlay") == false and safe(el.call, el, "get_isEventActive") == false then
+                    stale = el
+                    break
+                end
+            end
+            if stale == nil then
+                mv.think_seen[id] = nil
+            elseif mv.think_seen[id] == nil then
+                mv.think_seen[id] = now
+            elseif now - mv.think_seen[id] >= THINKOFF_STALE_S then
+                mv.think_seen[id] = nil
+                safe(od.call, od, "requestThinkOn", stale)
+                log(string.format("%s %s: its AI was left off by an event that's over: on again", e.name, id:sub(1, 12)))
+            end
         end
     end
 end
@@ -2683,6 +2750,8 @@ local function update_movement(now)
         pcall(check_handoffs, now)
         local cok, cerr = pcall(claim_unsent, now)
         if not cok and not mv.claim_err then mv.claim_err = true log("claim ERR " .. tostring(cerr)) end
+        local tok, terr = pcall(free_stale_thinkoff, now)
+        if not tok and not mv.think_err then mv.think_err = true log("think-off ERR " .. tostring(terr)) end
         local gok, gerr = pcall(friends_gone, now)
         if not gok and not mv.gone_err then mv.gone_err = true log("drop-out ERR " .. tostring(gerr)) end
         local aok, aerr = pcall(asleep_handoff, now)

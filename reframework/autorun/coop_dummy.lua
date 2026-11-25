@@ -837,9 +837,11 @@ function net.update_delay(now)
         net.q_log_t = now
         local rate = (net.rx_count or 0) / math.max(now - since, 1)
         net.rx_count = 0
-        log(string.format("link: round trip %s, friend drawn %.0f ms back (wanted %.0f), late 95%% %.0f ms, %.0f samples/s in",
+        local still = (net.still_skips or 0) / math.max(now - since, 1)
+        net.still_skips = 0
+        log(string.format("link: round trip %s, friend drawn %.0f ms back (wanted %.0f), late 95%% %.0f ms, %.0f samples/s in, %.1f/s not sent (standing still)",
             net.ping and string.format("%.0f ms", net.ping * 1000) or "unknown", net.delay * 1000, net.delay_target * 1000,
-            net.jitter * 1000, rate))
+            net.jitter * 1000, rate, still))
     end
 end
 function net.slew_delay(now)
@@ -1036,6 +1038,7 @@ local function action_fields(player)
 end
 
 LINK_HZ = 20   -- v0.64: player samples written and read per second (see below)
+STILL_SEND_GAP = 0.25   -- v0.67: standing still, a sample like the last one is sent this often (net_io)
 -- v0.65: one file each way per tick. CoopNet writes everything it received into coopnet_rx.txt ("@S<k>" then friend
 -- k's newest samples, "@E<k>" then their newest enemy snapshot), and takes our sample and enemy snapshot from
 -- coopnet_tx.txt ("S <sample>", then the snapshot). Before, each friend slot read its own samples file and the enemy
@@ -1103,11 +1106,39 @@ local function net_io()
     if do_write then net.last_io = now end
 
     local player = (do_write and SLOT == 1) and get_player() or nil   -- friends 2-3: read only
+    local tr = player and player:call("get_Transform")
+    local p, q = tr and tr:call("get_Position"), tr and tr:call("get_Rotation")
+    if p == nil or q == nil then player = nil end
+    local ly, lp, a1, a2, st, ch
     if player then
-        local tr = player:call("get_Transform")
-        local p, q = tr:call("get_Position"), tr:call("get_Rotation")
-        local ly, lp = local_look(q)
-        local a1, a2 = action_fields(player)
+        ly, lp = local_look(q)
+        a1, a2 = action_fields(player)
+        st, ch = local_stance_flags(player) + a2, local_chapter() + a1
+        -- v0.67: standing still, the same sample went out 20 times a second, and each write is one ~1.9 ms file open
+        -- on the game's frame. A sample like the last one written is now sent twice (the second tells the friend's
+        -- game we stopped, so it doesn't keep moving us along), then 4 a second; anything waiting (an enemy
+        -- snapshot, a newer "events handled") still goes at once. Everything that checks a friend is there allows
+        -- 1.5 s or more without a sample.
+        local w = net.last_sent
+        local same = w ~= nil and w.st == st and w.ch == ch
+            and math.abs(w.x - p.x) < 0.002 and math.abs(w.y - p.y) < 0.002 and math.abs(w.z - p.z) < 0.002
+            and math.abs(w.qx - q.x) < 1e-4 and math.abs(w.qy - q.y) < 1e-4 and math.abs(w.qz - q.z) < 1e-4
+            and math.abs(w.qw - q.w) < 1e-4
+            and math.abs(wrap(w.ly - ly)) < 0.003 and math.abs(w.lp - lp) < 0.003
+        local pending = coop_io and (coop_io.tx_es ~= nil or coop_io.ack ~= coop_io.ack_sent)
+        if same and not pending then
+            net.still_n = (net.still_n or 0) + 1
+            if net.still_n >= 2 and now - (net.last_sent_t or 0) < STILL_SEND_GAP then
+                player = nil
+                net.still_skips = (net.still_skips or 0) + 1
+            end
+        else
+            net.still_n = 0
+        end
+    end
+    if player then
+        net.last_sent = { x = p.x, y = p.y, z = p.z, qx = q.x, qy = q.y, qz = q.z, qw = q.w, ly = ly, lp = lp, st = st, ch = ch }
+        net.last_sent_t = now
         net.seq = net.seq + 1
         -- animId carries our chapter; animFrame echoes the newest sender time we've
         -- received from the peer (mod 1000 s), so they can measure the round trip.
@@ -1117,8 +1148,7 @@ local function net_io()
         -- v0.66: "A <n>": the newest friend's event we've handled (the plugin then leaves it out of coopnet_rx.txt).
         local ack = (coop_io and coop_io.ack) and string.format("A %d\n", coop_io.ack) or ""
         fs.write("coopnet_tx.txt", string.format("S %d %.4f %.5f %.5f %.5f %.6f %.6f %.6f %.6f %d %d %.4f %.4f %.4f\n",
-            net.seq, now, p.x, p.y, p.z, q.x, q.y, q.z, q.w, local_stance_flags(player) + a2,
-            local_chapter() + a1,
+            net.seq, now, p.x, p.y, p.z, q.x, q.y, q.z, q.w, st, ch,
             (net.peer_t or 0) % 1000, ly, lp) .. ack .. (es or ""))
         if coop_io then coop_io.ack_sent = coop_io.ack end
     elseif do_write and SLOT == 1 and coop_io and (coop_io.tx_es or coop_io.ack ~= coop_io.ack_sent) then

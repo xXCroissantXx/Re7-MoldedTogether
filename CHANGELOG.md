@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.67 (2026-11-25)
+Jack moves better between your games, and standing still costs your game less.
+
+- **Jack doesn't freeze after changing games.** When one game showed Jack copying the other's through a scripted
+  moment (a throw), the game left his AI switched off there, and once that game took him over he stood still for
+  good. Now an AI left off by an event that's over is switched back on (within about 2 seconds).
+- **Jack's turns work, with less jolting.** He takes turns going after each player, but the other game handed him
+  straight back after 5 seconds because he was still nearer you, so he never went for your friend and every turn
+  was two jolts. A boss now stays at least 12 seconds with the game that gets him. When a game starts copying him,
+  he eases into place over a third of a second instead of jumping up to half a metre.
+- **No stuck view after being revived from a head-off kill.** Jack's head-off kill leaves the camera where the head
+  fell, and getting up didn't put it back. If, after being helped up from a scripted kill, your view stays on the
+  floor for 3 seconds while you're not crouching, that life ends the normal way (the checkpoint loads) instead of
+  leaving you stuck; it's noted in the log.
+- **Standing still costs less.** Your position went to your friend 20 times a second even when nothing changed,
+  and each write costs your game about 2 ms of a frame. Now a position like the last one is sent twice (so your
+  friend's game sees you stop) and then 4 times a second until you move again; moving, turning or crouching still
+  goes out at once, and so does anything else waiting. The link's cost went down by about a third on the test
+  copies.
+
 ## v0.66 (2026-11-25)
 Events in the one link file, and an installer that clears the way.
 
