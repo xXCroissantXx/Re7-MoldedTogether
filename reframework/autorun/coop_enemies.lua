@@ -2037,6 +2037,70 @@ local function claim_unsent(now)
     end
 end
 
+-- Drop-out (v0.63): a friend whose game stopped sending anything at all (left, closed, lost the connection) for
+-- GONE_S has everything it ran taken back at once. Before, only the quiet timers did it: 3 s for an enemy, 6 s for a
+-- boss, 30 s when their last sample said "in a cutscene" (it stays saying so once they're gone), and Jack in the
+-- garage fight waited 60 s while his car went on copying a game that wasn't there. Player samples keep coming
+-- through a friend's cutscenes, so a friend watching a scene isn't "gone".
+GONE_S = 5
+local function friends_gone(now)
+    mv.gone_k = mv.gone_k or {}
+    for k = 1, 3 do
+        local env = coop_slot_envs and coop_slot_envs[k]
+        local f = env and rawget(env, "coop_net_state") or (k == 1 and coop_net_state) or nil
+        local st = slot_live(k) and f and f() or nil
+        local h = type(st) == "table" and st.history or nil
+        local last = type(h) == "table" and h[#h] or nil
+        if type(last) ~= "table" or last.t == nil then last = nil end
+        local gone = last ~= nil and now - last.t > GONE_S
+        if gone and not mv.gone_k[k] then
+            mv.gone_k[k] = true
+            local n = 0
+            for id, own in pairs(mv.own) do
+                if own == k then
+                    mv.own[id], mv.own_t[id], mv.handed[id] = "me", now, nil
+                    if mv.puppets[id] then release(id) end
+                    mv.hist[id] = nil
+                    n = n + 1
+                end
+            end
+            if coop_car.runner == k then coop_car.runner = nil end
+            log(string.format("friend %d's game has sent nothing for %d s: took back the %d enemies it ran", k, GONE_S, n))
+        elseif not gone and last ~= nil then
+            mv.gone_k[k] = nil
+        end
+    end
+end
+
+-- A shared boss that falls asleep in the game running it (v0.63): its player died or was downed, or its game put
+-- it away. That game stopped sending it and went quiet, and the friend's copy stood frozen for the boss quiet limit
+-- (6 s) before the friend's game took it back (the bot fights: gaps of up to 5-6 s). Now the game whose boss fell
+-- asleep hands it to the friend at once, as a turn hand-off does.
+local function asleep_handoff(now)
+    if host_mode() or mv.paused or not (coop_link_friend and coop_link_friend(net_kv())) then return end
+    if scripted_now() or friend_in_cutscene(1) or (mv.paused_slots and mv.paused_slots[1]) then return end
+    local env1 = coop_slot_envs and coop_slot_envs[1]
+    local f = env1 and rawget(env1, "coop_net_state") or coop_net_state
+    local st = f and f() or nil
+    local h = type(st) == "table" and st.history or nil
+    local last = type(h) == "table" and h[#h] or nil
+    if type(last) ~= "table" or last.t == nil or now - last.t > 2 or st.peer_chapter ~= chapter() then return end
+    for _, e in pairs(es.tracked) do
+        local id = e.id
+        local mine = mv.own[id] == "me" or (mv.role == "host" and mv.own[id] == nil)
+        if BOSS_HANDOFF[e.name] and mine and moves_shared(e.name) and not mv.puppets[id] and not e.dead and not e.dup then
+            local awake = safe(e.go.call, e.go, "get_Update") == true
+            if awake then
+                e.awake_seen_t, e.sleep_handed = now, nil
+            elseif e.awake_seen_t and now - e.awake_seen_t < 10 and not e.sleep_handed then
+                e.sleep_handed = true
+                log(string.format("%s %s fell asleep here while ours: handed to your friend at once", e.name, id:sub(1, 12)))
+                hand_off(e, now, 1)
+            end
+        end
+    end
+end
+
 -- One Molded for both of you (v0.48). A copy of a Molded can't be moved (its world position isn't
 -- taken from its transform: set_Position, warp, the CharacterController/RigidBodyCharacter warps and
 -- the root joint were all ignored, bot tests 2026-11-11), so each game still runs its own. What's
@@ -2580,6 +2644,10 @@ local function update_movement(now)
         pcall(check_handoffs, now)
         local cok, cerr = pcall(claim_unsent, now)
         if not cok and not mv.claim_err then mv.claim_err = true log("claim ERR " .. tostring(cerr)) end
+        local gok, gerr = pcall(friends_gone, now)
+        if not gok and not mv.gone_err then mv.gone_err = true log("drop-out ERR " .. tostring(gerr)) end
+        local aok, aerr = pcall(asleep_handoff, now)
+        if not aok and not mv.asleep_err then mv.asleep_err = true log("asleep hand-off ERR " .. tostring(aerr)) end
     end
     -- One Molded for both: who it goes after (see aim_regulars).
     local aok, aerr = pcall(aim_regulars, now)

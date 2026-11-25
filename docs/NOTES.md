@@ -2137,3 +2137,16 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   coop_enemies: BOSS_HANDOFF/BOSS_FOLLOW.Em3100 with 'One boss for both' (share_jack_fight). Em3300/Em3390 left out
   (possibly script-driven fight). Bot test local/bottest/marg_test.py: 25/25 one owner + copy within 0.1 m, turns
   every ~20 s; she stays idle (clip 10/1000) even with setTarget, so chase/grab not seen.
+- v0.63 (2026-11-25, drop-in / drop-out). Chapter jumps keep the player's inventory (bot inv_jump_test.py: Chapter 1
+  save -> Chapter3_Start 3/3 items, inside Chapter 3 11/11; Chapter4_Start lands on Mia's own inventory). coop_dummy
+  'Drop-in' (SLOT 1, guest, party of 2, main chapters 4/5/6): different chapter -> DROPIN_WAIT 8 s countdown on the
+  HUD -> join_friend(); same chapter -> DROPIN_SETTLE 20 s -> teleport_to_friend(1e9) unless within 40 m; once per
+  connection (reset after 60 s without samples). net.history entries carry .ch; teleport_to_friend uses only
+  positions from our chapter and refuses under 3 s after the friend arrived. coop_story: ss.friend_arrived_t from
+  the samples' chapter; apply_story_body skips a friend's scenes for ARRIVE_S 60 s after they arrive (not as
+  follower): the host joined the drop-in's c03e00_00 and teleport warped it by the guest's Chapter 4 coordinates.
+  coop_enemies friends_gone: a friend slot with no samples for GONE_S 5 s -> own[id]==k taken back, car runner
+  cleared. asleep_handoff: a BOSS_HANDOFF boss we run that goes from awake to asleep (within 10 s) is handed to
+  friend 1 at once (never fired in jack_share_test x2: 4 s and 5 s unshared; one 6 s quiet take-back remained). Bot tests: dropin_test.py (Chapter 4 guest -> host's Chapter 3, warped 52 m, host stayed
+  put, inventory same), dropout_test.py (guest closed mid garage fight: host had Jack back after 4.9 s).
+  Marguerite's insects (Em5400/5510/5511/5520) never spawned on the bots, so they stay per game.

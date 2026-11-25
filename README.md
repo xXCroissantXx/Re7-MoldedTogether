@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.62; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.63; formerly coop-re7)
 Created by xXCroissantXx & Kingkiller1195
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
@@ -136,6 +136,11 @@ who joins later catches up. The Lobby shows who's behind or ahead. Key items and
 (the experimental "Get the host's key items and weapons" was removed in v0.55: the game can't put them down to
 pick up, and the other way in could crash the game).
 
+**Dropping in.** Connect while your friend is already playing and your game brings you to them (since v0.63): in
+another chapter, a note counts down and you go to the start of theirs; the story catches up; then you're warped
+next to them. Your inventory stays your own. (Two players; with three or four use the Lobby.) A friend who leaves
+or whose game closes hands back what their game ran within about 5 seconds.
+
 **Meeting up.** If your friend is in another chapter: co-op menu > **Help and fixes** > **Go to your friend's
 chapter**: you start at the beginning of their chapter, then walk to each other. Saving is switched off for the
 jump and comes back on by itself about 20 seconds after you're in the story. **Teleport to your friend** works once you're within 40 m of them.
@@ -238,7 +243,7 @@ your friend's weapon in hand, ladders, on-screen status and the shared switches)
   ship and after, and the first tape) with both games at the same step every time, and every kind of interaction
   in those areas is shared, but nobody has played the later chapters together yet: please send a bug report.
 - **Later bosses** (the old house, the ship and the end of the game) share their health and defeat, but each
-  game runs its own copy of the fight; only Jack and Mia are run by one game for both so far.
+  game runs its own copy of the fight; Jack, Mia and Marguerite (since v0.62) are run by one game for both.
 - **Bosses and Molded** are run by the nearest player's game and copied to the others. The copies were checked by
   bots (the same place to within about a metre, usually a few centimetres); a fast lunge can look a little behind on
   the other screen. Jack's grabs play on the other screen too (since v0.59). A Molded's grab and Mia's attacks on

@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.63 (2026-11-25)
+Drop in, drop out.
+
+- **Drop in.** Connect to a friend who's already playing and your game takes you to them by itself: if you're in
+  another chapter (behind or ahead), a note counts down 8 seconds and your game goes to the start of the host's
+  chapter; the story and the world catch up as they always have (the catch-up list, story steps, story flags); and
+  once you've settled you're warped next to the host, however far away they are. Your inventory stays your own: a
+  chapter jump doesn't touch it (checked on the test bots from a Chapter 1 save into Chapter 3, and inside
+  Chapter 3). Two players; with three or four the Lobby does it. Off with "drop_in": false in coop_settings.json.
+- **Drop out.** When a friend's game stops sending anything for 5 seconds (they left, their game closed, the
+  connection dropped), the enemies it ran are taken back at once. Before, a friend who left in the middle of a
+  cutscene left their enemies standing for 30 seconds, and Jack in the garage fight for a minute, his car still
+  copying a game that was gone. In the bot test the host had Jack back 5 seconds after the guest's game was closed.
+- **A friend arriving doesn't pull you into their scenes.** When a friend comes into your chapter, the scenes their
+  game plays on arriving (the chapter's opening) are theirs: the host's game used to join the drop-in's opening
+  scene and was warped "next to" the friend using where they had been in their old chapter.
+- **Teleports only use positions from your chapter**, at least 3 seconds after your friend got there.
+- **Jack should change games at once when he falls asleep** in the game running him, instead of the other game
+  showing him frozen for up to 6 seconds first. Not seen in the bot fights yet: there, the 6-second wait still came
+  from a game that had gone quiet in a way this doesn't catch (two runs: 4 and 5 seconds unshared in about 165).
+
 ## v0.62 (2026-11-25)
 One Marguerite for both of you.
 

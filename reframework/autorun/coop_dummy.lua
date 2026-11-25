@@ -1108,6 +1108,7 @@ local function net_io()
                     net.peer_t = t                         -- echoed back to the peer
                     local f = math.floor(v[11])
                     net.peer_chapter = f % 256
+                    net.history[#net.history].ch = net.peer_chapter   -- v0.63: which chapter this position is in
                     net.peer_action = math.floor(f / 256) % 65536
                     net.peer_action_layer = math.floor(f / 16777216) % 8
                     net.peer_action_bank = math.floor(f / 134217728) % 32   -- v0.47: 0 = the usual sets
@@ -2835,6 +2836,81 @@ _G.re.on_frame(function()
     if coop_send_event then pcall(coop_send_event, "ending 6") end
     if endf.n == 1 then log("into the ending: telling your friend") end
 end)
+-- Drop-in (v0.63): a guest who connects to a host in another main chapter (Chapter 1, 3 or 4), or far from them in the
+-- same one, is brought to the host's game without anyone opening a menu: after DROPIN_WAIT s its game goes to the start
+-- of the host's chapter (either way: the host's story leads), the story and world catch up as they always did (the
+-- catch-up list, story flags and steps), and once it has settled it's warped next to the host, however far (the
+-- long-warp floor hold below). Each player keeps their own inventory: a chapter jump leaves it as it was (bot test
+-- 2026-11-25, Chapter 1 save to Chapter 3 and within Chapter 3). Once per connection; two players only (with 3-4 the
+-- Lobby does it); never into or out of a VHS tape or a chapter's transition; off with "drop_in": false.
+DROPIN_WAIT = 8       -- s shown on screen before the jump
+DROPIN_SETTLE = 20    -- s after landing (or connecting) before the warp
+DROPIN_NEAR = 40      -- m: closer than this, no warp
+local MAIN_V = { [4] = true, [5] = true, [6] = true }
+dropin = dropin or { msg = nil, msg_t = 0 }
+local function dropin_say(s)
+    if dropin.msg ~= s then log("drop-in: " .. s) end
+    dropin.msg, dropin.msg_t = s, os.clock()
+end
+function coop_dropin_hud()
+    if dropin.msg and os.clock() - dropin.msg_t < 6 then return dropin.msg end
+    return nil
+end
+coop_note{ feature = "Drop-in", name = "Bring a guest who just connected to the host's chapter and the host",
+    when = "every frame, but it only looks once a second; only in a guest's game with one friend",
+    reads = "the link (fresh samples), our chapter and the host's, both positions, whether we're busy or in a scene",
+    writes = "after 8 s: jump_to_chapter to the host's chapter; 20 s after landing: a long warp next to the host (once per connection)" }
+on_frame_1(function()
+    local now = os.clock()
+    if now - (dropin.check_t or 0) < 1 then return end
+    dropin.check_t = now
+    if SLOT ~= 1 or (settings and settings.drop_in == false) then return end
+    local last = net.history[#net.history]
+    local fresh = last ~= nil and now - last.t <= (NET_TIMEOUT or 2)
+    if not fresh then
+        -- Gone a while: the next connection is a new drop-in.
+        if dropin.lost_t == nil then dropin.lost_t = now end
+        if now - dropin.lost_t > 60 then dropin.done, dropin.link_t, dropin.want_t, dropin.jump_t = nil, nil, nil, nil end
+        return
+    end
+    dropin.lost_t = nil
+    dropin.link_t = dropin.link_t or now
+    if dropin.done or coop_enemy_role_now ~= "guest" then return end
+    if coop_party_size and coop_party_size() > 2 then dropin.done = true return end
+    local mine, theirs = local_chapter(), net.peer_chapter
+    if not (MAIN_V[mine or -1] and MAIN_V[theirs or -1]) then dropin.want_t = nil return end   -- title, tapes, movies
+    if mine ~= theirs then
+        if dropin.jump_t then return end   -- on our way
+        dropin.want_t = dropin.want_t or now
+        local left = DROPIN_WAIT - (now - dropin.want_t)
+        if left > 0 then
+            dropin_say(string.format("Joining your friend's game: going to %s in %d s", chapter_name(theirs), math.ceil(left)))
+            return
+        end
+        if local_cutscene() then return end
+        if join_friend() then
+            dropin.jump_t = now
+            dropin_say("Joining your friend's game: going to " .. chapter_name(theirs))
+        end
+        return
+    end
+    -- Same chapter: once settled, next to the host.
+    local since = math.max(dropin.jump_t or dropin.link_t, chapters.jump_t or 0)
+    if now - since < DROPIN_SETTLE or local_cutscene() or jump_busy() then return end
+    local player = get_player()
+    local pp = player and player:call("get_Transform"):call("get_Position")
+    if pp == nil then return end
+    local d = math.sqrt((last.pos.x - pp.x) ^ 2 + (last.pos.y - pp.y) ^ 2 + (last.pos.z - pp.z) ^ 2)
+    if d <= DROPIN_NEAR then dropin.done = true log(string.format("drop-in: together (%.0f m apart)", d)) return end
+    if teleport_to_friend(1e9) then
+        dropin.done = true
+        dropin_say(string.format("Joined your friend's game (you were %d m apart)", math.floor(d)))
+    else
+        dropin.tries = (dropin.tries or 0) + 1
+        if dropin.tries >= 10 then dropin.done = true log("drop-in: gave up warping to the host: " .. tostring(join.msg)) end
+    end
+end)
+
 if SLOT == 1 then
     function coop_ending_on_event(text)
         if text ~= "ending 6" then return false end
@@ -3880,9 +3956,24 @@ function teleport_to_friend(maxd)
     if mc == nil then log("teleport: no MovementController") return false end
     -- Land where the friend stood about a second ago: ground they actually walked on.
     -- A fixed sideways offset could be inside a wall; collision pushes us apart after.
+    -- Only positions from our chapter (v0.63): a friend who has just changed chapter (or is loading into ours) still
+    -- has samples from where they were, and a scene pull warped the host to the guest's spot in Chapter 4 coordinates.
+    local mine = local_chapter()
+    local since = nil
+    for i = #net.history, 1, -1 do
+        local h = net.history[i]
+        if h.ch ~= nil and h.ch ~= mine then break end
+        since = h.t
+    end
+    if since == nil or last.t - since < 3 then
+        join.msg = "your friend has only just arrived here: try again in a moment"
+        log("teleport: refused, the friend's positions in this chapter are under 3 s old")
+        return false
+    end
     local target = Vector3f.new(last.pos.x, last.pos.y, last.pos.z)
     for i = #net.history, 1, -1 do
         local h = net.history[i]
+        if h.ch ~= nil and h.ch ~= mine then break end
         if h.t <= now - net.delay - 1.0 then target = h.pos break end
     end
     -- RE7 streams areas in around the player: a long warp can land where nothing is
@@ -4862,7 +4953,10 @@ local function hud_lines()
     if fresh and anim.flags and (anim.flags & STANCE_CUTSCENE) ~= 0 then
         out[#out + 1] = { "Your friend is in a cutscene", 0xFFBFBFBF }
     end
-    if fresh and net.peer_chapter and net.peer_chapter ~= local_chapter() then
+    local dm = coop_dropin_hud and coop_dropin_hud()
+    if dm then
+        out[#out + 1] = { dm, 0xFF7FE6FF }
+    elseif fresh and net.peer_chapter and net.peer_chapter ~= local_chapter() then
         out[#out + 1] = { string.format("Your friend is in %s: %s > Help and fixes to join them", chapter_name(net.peer_chapter), key), 0xFF7FE6FF }
     end
     local vw = coop_talk_version_warning and coop_talk_version_warning()

@@ -793,6 +793,14 @@ apply_story_body = function(name, ch, phone)
         end
         return
     end
+    -- A friend who has just come into our chapter (v0.63, drop-in): the scenes their game plays on arriving (the
+    -- chapter's opening) are theirs, not the host's story. The host's game joined the opening of a guest who had
+    -- dropped in at Chapter 3's start, and was pulled "next to" them by the guest's last position from Chapter 4.
+    local arrived = ss.friend_arrived_t and ss.friend_arrived_t[coop_event_slot or 1]
+    if not follower() and arrived and os.clock() - arrived < ARRIVE_S then
+        log(string.format("friend's %s: they came into this chapter %.0f s ago (their arrival), not joined", name, os.clock() - arrived))
+        return
+    end
     ss.last_together_t = os.clock()
     -- Jack's scripted moves (em3000_*: through the hatch-room wall, door kicks) aren't started
     -- here any more (v0.39): each game's own Jack does them when its own player sets them off
@@ -1416,6 +1424,37 @@ local function check_difficulty(k)
     note(string.format("%s plays on %s and you on %s: enemies won't match. Play on the same difficulty.",
         k == 1 and "Your friend" or ("Friend " .. k), DIFF_NAMES[theirs] or "?", DIFF_NAMES[mine] or "?"))
 end
+-- A friend's arrival in our chapter (v0.63, drop-in): their samples' chapter (coop_dummy, ~30 a second) turning into
+-- ours. For ARRIVE_S after it, the scenes their game plays (the chapter's opening) aren't joined here (apply_story_body).
+ARRIVE_S = 60
+ss.friend_arrived_t = ss.friend_arrived_t or {}
+ss.friend_ch_seen = ss.friend_ch_seen or {}
+dbg_note{ feature = "Story cutscenes", name = "Notice a friend arriving in our chapter",
+    when = "every frame, but it only looks every 0.5 s",
+    reads = "each friend's chapter from their samples (coop_net_state), our chapter",
+    writes = "ss.friend_arrived_t[slot] when a friend's chapter turns into ours" }
+re.on_frame(function()
+    local now = os.clock()
+    if now - (ss.arrive_t or 0) < 0.5 then return end
+    ss.arrive_t = now
+    local mine = chapter()
+    for k = 1, 3 do
+        local env = coop_slot_envs and coop_slot_envs[k]
+        local f = env and rawget(env, "coop_net_state") or (k == 1 and coop_net_state) or nil
+        local st = f and f() or nil
+        local h = type(st) == "table" and st.history or nil
+        local last = type(h) == "table" and h[#h] or nil
+        local theirs = type(last) == "table" and last.t and now - last.t < 3 and st.peer_chapter or nil
+        if theirs then
+            local seen = ss.friend_ch_seen[k]
+            if theirs == mine and seen ~= nil and seen ~= mine then
+                ss.friend_arrived_t[k] = now
+                log(string.format("friend %d came into this chapter (from %s)", k, tostring(seen)))
+            end
+            ss.friend_ch_seen[k] = theirs
+        end
+    end
+end)
 dbg_note{ feature = "Story progress", name = "Tell the friend where we are in the story",
     when = "every frame, but it only works every 10 s",
     reads = "our chapter, the story clock, the difficulty",

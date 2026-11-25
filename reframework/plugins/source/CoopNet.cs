@@ -574,7 +574,7 @@ public class CoopNet
         public float LookYaw, LookPitch;   // camera relative to body, radians
     }
 
-    const string Version = "0.62";
+    const string Version = "0.63";
     const int PacketSize = 64;
     static readonly byte[] Magic = { (byte)'R', (byte)'7', (byte)'C', (byte)'2' };
     const int KeepSamples = 32;
