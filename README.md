@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.65; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.66; formerly coop-re7)
 Created by xXCroissantXx & Kingkiller1195
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
@@ -48,6 +48,9 @@ Made with [coop-anything](https://github.com/cranebeaker/coop-anything). MIT lic
      https://dotnet.microsoft.com/download/dotnet/10.0.
    - If the Steam folder needs administrator rights, Windows asks you to allow it, and the install carries on
      in a new window.
+   - Another multiplayer mod, **RE7MP**, can't run alongside it: the installer moves RE7MP's reframework folder
+     aside (renamed `reframework.re7mp-backup-<date>`, nothing is deleted). An **REFramework version** it doesn't
+     know (put there by another mod) is replaced only if you say yes; the old one is kept as a backup.
    - **Full character models** (see below) are set up in the same run: the installer opens the mod's Nexus page,
      waits while you click **Manual download**, and carries on by itself when the file is in your Downloads folder.
 4. Start RE7 from **Steam** as usual (**Play**): the mod loads with it. The very first start takes a few minutes

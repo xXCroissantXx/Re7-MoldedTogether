@@ -5,7 +5,7 @@
 -- game of the nearest player and followed in the other (see "Enemy movement" below).
 -- Events travel reliably through CoopNet.cs:
 --   us -> coopnet_ev_out.txt   "<id>\t<text>" lines, ids always growing
---   friend -> coopnet_ev_in.txt "<n>\t<text>" lines, each n handled once
+--   friend -> coopnet_rx.txt "@V" then "<n>\t<text>" lines, each n handled once (v0.66; was coopnet_ev_in.txt)
 -- Ours: "kill <enemy id> <chapter> <name>", "dmg <id> <chapter> <amount> <name>",
 -- "own <id> <chapter> <name>". coop_world, coop_story and coop_revive send through
 -- coop_send_event and get theirs via coop_*_on_event (see on_event).
@@ -822,8 +822,10 @@ local function read_events()
     pcall(release_held, os.clock())
     -- Not while loading or on the title screen (v0.32): the events wait in the file.
     if es.ev_in_last >= 0 and not game_ready() then return end
-    local text = fs.read("coopnet_ev_in.txt")
-    if text == nil or text == "" then   -- fs.read gives "" for a missing file
+    -- v0.66: the events not handled yet, from the one file the plugin writes (coop_dummy coop_io_rx, "@V").
+    local rx = coop_io_rx and coop_io_rx(os.clock())
+    local text = rx and rx.v
+    if text == nil or text == "" then
         if es.ev_in_last < 0 then es.ev_in_last = 0 end   -- nothing received yet: handle all that comes
         return
     end
@@ -871,6 +873,8 @@ local function read_events()
     end
     if max_n > es.ev_in_last then es.ev_in_last = max_n end
     es.early = nil   -- everything up to max_n is handled now
+    -- v0.66: told to the plugin with our next sample ("A <n>"): it drops what we handled from coopnet_rx.txt.
+    if coop_io then coop_io.ack = es.ev_in_last end
 end
 
 -- Lobby messages on the title screen (v0.54). Everything a friend sends waits in the file while this game is
@@ -883,7 +887,8 @@ end
 local EARLY_KINDS = { lobby = true }
 local function read_early_events()
     if es.ev_in_last < 0 or game_ready() then return end
-    local text = fs.read("coopnet_ev_in.txt")
+    local rx = coop_io_rx and coop_io_rx(os.clock())   -- v0.66 (see read_events)
+    local text = rx and rx.v
     if text == nil or text == "" then return end
     es.early = es.early or {}
     local max_n = -1
@@ -920,7 +925,7 @@ do
     local t = 0
     dbg_note{ feature = "Lobby", name = "Read the friend's lobby messages on the title screen and while loading",
         when = "every frame; reads the file every 0.3 s, and only while on the title screen or loading",
-        reads = "coopnet_ev_in.txt (the friend's messages); only 'lobby' ones are handled here",
+        reads = "the friends' events not handled yet, from coopnet_rx.txt (coop_dummy coop_io_rx); only 'lobby' ones are handled here",
         writes = "the lobby state (coop_menu_on_event); marks those lines handled (es.early) so the normal read skips them" }
     _G.re.on_frame(function()
         local now = os.clock()
@@ -2708,8 +2713,8 @@ scan = dbg_task("Enemy kills and damage", "Scan the enemies here", scan, {
     reads = "ObjectManager.ManagedObjects: the enemy list (the list is re-picked every 5 s by reading the name of EVERY managed object); for each enemy: Update flag, position, isDead, spawn-point ids",
     writes = "es.tracked (the enemy table); sends 'kill <id> ...' when one dies here; applies kills the friend made earlier; puts a Molded back in its pool when it is asleep again" })
 read_events = dbg_task("Link to your friend's game", "Read the friend's events", read_events, {
-    when = "5 times a second (every 0.2 s)",
-    reads = "coopnet_ev_in.txt (fs.read of the whole file each time); waits while loading",
+    when = "20 times a second (every 0.05 s)",
+    reads = "the friends' events not handled yet, from coopnet_rx.txt (coop_io_rx: no file read of its own); waits while loading",
     writes = "hands each new line to on_event" })
 on_event = dbg_task("Friend's events", "Dispatch one event from the friend to the right script", on_event, {
     when = "once per event the friend's game sends (talk, menu, story, world, gun sounds, revive, kills...); runs per second shows how chatty the link is",
@@ -3314,7 +3319,8 @@ re.on_frame(function()
     if not hok and not es.hf_err then es.hf_err = true log("host_fight ERR " .. tostring(herr)) end
     local cok, cerr = pcall(car_tick, now)
     if not cok and not car.tick_err then car.tick_err = true log("car ERR " .. tostring(cerr)) end
-    if now - es.in_t >= 0.2 then
+    -- v0.66: 20 a second (was 5): the friend's events come in coopnet_rx.txt now (no file of their own to open).
+    if now - es.in_t >= 0.05 then
         es.in_t = now
         local ok, err = pcall(read_events)
         if not ok and not es.read_err then es.read_err = true log("read ERR " .. tostring(err)) end

@@ -1050,15 +1050,20 @@ if SLOT == 1 then
         local text = fs.read("coopnet_rx.txt")
         if text == nil or text == cio.rx_text then return cio.rx end
         cio.rx_text = text
-        local rx, kind, k, buf = { s = {}, e = {} }, nil, nil, nil
+        local rx, kind, k, buf = { s = {}, e = {}, v = nil }, nil, nil, nil
         local function flush()
-            if kind then rx[kind][k] = table.concat(buf, "\n") .. "\n" end
+            if kind == "v" then rx.v = table.concat(buf, "\n") .. "\n"
+            elseif kind then rx[kind][k] = table.concat(buf, "\n") .. "\n" end
         end
         for line in text:gmatch("[^\r\n]+") do
             local hk, hn = line:match("^@([SE])(%d)$")
             if hk then
                 flush()
                 kind, k, buf = (hk == "S") and "s" or "e", tonumber(hn), {}
+            elseif line == "@V" then
+                -- v0.66: the friends' events coop_enemies hasn't handled yet ("<n>\t<arrival>\t<text>").
+                flush()
+                kind, k, buf = "v", nil, {}
             elseif kind then
                 buf[#buf + 1] = line
             end
@@ -1109,15 +1114,20 @@ local function net_io()
         -- v0.65: with the newest enemy snapshot, if one is waiting, in the same file (coopnet_tx.txt).
         local es = coop_io and coop_io.tx_es
         if coop_io then coop_io.tx_es = nil end
+        -- v0.66: "A <n>": the newest friend's event we've handled (the plugin then leaves it out of coopnet_rx.txt).
+        local ack = (coop_io and coop_io.ack) and string.format("A %d\n", coop_io.ack) or ""
         fs.write("coopnet_tx.txt", string.format("S %d %.4f %.5f %.5f %.5f %.6f %.6f %.6f %.6f %d %d %.4f %.4f %.4f\n",
             net.seq, now, p.x, p.y, p.z, q.x, q.y, q.z, q.w, local_stance_flags(player) + a2,
             local_chapter() + a1,
-            (net.peer_t or 0) % 1000, ly, lp) .. (es or ""))
-    elseif do_write and SLOT == 1 and coop_io and coop_io.tx_es then
-        -- No player (a load, some scenes): the enemy snapshot still goes (Jack's car during the garage fight's moments).
+            (net.peer_t or 0) % 1000, ly, lp) .. ack .. (es or ""))
+        if coop_io then coop_io.ack_sent = coop_io.ack end
+    elseif do_write and SLOT == 1 and coop_io and (coop_io.tx_es or coop_io.ack ~= coop_io.ack_sent) then
+        -- No player (a load, some scenes): the enemy snapshot still goes (Jack's car during the garage fight's moments),
+        -- and so does a newer "events handled".
         local es = coop_io.tx_es
         coop_io.tx_es = nil
-        fs.write("coopnet_tx.txt", es)
+        fs.write("coopnet_tx.txt", (coop_io.ack and string.format("A %d\n", coop_io.ack) or "") .. (es or ""))
+        coop_io.ack_sent = coop_io.ack
     end
 
     if fs.read == nil then

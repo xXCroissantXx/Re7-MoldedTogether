@@ -223,10 +223,13 @@ function harness_hooks()
 end
 
 function harness_events(lines)
-    -- feed events through the friend's channel file
+    -- feed events through the friend's channel: coopnet_rx.txt's "@V" section (v0.66; was coopnet_ev_in.txt),
+    -- after whatever samples / snapshots it already holds
     local out = {}
     for i, l in ipairs(lines) do out[#out + 1] = (1000 + i) .. "\t" .. l end
-    fsfiles["coopnet_ev_in.txt"] = table.concat(out, "\n") .. "\n"
+    local cur = fsfiles["coopnet_rx.txt"] or ""
+    cur = cur:gsub("@V\n.*$", "")
+    fsfiles["coopnet_rx.txt"] = cur .. "@V\n" .. table.concat(out, "\n") .. "\n"
 end
 
 function harness_report()

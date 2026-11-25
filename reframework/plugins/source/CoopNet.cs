@@ -574,7 +574,7 @@ public class CoopNet
         public float LookYaw, LookPitch;   // camera relative to body, radians
     }
 
-    const string Version = "0.65";
+    const string Version = "0.66";
     const int PacketSize = 64;
     static readonly byte[] Magic = { (byte)'R', (byte)'7', (byte)'C', (byte)'2' };
     const int KeepSamples = 32;
@@ -1069,12 +1069,17 @@ public class CoopNet
     // samples (one per line, as coopnet_in.txt had them) and "@E<k>" then its newest enemy snapshot (as
     // coopnet_es_in.txt had it). Lua reads this one file per tick instead of up to six. Written when anything changed.
     static readonly string[] s_snapLast = new string[MaxSlots + 1];
+    // v0.66: and "@V" then the received events Lua hasn't handled yet ("<n>\t<arrival>\t<text>", as coopnet_ev_in.txt
+    // had them): those after the newest it reported handling ("A <n>" in coopnet_tx.txt). A report higher than any
+    // event here is from before this plugin started (it counts from 1 again): then all of them, and Lua starts over.
+    static long s_evAck;
     static void WriteRxIfDirty(string path)
     {
         string text;
         lock (s_lock)
         {
-            bool dirty = false;
+            bool dirty = s_evInDirty;
+            s_evInDirty = false;
             for (int k = 1; k <= MaxSlots; k++)
             {
                 if (s_snapInS[k] != null) { s_snapLast[k] = s_snapInS[k]; s_snapInS[k] = null; dirty = true; }
@@ -1088,6 +1093,14 @@ public class CoopNet
                 sb.Append("@S").Append(k.ToString(Inv)).Append('\n');
                 foreach (var s in s_rx[k]) sb.Append(FormatLine(s)).Append('\n');
                 if (s_snapLast[k] != null) sb.Append("@E").Append(k.ToString(Inv)).Append('\n').Append(s_snapLast[k].Replace("\r\n", "\n"));
+            }
+            long ack = s_evAck > s_evInCount ? 0 : s_evAck;
+            bool header = false;
+            foreach (var (n, t, e) in s_evIn)
+            {
+                if (n <= ack) continue;
+                if (!header) { sb.Append("@V\n"); header = true; }
+                sb.Append(n.ToString(Inv)).Append('\t').Append(t.ToString(Inv)).Append('\t').Append(e).Append('\n');
             }
             text = sb.ToString();
         }
@@ -1385,6 +1398,15 @@ public class CoopNet
             if (TryParseLine(text.Substring(2, nl - 2), out var s)) SendSample(s);
             rest = text.Substring(nl + 1);
         }
+        // v0.66: "A <n>": the newest received event Lua has handled (see WriteRxIfDirty's "@V").
+        if (rest.StartsWith("A "))
+        {
+            var nl = rest.IndexOf('\n');
+            if (nl < 0) { s_wTx.Retry = true; return; }
+            if (long.TryParse(rest.AsSpan(2, nl - 2), NumberStyles.None, Inv, out var ack))
+                lock (s_lock) { if (ack != s_evAck) { s_evAck = ack; s_evInDirty = true; } }
+            rest = rest.Substring(nl + 1);
+        }
         if (rest.StartsWith("seq ") && !SendSnapshotText(rest)) s_wTx.Retry = true;
     }
 
@@ -1463,7 +1485,7 @@ public class CoopNet
                 if (s_cfg.mode == "bot") { Bot.Tick(s_cfg, DeliverBot); s_sent++; }
                 PumpEventsOut(evOutPath);
                 WriteRxIfDirty(rxPath);
-                WriteEventsInIfDirty(evInPath);
+                // v0.66: the received events go to Lua in coopnet_rx.txt ("@V", WriteRxIfDirty)
                 if (lastParty.ElapsedMilliseconds > 3000) { lastParty.Restart(); SendParty(); }
                 if (lastStatus.ElapsedMilliseconds > 1000)
                 {
@@ -1491,7 +1513,7 @@ public class CoopNet
                     if (IsSteam) Steam.Poll(onSteam);
                     PumpEventsOut(evOutPath);
                     WriteRxIfDirty(rxPath);
-                    WriteEventsInIfDirty(evInPath);
+                    // (events: in coopnet_rx.txt since v0.66)
                 }
                 catch (ObjectDisposedException) { return; }
                 catch (Exception e) { WriteStatusSafe("io error: " + e.Message); break; }   // once per pass, not 500 times a second

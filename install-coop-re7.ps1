@@ -302,6 +302,45 @@ if ($found.Lib) {
 if (Test-Path $off) { Remove-Item -Force $off }   # it was switched off: installing switches it on again
 Ok "RE7 found"
 
+# v0.66: what's installed there already. Another multiplayer mod, RE7MP (its re7mp.lua anywhere in reframework), can't
+# run alongside Molded Together: its whole reframework folder is moved aside (kept, renamed, so nothing is lost;
+# REFramework ignores it under that name), and our own settings and friends in it, if any, come back. An REFramework
+# whose dinput8.dll isn't the version installed below: you're asked before it's replaced (the old one is kept).
+$OurDinput = @("cb1acc11be71184be1eb5c29ccea2db156a55eee861686b71bbc522865d2c98a")   # nightly-01433's dinput8.dll
+$rfDir = Join-Path $Game "reframework"
+$re7mp = $null
+if (Test-Path $rfDir) { $re7mp = Get-ChildItem $rfDir -Recurse -File -Filter "re7mp.lua" -ErrorAction SilentlyContinue | Select-Object -First 1 }
+if ($re7mp) {
+    Warn "Another multiplayer mod, RE7MP, is installed ($($re7mp.FullName.Substring($Game.Length + 1)))."
+    Warn "It can't run alongside Molded Together, so its reframework folder is moved aside."
+    $keepRel = @("data\coopnet_config.json", "data\coop_settings.json", "data\coop_catchup.txt")
+    $kept = @{}
+    foreach ($k in $keepRel) { $p = Join-Path $rfDir $k; if (Test-Path $p) { $kept[$k] = [IO.File]::ReadAllBytes($p) } }
+    $aside = Join-Path $Game ("reframework.re7mp-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+    try { Move-Item $rfDir $aside -ErrorAction Stop }
+    catch { Fail "couldn't move RE7MP's reframework folder aside (is RE7 running? close it and run Install.cmd again)" }
+    foreach ($k in $kept.Keys) {
+        $to = Join-Path $rfDir $k
+        New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
+        [IO.File]::WriteAllBytes($to, $kept[$k])
+    }
+    Ok "moved it to $(Split-Path $aside -Leaf) (delete that folder once you don't need RE7MP)"
+}
+if (Test-Path $dll) {
+    $h = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLower()
+    if ($OurDinput -notcontains $h) {
+        if (-not $re7mp) {
+            Warn "An REFramework version Molded Together doesn't recognise is installed (dinput8.dll $($h.Substring(0, 12))...)."
+            Warn "Molded Together is tested with REFramework nightly-01433; another version can break it."
+            $a = if ($NoPrompt) { "y" } else { Read-Host "      Replace it with the tested version? [Y/n]" }
+            if ($a -match '^[nN]') { Fail "kept your REFramework, so Molded Together wasn't installed. Run Install.cmd again to replace it." }
+        }
+        $bak = Join-Path $Game ("dinput8.dll.backup-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+        Copy-Item $dll $bak
+        Ok "replacing it with the tested REFramework (the old dinput8.dll is kept as $(Split-Path $bak -Leaf))"
+    }
+}
+
 # ---------------------------------------------------------------- 3. REFramework
 Step 3 "Downloading REFramework (official release, hash-checked)"
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("coop-re7-" + [guid]::NewGuid().ToString("N").Substring(0, 8))

@@ -2170,3 +2170,12 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   when the loaded save is already in the host's chapter); 3-4 players via coop_host_slot() (coop_enemies, lowest
   SteamID) and that slot's coop_net_state / teleport_to_friend; the jump goes through slot 1's jump_to_chapter.
   Bot tests: dropin_test.py, dropin_title_test.py. 3-4 players untested (two copies only).
+- v0.66 (2026-11-25, events in coopnet_rx.txt, installer). CoopNet: '@V' section in coopnet_rx.txt = s_evIn entries
+  with n > s_evAck (s_evAck from 'A <n>' in coopnet_tx.txt; an ack above s_evInCount = from before a plugin restart,
+  treated as 0); coopnet_ev_in.txt no longer written. Lua: coop_io_rx parses '@V' into rx.v; coop_enemies
+  read_events / read_early_events read rx.v (read_events now every 0.05 s); coop_io.ack = es.ev_in_last, sent by
+  net_io ('A <n>', also without a player when it changed). Harness fakegame harness_events feeds rx '@V'.
+  Installer (install-coop-re7.ps1, after 'RE7 found'): re7mp.lua anywhere under reframework -> Move-Item the folder
+  to reframework.re7mp-backup-<stamp>, restore data\coopnet_config.json / coop_settings.json / coop_catchup.txt;
+  dinput8.dll SHA-256 not cb1acc11... (nightly-01433) -> Read-Host replace? (n: Fail), dinput8.dll.backup-<stamp>.
+  Tested on fake folders (scratchpad installer_precheck_test.ps1: RE7MP, unknown, ours, none).

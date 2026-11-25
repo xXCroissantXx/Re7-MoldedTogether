@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.66 (2026-11-25)
+Events in the one link file, and an installer that clears the way.
+
+- **The installer moves RE7MP aside.** If another multiplayer mod, RE7MP, is installed (its re7mp.lua anywhere in
+  RE7's reframework folder), it can't run alongside Molded Together: the installer says so and moves that whole
+  reframework folder aside (renamed reframework.re7mp-backup-<date>, so nothing is lost; delete it once you don't
+  need RE7MP), keeps any Molded Together settings and friends that were in it, and installs on a clean folder.
+- **It asks before replacing an REFramework it doesn't know.** If RE7 has an REFramework other than the version
+  Molded Together is tested with (another mod may have put a different one there), the installer asks whether to
+  replace it (Enter: yes). The old dinput8.dll is kept next to it as a backup. Saying no stops the install.
+- **Events in the one link file.** What your friend's game tells yours (doors, story steps, items, who runs which
+  enemy...) now comes in the same file as their position, and only the ones not handled yet: the separate events
+  file, read five times a second, is gone, and an event reaches your game up to a sixth of a second sooner.
+
 ## v0.65 (2026-11-25)
 One file each way, and drop-in from the title screen and with three or four players.
 
