@@ -17,7 +17,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 L.execute(open(os.path.join(here, 'fakegame.lua'), encoding='utf-8').read())
 status = ("mode=steam\npeer=steam:111\npeerName=Friend\nversion=0.35\nlocalId=222\n")
 g.fsfiles['coopnet_status.txt'] = status
-g.fsfiles['coopnet_in.txt'] = ''
+g.fsfiles['coopnet_rx.txt'] = ''
 for f in ORDER:
     p = os.path.join(d, f)
     if os.path.exists(p):

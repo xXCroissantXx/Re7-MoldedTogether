@@ -2160,3 +2160,13 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   puppets. Copy 1: link 98 -> 55 ms/s, enemy scheduler 60 -> 18, ~190 -> ~95 ms/s top-level, 22.6 -> 26.7 fps.
   Scans (doors, props, items, puzzles, enemies) total ~15 ms/s: left as they were. Next big win: one file each
   way per tick (plugin merging samples, snapshots and events).
+- v0.65 (2026-11-25, merged link files, drop-in from title / 3-4 players). CoopNet: PumpTx reads coopnet_tx.txt
+  ('S <sample>' then an optional snapshot 'seq'..'end'; SendSample / SendSnapshotText split out), WriteRxIfDirty
+  writes coopnet_rx.txt ('@S<k>' samples, '@E<k>' newest snapshot, s_snapLast cleared with s_rx). Lua: coop_dummy
+  coop_io (slot 1 = _G): coop_io_rx(now) reads rx at most 1/LINK_HZ for every slot and coop_enemies; coop_io_tx_es
+  queues the snapshot for the next sample write (or alone when there is no player). Harness link_test feeds
+  coopnet_rx.txt. Bot: jack_share 144 s shared / 0 s not; garage fight enemy scheduler ~14 ms/s. Drop-in: from the
+  title (chapter 3) via coop_menu_dropin_from_title -> begin_go('host') (Continue, then jump; pump_go skips the jump
+  when the loaded save is already in the host's chapter); 3-4 players via coop_host_slot() (coop_enemies, lowest
+  SteamID) and that slot's coop_net_state / teleport_to_friend; the jump goes through slot 1's jump_to_chapter.
+  Bot tests: dropin_test.py, dropin_title_test.py. 3-4 players untested (two copies only).

@@ -1036,6 +1036,40 @@ local function action_fields(player)
 end
 
 LINK_HZ = 20   -- v0.64: player samples written and read per second (see below)
+-- v0.65: one file each way per tick. CoopNet writes everything it received into coopnet_rx.txt ("@S<k>" then friend
+-- k's newest samples, "@E<k>" then their newest enemy snapshot), and takes our sample and enemy snapshot from
+-- coopnet_tx.txt ("S <sample>", then the snapshot). Before, each friend slot read its own samples file and the enemy
+-- sync its own snapshot file per friend, and the two out files were written apart: every file open costs the game
+-- 1-2 ms of a frame on Windows. Defined once (slot 1 is _G); the other slots and coop_enemies use the same copy.
+if SLOT == 1 then
+    coop_io = coop_io or { rx = { s = {}, e = {} }, rx_t = -100, rx_text = nil, tx_es = nil }
+    function coop_io_rx(now)
+        local cio = coop_io
+        if now - cio.rx_t < 1 / LINK_HZ - 0.004 then return cio.rx end
+        cio.rx_t = now
+        local text = fs.read("coopnet_rx.txt")
+        if text == nil or text == cio.rx_text then return cio.rx end
+        cio.rx_text = text
+        local rx, kind, k, buf = { s = {}, e = {} }, nil, nil, nil
+        local function flush()
+            if kind then rx[kind][k] = table.concat(buf, "\n") .. "\n" end
+        end
+        for line in text:gmatch("[^\r\n]+") do
+            local hk, hn = line:match("^@([SE])(%d)$")
+            if hk then
+                flush()
+                kind, k, buf = (hk == "S") and "s" or "e", tonumber(hn), {}
+            elseif kind then
+                buf[#buf + 1] = line
+            end
+        end
+        flush()
+        cio.rx = rx
+        return rx
+    end
+    -- coop_enemies hands its newest snapshot here; it goes out with our next sample.
+    function coop_io_tx_es(text) coop_io.tx_es = text end
+end
 local function net_io()
     if not net.enabled then return end
     local now = os.clock()
@@ -1072,17 +1106,26 @@ local function net_io()
         net.seq = net.seq + 1
         -- animId carries our chapter; animFrame echoes the newest sender time we've
         -- received from the peer (mod 1000 s), so they can measure the round trip.
-        fs.write("coopnet_out.txt", string.format("%d %.4f %.5f %.5f %.5f %.6f %.6f %.6f %.6f %d %d %.4f %.4f %.4f\n",
+        -- v0.65: with the newest enemy snapshot, if one is waiting, in the same file (coopnet_tx.txt).
+        local es = coop_io and coop_io.tx_es
+        if coop_io then coop_io.tx_es = nil end
+        fs.write("coopnet_tx.txt", string.format("S %d %.4f %.5f %.5f %.5f %.6f %.6f %.6f %.6f %d %d %.4f %.4f %.4f\n",
             net.seq, now, p.x, p.y, p.z, q.x, q.y, q.z, q.w, local_stance_flags(player) + a2,
             local_chapter() + a1,
-            (net.peer_t or 0) % 1000, ly, lp))
+            (net.peer_t or 0) % 1000, ly, lp) .. (es or ""))
+    elseif do_write and SLOT == 1 and coop_io and coop_io.tx_es then
+        -- No player (a load, some scenes): the enemy snapshot still goes (Jack's car during the garage fight's moments).
+        local es = coop_io.tx_es
+        coop_io.tx_es = nil
+        fs.write("coopnet_tx.txt", es)
     end
 
     if fs.read == nil then
         if not net.no_read then net.no_read = true log("net: fs.read is not available in this REFramework build") end
         return
     end
-    local text = fs.read("coopnet_in" .. SLOT_SUFFIX .. ".txt")
+    local rx = coop_io_rx and coop_io_rx(now)
+    local text = rx and rx.s[SLOT]
     -- v0.52: the file is read 60 times a second but only parsed when it changed (a new packet rewrites it).
     local fresh_text = text and text ~= net.last_in_text
     if fresh_text then net.last_in_text, net.parses = text, (net.parses or 0) + 1 end
@@ -2234,8 +2277,8 @@ record_player = coop_task("Friend's body (ghost)", "Remember where our player wa
     writes = "our own position history (kept for a few seconds, used for the 'go to my friend' warp)" })
 net_io = coop_task("Link to your friend's game", "Send our state / read theirs", net_io, {
     when = "every frame, but it gates itself: reads the friend's file at 60/s, writes ours at 30/s",
-    reads = "our player's position, rotation, stance, chapter and look (about a dozen game calls per write); the friend's file coopnet_in.txt (fs.read)",
-    writes = "coopnet_out.txt (fs.write, each time: the plugin sends it); the friend's sample history (net.history)" })
+    reads = "our player's position, rotation, stance, chapter and look (about a dozen game calls per write); the friend's samples from coopnet_rx.txt (one fs.read per tick for every slot, coop_io_rx)",
+    writes = "coopnet_tx.txt (fs.write: our sample and any enemy snapshot waiting; the plugin sends them); the friend's sample history (net.history)" })
 poll_clips = coop_task("Friend's body (ghost)", "Wait for the animation bank to load, then list its clips", poll_clips, {
     when = "called every frame by the main ghost callback; it returns at once unless the ghost is still waiting for its clips, then it asks once a second (for up to 20 s)",
     reads = "the ghost's Motion component: active bank count and bank count, then the clip list",
@@ -2846,8 +2889,10 @@ end)
 -- of the host's chapter (either way: the host's story leads), the story and world catch up as they always did (the
 -- catch-up list, story flags and steps), and once it has settled it's warped next to the host, however far (the
 -- long-warp floor hold below). Each player keeps their own inventory: a chapter jump leaves it as it was (bot test
--- 2026-11-25, Chapter 1 save to Chapter 3 and within Chapter 3). Once per connection; two players only (with 3-4 the
--- Lobby does it); never into or out of a VHS tape or a chapter's transition; off with "drop_in": false.
+-- 2026-11-25, Chapter 1 save to Chapter 3 and within Chapter 3). Once per connection; never into or out of a VHS
+-- tape or a chapter's transition; off with "drop_in": false. v0.65: from the title screen too (our own latest save
+-- first), and with 3-4 players: a guest joins the host, whichever friend slot the host is in (coop_host_slot), going
+-- by that friend's samples and warping by their positions.
 DROPIN_WAIT = 8       -- s shown on screen before the jump
 DROPIN_SETTLE = 20    -- s after landing (or connecting) before the warp
 DROPIN_NEAR = 40      -- m: closer than this, no warp
@@ -2864,7 +2909,7 @@ function coop_dropin_hud()
     return nil
 end
 coop_note{ feature = "Drop-in", name = "Bring a guest who just connected to the host's chapter and the host",
-    when = "every frame, but it only looks once a second; only in a guest's game with one friend",
+    when = "every frame, but it only looks once a second; only in a guest's game",
     reads = "the link (fresh samples), our chapter and the host's, both positions, whether we're busy or in a scene",
     writes = "after 8 s: jump_to_chapter to the host's chapter; 20 s after landing: a long warp next to the host (once per connection)" }
 on_frame_1(function()
@@ -2872,19 +2917,41 @@ on_frame_1(function()
     if now - (dropin.check_t or 0) < 1 then return end
     dropin.check_t = now
     if SLOT ~= 1 or (settings and settings.drop_in == false) then return end
-    local last = net.history[#net.history]
+    -- The host's friend slot (v0.65): its own link state, join and teleport (each slot's copy of this script has them).
+    local hk = (coop_host_slot and coop_host_slot()) or 1
+    local henv = (coop_slot_envs and coop_slot_envs[hk]) or _G
+    local hnet = (rawget(henv, "coop_net_state") and henv.coop_net_state()) or net
+    local last = hnet.history[#hnet.history]
     local fresh = last ~= nil and now - last.t <= (NET_TIMEOUT or 2)
     if not fresh then
         -- Gone a while: the next connection is a new drop-in.
         if dropin.lost_t == nil then dropin.lost_t = now end
-        if now - dropin.lost_t > 60 then dropin.done, dropin.link_t, dropin.want_t, dropin.jump_t = nil, nil, nil, nil end
+        if now - dropin.lost_t > 60 then
+            dropin.done, dropin.link_t, dropin.want_t, dropin.jump_t, dropin.title_t, dropin.tries = nil, nil, nil, nil, nil, nil
+        end
         return
     end
     dropin.lost_t = nil
     dropin.link_t = dropin.link_t or now
     if dropin.done or coop_enemy_role_now ~= "guest" then return end
-    if coop_party_size and coop_party_size() > 2 then dropin.done = true return end
-    local mine, theirs = local_chapter(), net.peer_chapter
+    local mine, theirs = local_chapter(), hnet.peer_chapter
+    -- From the title screen (v0.65): the game's own Continue (our latest save, our inventory), then the host's
+    -- chapter once in play (coop_menu_dropin_from_title, the Lobby's "host's chapter" start), then the warp below.
+    if mine == 3 and MAIN_V[theirs or -1] and coop_menu_dropin_from_title then
+        if dropin.title_t then return end   -- under way
+        dropin.want_t = dropin.want_t or now
+        local left = DROPIN_WAIT - (now - dropin.want_t)
+        if left > 0 then
+            dropin_say(string.format("Joining your friend's game: loading your latest save, then %s, in %d s",
+                chapter_name(theirs), math.ceil(left)), left > DROPIN_WAIT - 1)
+            return
+        end
+        if coop_menu_dropin_from_title(theirs) then
+            dropin.title_t, dropin.jump_t = now, now
+            dropin_say("Joining your friend's game: loading your latest save", true)
+        end
+        return
+    end
     if not (MAIN_V[mine or -1] and MAIN_V[theirs or -1]) then dropin.want_t = nil return end   -- title, tapes, movies
     if mine ~= theirs then
         if dropin.jump_t then return end   -- on our way
@@ -2897,7 +2964,14 @@ on_frame_1(function()
             return
         end
         if local_cutscene() then return end
-        if join_friend() then
+        -- To the host's chapter (as join_friend does for friend 1; the host may be another slot's friend).
+        chapters.list_t = nil
+        ensure_chapter_list()
+        local target
+        for _, e in ipairs(chapters.list or {}) do if e.value == theirs then target = e end end
+        if target == nil or jump_busy() then return end
+        jump_to_chapter(target)
+        if tostring(chapters.last or ""):find("jumping to", 1, true) then
             dropin.jump_t = now
             dropin_say("Joining your friend's game: going to " .. chapter_name(theirs), true)
         end
@@ -2911,7 +2985,8 @@ on_frame_1(function()
     if pp == nil then return end
     local d = math.sqrt((last.pos.x - pp.x) ^ 2 + (last.pos.y - pp.y) ^ 2 + (last.pos.z - pp.z) ^ 2)
     if d <= DROPIN_NEAR then dropin.done = true log(string.format("drop-in: together (%.0f m apart)", d)) return end
-    if teleport_to_friend(1e9) then
+    local tp = rawget(henv, "teleport_to_friend") or teleport_to_friend
+    if tp(1e9) then
         dropin.done = true
         dropin_say(string.format("Joined your friend's game (you were %d m apart)", math.floor(d)), true)
     else

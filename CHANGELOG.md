@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.65 (2026-11-25)
+One file each way, and drop-in from the title screen and with three or four players.
+
+- **One file each way.** The mod hands your position and its enemy updates to its network plugin in one file now,
+  and gets everything your friends sent (every friend's position and enemy updates) back in one, read once per update
+  for all of them. Before, that was up to two files out and six in. In the bot tests the garage fight's Jack was
+  shared all of the time (144 seconds, none unshared; before 4 to 9 unshared) and the enemy work stayed at about
+  14 ms a second in the fight (it was 51 to 60 before v0.64).
+- **Drop in from the title screen.** Connect from the title screen to a friend who's playing and your game loads your
+  latest save by itself (so your own inventory; a new game if you have no save), then goes to the host's chapter and
+  warps you next to them. If that save is already in the host's chapter there's no extra jump.
+- **Drop in with three or four players.** A guest joins the host, whichever friend that is, going by the host's
+  position. (The test copies are two games, so this hasn't been tried with three or four yet.)
+
 ## v0.64 (2026-11-25)
 A clear screen, and less work per frame.
 

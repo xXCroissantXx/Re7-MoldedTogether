@@ -21,7 +21,7 @@ def fresh(settings_json=None):
     g.HARNESS_MODE = 'rich'
     L.execute(open(os.path.join(here, 'fakegame.lua'), encoding='utf-8').read())
     g.fsfiles['coopnet_status.txt'] = "mode=steam\npeer=steam:111\npeerName=Friend\nversion=0.58\nlocalId=222\n"
-    g.fsfiles['coopnet_in.txt'] = ''
+    g.fsfiles['coopnet_rx.txt'] = ''
     if settings_json is not None:   # the stand-in game has no JSON: the file's settings as a Lua table
         L.execute('json.load_file = function(p) if p == "coop_settings.json" then return %s end end' % settings_json)
     for f in ORDER:

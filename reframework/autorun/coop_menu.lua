@@ -523,6 +523,26 @@ local function title_continue()
     return ok == true, ok and "continuing" or "couldn't press Continue"
 end
 
+-- v0.65 (drop-in from the title screen): the newest save loaded straight away, as Continue would, when the title is
+-- still on its "press any button" screen (IsMainListControl false: Continue isn't there to press). The save service's
+-- newest slot (get_LastTimeStampSlot, else the last one used) through SaveDataManager.loadFileAutoRequest, the call
+-- the test copies load their saves with from the same screen. Reads the save only.
+local function load_latest_direct()
+    local td = sdk.find_type_definition("via.storage.saveService.SaveService")
+    local ns = sdk.get_native_singleton("via.storage.saveService.SaveService")
+    if td == nil or ns == nil then return false, "no save service" end
+    local ok, slot = pcall(sdk.call_native_func, ns, td, "get_LastTimeStampSlot")
+    if not ok or type(slot) ~= "number" or slot < 0 then
+        local ok2, s2 = pcall(sdk.call_native_func, ns, td, "get_UseSlotLast")
+        slot = (ok2 and type(s2) == "number") and s2 or -1
+    end
+    if slot < 0 then return false, "no save to load" end
+    local sdm = sdk.get_managed_singleton("app.SaveDataManager")
+    local lok = sdm and pcall(sdm.call, sdm, "loadFileAutoRequest(System.Int32, System.Boolean, System.Boolean, System.Boolean)",
+        slot, false, false, false)
+    return lok == true, "the newest save (slot " .. tostring(slot) .. ")"
+end
+
 local function pump_go(now)
     local g = L.go
     if g and not g.done and g.continue_t then
@@ -548,6 +568,16 @@ local function pump_go(now)
             end
         else
             local ok, why = title_continue()
+            if not ok and tostring(why):find("isn't ready", 1, true) then
+                -- v0.65: still on "press any button" after 4 s: the newest save straight away (load_latest_direct).
+                g.not_ready_t = g.not_ready_t or now
+                if g.dropin and now - g.not_ready_t > 4 then
+                    local dok, what = load_latest_direct()
+                    log("lobby start: the title menu isn't up: loading " .. tostring(what) .. " directly (" .. tostring(dok) .. ")")
+                    if dok then g.pressed, g.pressed_t, g.continue_ok = true, now, false end
+                    return
+                end
+            end
             if ok then g.pressed, g.pressed_t, g.continue_ok = true, now, not (settings and settings.auto_continue == false)
             elseif g.entry and tostring(why):find("no Continue row", 1, true) then
                 -- No save to load (v0.54): a New Game gets this game into play, then the jump.
@@ -577,6 +607,12 @@ local function pump_go(now)
         if p == nil or loading then g.settled_t = nil return end
         g.settled_t = g.settled_t or now
         if now - g.settled_t < 5 then return end
+        -- v0.65: the save that loaded is already in the host's chapter: no jump back to the chapter's start.
+        if g.start == "host" and g.host_ch == my_chapter() then
+            g.done = true
+            log("lobby start: the save loaded is already in the host's chapter, no jump")
+            return
+        end
     end
     -- Not in the middle of a cutscene: the jump waits for it to end.
     if local_cutscene and safe(local_cutscene) then log("lobby start: waiting for the cutscene to end") return end
@@ -589,6 +625,18 @@ local function pump_go(now)
         log("lobby start: " .. last)
         M.open_wanted = false   -- the menu closes for the load
     end
+end
+
+-- Drop-in from the title screen (v0.65, coop_dummy "Drop-in"): the Lobby's "the host's chapter" start for this game
+-- alone, without a lobby: the game's own Continue (its latest save, so the player's own inventory; a New Game when
+-- there is none), then the jump to the host's chapter once in play (pump_go). The lobby's own state is left as it was.
+function coop_menu_dropin_from_title(host_ch)
+    if not on_title() or (L.go and not L.go.done) then return false end
+    local st = L.state
+    begin_go(L.seen_round or 0, "host", host_ch)
+    L.state = st
+    if L.go then L.go.dropin = true end   -- may load the newest save directly (load_latest_direct)
+    return L.go ~= nil and not L.go.done
 end
 
 local function lobby_start()

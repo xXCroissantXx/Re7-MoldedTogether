@@ -15,7 +15,7 @@ g.HARNESS_MODE = 'rich'
 g.HARNESS_MENUS = True          # the window's sections and trees open, so the Debug section is drawn
 L.execute(open(os.path.join(here, 'fakegame.lua'), encoding='utf-8').read())
 g.fsfiles['coopnet_status.txt'] = "mode=steam\npeer=steam:111\npeerName=Friend\nversion=0.35\nlocalId=222\n"
-g.fsfiles['coopnet_in.txt'] = ''
+g.fsfiles['coopnet_rx.txt'] = ''
 for f in ORDER:
     g.harness_load(f, open(os.path.join(d, f), encoding='utf-8').read())
 

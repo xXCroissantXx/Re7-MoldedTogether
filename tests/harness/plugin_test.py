@@ -13,7 +13,7 @@ g.HARNESS_MENUS = False
 here = os.path.dirname(os.path.abspath(__file__))
 L.execute(open(os.path.join(here, 'fakegame.lua'), encoding='utf-8').read())
 g.fsfiles['coopnet_status.txt'] = "mode=steam\npeer=-\nversion=0.49\ntime=12:00:00\n"
-g.fsfiles['coopnet_in.txt'] = ''
+g.fsfiles['coopnet_rx.txt'] = ''
 for f in ORDER:
     p = os.path.join(d, f)
     if os.path.exists(p):

@@ -2,7 +2,8 @@
 sample file is only parsed when it changed.
 python link_test.py <scripts dir>
 
-The stand-in plugin writes coopnet_in.txt the way CoopNet.cs does: the newest 32 samples, one per line,
+The stand-in plugin writes coopnet_rx.txt ("@S1", then the samples; v0.65, was coopnet_in.txt) the way CoopNet.cs
+does: the newest 32 samples, one per line,
 "seq t px py pz qx qy qz qw flags chapter echo yaw pitch" (t is the sender's clock). The sender's clock here
 is the receiver's minus a fixed 10 s, so only the differences matter, as on two real PCs."""
 import sys, os
@@ -22,7 +23,7 @@ def new_game():
     here = os.path.dirname(os.path.abspath(__file__))
     L.execute(open(os.path.join(here, 'fakegame.lua'), encoding='utf-8').read())
     g.fsfiles['coopnet_status.txt'] = "mode=steam\npeer=steam:76561198000000001\nversion=0.52\ntime=12:00:00\n"
-    g.fsfiles['coopnet_in.txt'] = ''
+    g.fsfiles['coopnet_rx.txt'] = ''
     for f in ORDER:
         p = os.path.join(d, f)
         if os.path.exists(p):
@@ -61,7 +62,7 @@ def run_link(seconds, late_every=0, late_by=0.0, mutate=None):
         pending = [p for p in pending if p[0] > now]
         lines += [p[1] for p in due]
         lines = lines[-32:]
-        g.fsfiles['coopnet_in.txt'] = "\n".join(lines) + "\n"
+        g.fsfiles['coopnet_rx.txt'] = "@S1\n" + "\n".join(lines) + "\n"   # v0.65: the one file CoopNet writes for Lua
         if mutate:
             mutate(net, i)
         g.harness_frames(1)

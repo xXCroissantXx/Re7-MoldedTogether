@@ -1378,7 +1378,9 @@ local function write_snapshot(now)
     lines[#lines + 1] = "end"
     mv.seq = mv.seq + 1
     lines[1] = "seq " .. mv.seq
-    fs.write("coopnet_es_out.txt", table.concat(lines, "\n") .. "\n")
+    -- v0.65: goes out with our next player sample, in one file (coop_dummy coop_io_tx_es / coopnet_tx.txt).
+    local snap_text = table.concat(lines, "\n") .. "\n"
+    if coop_io_tx_es then coop_io_tx_es(snap_text) else fs.write("coopnet_es_out.txt", snap_text) end
     mv.sent = mv.sent + 1
 end
 
@@ -1388,7 +1390,8 @@ local function write_car_only(now)
     local cl = coop_car_line and safe(coop_car_line)
     if not cl then return end
     mv.seq = mv.seq + 1
-    fs.write("coopnet_es_out.txt", table.concat({ "seq " .. mv.seq, string.format("t %.3f ch %d", now, chapter()), cl, "end" }, "\n") .. "\n")
+    local snap_text = table.concat({ "seq " .. mv.seq, string.format("t %.3f ch %d", now, chapter()), cl, "end" }, "\n") .. "\n"
+    if coop_io_tx_es then coop_io_tx_es(snap_text) else fs.write("coopnet_es_out.txt", snap_text) end
     mv.sent = mv.sent + 1
 end
 
@@ -1447,7 +1450,9 @@ local function slot_live(k) return k == 1 or coop_slot_in_use == nil or coop_slo
 
 -- Guest: take a received snapshot into the per-enemy timelines.
 local function read_snapshot(now, k)
-    local text = fs.read(k == 1 and "coopnet_es_in.txt" or ("coopnet_es_in_" .. k .. ".txt"))
+    -- v0.65: from the one file the plugin writes for us (coop_dummy coop_io_rx, read at most 20 times a second).
+    local rx = coop_io_rx and coop_io_rx(now)
+    local text = rx and rx.e[k]
     if text == nil or text == "" then return end
     mv.last_in_seq_s = mv.last_in_seq_s or {}
     mv.offset_s = mv.offset_s or {}
@@ -2717,10 +2722,10 @@ update_movement = dbg_task("Enemy movement", "Share where enemies are (the whole
 write_snapshot = dbg_task("Enemy movement", "Send the enemies we run", write_snapshot, {
     when = "15 times a second (every 1/15 s)",
     reads = "for each enemy we run that is awake: Transform position and rotation, motion layer 0 (bank, id, frame, speed), held weapon (about ten game calls per enemy)",
-    writes = "coopnet_es_out.txt (fs.write, the plugin sends it)" })
+    writes = "the snapshot text, handed to coop_dummy (it goes out in coopnet_tx.txt with our next sample)" })
 read_snapshot = dbg_task("Enemy movement", "Read the enemies the friend runs", read_snapshot, {
     when = "30 times a second (every 1/30 s), once for each friend slot (1 to 3); not during our cutscenes except to keep up",
-    reads = "coopnet_es_in*.txt (fs.read of the file each time)",
+    reads = "the friends' snapshots from coopnet_rx.txt (coop_dummy coop_io_rx: no file read of its own)",
     writes = "the enemy position history used to move copies" })
 puppetize = dbg_task("Enemy movement", "Turn an enemy into a copy of the friend's", puppetize, {
     when = "once per enemy when the friend's game takes it over (and again after it was given back)",
@@ -3051,6 +3056,14 @@ local function car_host_slot()
     local best
     for k, id in pairs(ids) do if best == nil or id_less(id, ids[best]) then best = k end end
     return best or 1
+end
+-- v0.65 (drop-in with 3-4 players, coop_dummy): which friend slot the host is in; nil when we are the host. On a
+-- udp link (the test copies) the one friend is the host.
+function coop_host_slot()
+    if mv.role == "host" then return nil end
+    local kv = net_kv()
+    if kv.mode ~= "steam" then return 1 end
+    return car_host_slot()
 end
 
 -- The car's own get-in, ignition and get-out points (InteractSendFsm on its children Interact_*).

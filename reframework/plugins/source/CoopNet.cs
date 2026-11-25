@@ -574,7 +574,7 @@ public class CoopNet
         public float LookYaw, LookPitch;   // camera relative to body, radians
     }
 
-    const string Version = "0.64";
+    const string Version = "0.65";
     const int PacketSize = 64;
     static readonly byte[] Magic = { (byte)'R', (byte)'7', (byte)'C', (byte)'2' };
     const int KeepSamples = 32;
@@ -799,7 +799,7 @@ public class CoopNet
             }
             else if (rs > 1) s_cfg.extraPeers.Remove(rid.ToString(Inv));
             RebuildSlots();
-            lock (s_lock) for (int i = 1; i <= MaxSlots; i++) { s_rx[i].Clear(); s_rxDirty[i] = true; }
+            lock (s_lock) for (int i = 1; i <= MaxSlots; i++) { s_rx[i].Clear(); s_rxDirty[i] = true; s_snapLast[i] = null; }
             s_lastCommand = "removed " + parts[1];
             SaveConfig();
             WriteStatus("running");
@@ -811,7 +811,7 @@ public class CoopNet
             s_cfg.peerSteamId = "";
             s_cfg.extraPeers = new List<string>();
             RebuildSlots();
-            lock (s_lock) for (int i = 1; i <= MaxSlots; i++) { s_rx[i].Clear(); s_rxDirty[i] = true; }
+            lock (s_lock) for (int i = 1; i <= MaxSlots; i++) { s_rx[i].Clear(); s_rxDirty[i] = true; s_snapLast[i] = null; }
             s_lastCommand = "left the party";
             SaveConfig();
             WriteStatus("running");
@@ -837,7 +837,7 @@ public class CoopNet
         else if (parts.Length == 2 && parts[0] == "botcount" && int.TryParse(parts[1], NumberStyles.None, Inv, out var bc))
         {
             s_cfg.botCount = Math.Max(1, Math.Min(MaxSlots, bc));
-            lock (s_lock) for (int i = 2; i <= MaxSlots; i++) { s_rx[i].Clear(); s_rxDirty[i] = true; }
+            lock (s_lock) for (int i = 2; i <= MaxSlots; i++) { s_rx[i].Clear(); s_rxDirty[i] = true; s_snapLast[i] = null; }
             s_lastCommand = "bots: " + s_cfg.botCount;
             SaveConfig();
             WriteStatus("running");
@@ -899,7 +899,7 @@ public class CoopNet
             WriteStatus("running");
             return;
         }
-        lock (s_lock) for (int i = 1; i <= MaxSlots; i++) { s_rx[i].Clear(); s_rxDirty[i] = true; }   // drop the old peers' samples
+        lock (s_lock) for (int i = 1; i <= MaxSlots; i++) { s_rx[i].Clear(); s_rxDirty[i] = true; s_snapLast[i] = null; }   // drop the old peers' samples
         SaveConfig();
         API.LogInfo("[CoopNet] command: " + s_lastCommand);
         WriteStatus("running");
@@ -1025,28 +1025,35 @@ public class CoopNet
         catch (FileNotFoundException) { return; }
         catch (IOException) { s_wEs.Retry = true; return; }
         catch (UnauthorizedAccessException) { s_wEs.Retry = true; return; }
+        if (!SendSnapshotText(text)) s_wEs.Retry = true;
+    }
+
+    // One snapshot's text out (from coopnet_tx.txt since v0.65). False when it was cut off (read again).
+    static bool SendSnapshotText(string text)
+    {
         // Lua's fs.write ends lines with "\r\n" on Windows, so the "\nend\n" check below never
         // matched: from v0.39 to v0.46 every snapshot was counted as cut off and none went out,
         // and each game ran its own enemies (found by the bot test, 2026-11-10; v0.47).
         text = text.Replace("\r\n", "\n");
         var nl = text.IndexOf('\n');
-        if (nl <= 0 || !text.StartsWith("seq ")) return;
+        if (nl <= 0 || !text.StartsWith("seq ")) return true;
         // Whole snapshots only (v0.39): Lua ends each with an "end" line. One read halfway
         // through a write would send a cut-off list (an enemy missing, a number cut short).
-        if (!text.EndsWith("\nend\n")) { s_snapPartial++; s_wEs.Retry = true; return; }
+        if (!text.EndsWith("\nend\n")) { s_snapPartial++; return false; }
         var seq = text.Substring(0, nl);
-        if (seq == s_snapOutSeq) return;
+        if (seq == s_snapOutSeq) return true;
         s_snapOutSeq = seq;
         var body = Encoding.UTF8.GetBytes(text);
         // Up to 6000 bytes (v0.39; was 1100, about 11 enemies: a bigger snapshot was dropped
         // whole, every time, so a room of Molded stopped following). Steam splits a bigger
         // unreliable message and drops it only if a piece is lost; the next one follows 1/15 s later.
-        if (body.Length > 6000) { s_snapTooBig++; return; }
+        if (body.Length > 6000) { s_snapTooBig++; return true; }
         var pkt = new byte[4 + body.Length];
         Buffer.BlockCopy(SnapMagic, 0, pkt, 0, 4);
         Buffer.BlockCopy(body, 0, pkt, 4, body.Length);
         if (IsSteam) { if (Steam.HasPeers) { Steam.Send(pkt); s_snapSent++; } }
         else if (s_sock != null) { s_sock.Send(pkt, pkt.Length, s_peer); s_snapSent++; }
+        return true;
     }
 
     static void WriteSnapshotInIfNew(string path, int slot)
@@ -1056,6 +1063,37 @@ public class CoopNet
         if (text == null) return;
         File.WriteAllText(path + ".tmp", text);
         File.Move(path + ".tmp", path, true);
+    }
+
+    // v0.65: everything received for Lua in one file, coopnet_rx.txt: for each friend slot "@S<k>" then its newest
+    // samples (one per line, as coopnet_in.txt had them) and "@E<k>" then its newest enemy snapshot (as
+    // coopnet_es_in.txt had it). Lua reads this one file per tick instead of up to six. Written when anything changed.
+    static readonly string[] s_snapLast = new string[MaxSlots + 1];
+    static void WriteRxIfDirty(string path)
+    {
+        string text;
+        lock (s_lock)
+        {
+            bool dirty = false;
+            for (int k = 1; k <= MaxSlots; k++)
+            {
+                if (s_snapInS[k] != null) { s_snapLast[k] = s_snapInS[k]; s_snapInS[k] = null; dirty = true; }
+                if (s_rxDirty[k]) { s_rxDirty[k] = false; dirty = true; }
+            }
+            if (!dirty) return;
+            var sb = new StringBuilder();
+            for (int k = 1; k <= MaxSlots; k++)
+            {
+                if (s_rx[k].Count == 0 && s_snapLast[k] == null) continue;
+                sb.Append("@S").Append(k.ToString(Inv)).Append('\n');
+                foreach (var s in s_rx[k]) sb.Append(FormatLine(s)).Append('\n');
+                if (s_snapLast[k] != null) sb.Append("@E").Append(k.ToString(Inv)).Append('\n').Append(s_snapLast[k].Replace("\r\n", "\n"));
+            }
+            text = sb.ToString();
+        }
+        var tmp = path + ".tmp";
+        File.WriteAllText(tmp, text);
+        File.Move(tmp, path, true);
     }
 
     // Save backups ------------------------------------------------------------------
@@ -1321,11 +1359,45 @@ public class CoopNet
         catch (Exception) { return true; }
     }
 
+    // v0.65: one file from Lua per tick, coopnet_tx.txt: "S <our sample>" (optional), then the newest enemy snapshot
+    // (optional, "seq <n>" ... "end"). It replaces coopnet_out.txt and coopnet_es_out.txt: every file the game opens
+    // costs it 1-2 ms of a frame on Windows (measured from Lua, 2026-11-25), so two files a tick were twice that.
+    static readonly Watch s_wTx = new Watch();
+    static void PumpTx(string path)
+    {
+        if (!Touched(path, s_wTx)) return;
+        string text;
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var sr = new StreamReader(fs);
+            text = sr.ReadToEnd();
+        }
+        catch (FileNotFoundException) { return; }
+        catch (IOException) { s_wTx.Retry = true; return; }
+        catch (UnauthorizedAccessException) { s_wTx.Retry = true; return; }
+        text = text.Replace("\r\n", "\n");
+        var rest = text;
+        if (text.StartsWith("S "))
+        {
+            var nl = text.IndexOf('\n');
+            if (nl < 0) { s_wTx.Retry = true; return; }   // caught halfway through Lua's write
+            if (TryParseLine(text.Substring(2, nl - 2), out var s)) SendSample(s);
+            rest = text.Substring(nl + 1);
+        }
+        if (rest.StartsWith("seq ") && !SendSnapshotText(rest)) s_wTx.Retry = true;
+    }
+
     // Our newest sample (Lua's coopnet_out.txt) to the friend, or to the bot.
     static void SendLocalSample(string outPath)
     {
         if (!Touched(outPath, s_wOut)) return;
         if (!TryReadOut(outPath, out var s)) { s_wOut.Retry = true; return; }
+        SendSample(s);
+    }
+
+    static void SendSample(Sample s)
+    {
         if (s.Seq == s_lastSentSeq) return;
         s_lastSentSeq = s.Seq;
         var pkt = Encode(s);
@@ -1356,6 +1428,10 @@ public class CoopNet
         try { File.Delete(esInPath); } catch (IOException) { }   // no stale enemy positions from a past session
         var evInPath = Path.Combine(s_dataDir, "coopnet_ev_in.txt");
         try { File.Delete(evInPath); } catch (IOException) { }   // a new count starts at 1; Lua notices the reset
+        var txPath = Path.Combine(s_dataDir, "coopnet_tx.txt");   // v0.65: Lua's sample + snapshot (see PumpTx)
+        var rxPath = Path.Combine(s_dataDir, "coopnet_rx.txt");   // v0.65: everything received for Lua (WriteRxIfDirty)
+        try { File.Delete(txPath); } catch (IOException) { }
+        try { File.Delete(rxPath); } catch (IOException) { }
         var period = TimeSpan.FromMilliseconds(1000.0 / Math.Max(1, s_cfg.sendHz));
         var lastStatus = Stopwatch.StartNew();
         var lastFriends = Stopwatch.StartNew();
@@ -1381,17 +1457,12 @@ public class CoopNet
             var started = Stopwatch.StartNew();
             try
             {
-                SendLocalSample(outPath);
+                PumpTx(txPath);
                 PollCommand();
                 if (IsSteam) Steam.Poll(onSteam);
                 if (s_cfg.mode == "bot") { Bot.Tick(s_cfg, DeliverBot); s_sent++; }
                 PumpEventsOut(evOutPath);
-                PumpSnapshotOut(esOutPath);
-                for (int k = 1; k <= MaxSlots; k++)
-                {
-                    WriteSnapshotInIfNew(esInPaths[k], k);
-                    WriteInFileIfDirty(inPaths[k], k);
-                }
+                WriteRxIfDirty(rxPath);
                 WriteEventsInIfDirty(evInPath);
                 if (lastParty.ElapsedMilliseconds > 3000) { lastParty.Restart(); SendParty(); }
                 if (lastStatus.ElapsedMilliseconds > 1000)
@@ -1416,15 +1487,10 @@ public class CoopNet
                 Thread.Sleep(left < fastStep ? left : fastStep);
                 try
                 {
-                    SendLocalSample(outPath);
+                    PumpTx(txPath);
                     if (IsSteam) Steam.Poll(onSteam);
                     PumpEventsOut(evOutPath);
-                    PumpSnapshotOut(esOutPath);
-                    for (int k = 1; k <= MaxSlots; k++)
-                    {
-                        WriteSnapshotInIfNew(esInPaths[k], k);
-                        WriteInFileIfDirty(inPaths[k], k);
-                    }
+                    WriteRxIfDirty(rxPath);
                     WriteEventsInIfDirty(evInPath);
                 }
                 catch (ObjectDisposedException) { return; }

@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.64; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.65; formerly coop-re7)
 Created by xXCroissantXx & Kingkiller1195
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
@@ -138,8 +138,9 @@ pick up, and the other way in could crash the game).
 
 **Dropping in.** Connect while your friend is already playing and your game brings you to them (since v0.63): in
 another chapter, a note counts down and you go to the start of theirs; the story catches up; then you're warped
-next to them. Your inventory stays your own. (Two players; with three or four use the Lobby.) A friend who leaves
-or whose game closes hands back what their game ran within about 5 seconds.
+next to them. Your inventory stays your own. From the title screen your latest save loads first (since v0.65).
+With three or four of you, a guest joins the host. A friend who leaves or whose game closes hands back what their
+game ran within about 5 seconds.
 
 **Meeting up.** If your friend is in another chapter: co-op menu > **Help and fixes** > **Go to your friend's
 chapter**: you start at the beginning of their chapter, then walk to each other. Saving is switched off for the
