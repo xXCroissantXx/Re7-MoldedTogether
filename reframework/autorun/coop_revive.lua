@@ -24,6 +24,7 @@ revive = {
     near_t = nil,          -- since when the friend has been close
     friend_down = false, friend_down_t = 0,   -- any friend down (kept for the HUD/other scripts)
     down_slots = {},       -- friend slot -> true while that friend is down
+    dead_slots = {},       -- v0.68: friend slot -> clock of their "gameover" (a real death): not a rescuer for DEAD_HOLD_S
     allow_death = false,   -- let the next death through (both down, timeout)
     msg = "-", msg_t = -100,
 }
@@ -97,6 +98,15 @@ local function any_friend_down()
     for _, v in pairs(rv.down_slots) do if v then return true end end
     return false
 end
+-- v0.68: a friend whose game said "gameover" (died for real; their game is on its way back to the checkpoint) is
+-- not up for DEAD_HOLD_S. Bot fight 2026-11-25 (enemies noticing the bots): one bot died for real while the other
+-- was down (no friend up -> the game's own death), its game never said so, and 3 s later the downed one was "got
+-- back up" by the dead one standing next to it.
+local DEAD_HOLD_S = 30
+local function friend_dead(k)
+    local t = rv.dead_slots[k]
+    return t ~= nil and os.clock() - t < DEAD_HOLD_S
+end
 
 -- A friend who is up is with us. In a cutscene or a grab their character is hidden here, so it goes by
 -- the link instead (v0.48). Until then a death during a grab was always a real one: on 2026-11-10 a
@@ -119,7 +129,7 @@ end
 local function friend_here()
     local in_scene = local_cutscene and local_cutscene()
     for k = 1, 3 do
-        if not rv.down_slots[k] then
+        if not rv.down_slots[k] and not friend_dead(k) then
             if not in_scene and friend_ghost(k) ~= nil then return true end
             if friend_link_pos(k) ~= nil then return true end
         end
@@ -163,9 +173,39 @@ local function go_down()
     note("you're down - a friend has to reach you")
 end
 
+-- A finishing grab that kept the body (v0.68). Jack's finishing kill (garage: CommonFinishNeck) plays its player half
+-- on our body's motion layer 0 through app.MotionManager's external task, and then asks for a game over. With a friend
+-- up that game over is refused and we go down, but nothing ends the task: layer 0 stays jacked on the kill's last
+-- frame, and the first-person camera (it rides the head bone) stays where the head fell, through being helped up and
+-- after ("revived but his camera still stayed down like his head was cut off", 2026-11-25; bot test: the camera 0.05 m
+-- above the feet, layer 0 motion 112 frame 435/435 jacked). MotionManager.clearExternalTask gives the layer back to the
+-- player's own motion (bot test: camera 0.18 -> 0.88 m down, 1.6 m up). Done while down once the grab's motion has
+-- stood on its last frame for HELD_GRAB_S, and when getting up whatever the frame (no grab goes on through that).
+local HELD_GRAB_S = 1.0
+local function release_held_grab(why, at_end_only)
+    local p = player()
+    local mo = p and safe(p.call, p, "getComponent(System.Type)", sdk.typeof("via.motion.Motion"))
+    local L = mo and safe(mo.call, mo, "getLayer", 0)
+    if L == nil or safe(L.call, L, "get_Jacked") ~= true then rv.held_grab_t = nil return false end
+    if at_end_only then
+        local f, e = tonumber(safe(L.call, L, "get_Frame")), tonumber(safe(L.call, L, "get_EndFrame"))
+        if not (f and e and e > 0 and f >= e - 0.5) then rv.held_grab_t = nil return false end
+        rv.held_grab_t = rv.held_grab_t or os.clock()
+        if os.clock() - rv.held_grab_t < HELD_GRAB_S then return false end
+    end
+    rv.held_grab_t = nil
+    local mm = safe(p.call, p, "getComponent(System.Type)", sdk.typeof("app.MotionManager"))
+    if mm == nil then return false end
+    local ok = pcall(mm.call, mm, "clearExternalTask")
+    log(string.format("a finishing grab still held our body (motion %s, frame %s): released (%s)%s",
+        tostring(safe(L.call, L, "get_MotionID")), tostring(safe(L.call, L, "get_Frame")), why, ok and "" or " ERR"))
+    return ok
+end
+
 local function get_up(why)
     rv.downed, rv.near_t = false, nil
     rv.up_t = os.clock()
+    pcall(release_held_grab, "getting up", false)
     pcall(down_look, false)
     local dc = player_dc()
     if dc then
@@ -189,6 +229,7 @@ local function die_for_real(why)
         pcall(dc.call, dc, "setHealth(System.Single, System.Single)", 1.0, dc:call("get_maxHealth") or 1000)
         pcall(dc.call, dc, "addManualDamage", m:call(nil, 100000.0, p, p))
     end
+    rv.dead_sent = true   -- v0.68: the death watch in the frame callback doesn't say it again
     send("gameover")
 end
 
@@ -315,6 +356,21 @@ re.on_frame(function()
     elseif rv.view_watch_t then
         rv.view_watch_t, rv.view_low_t = nil, nil
     end
+    -- v0.68: our player died for real by the game's own way (no friend up, so the hit or game over went through):
+    -- friends are told, once, with the same "gameover" die_for_real sends, so they don't count us as up (friend_dead).
+    -- Not in the 8 s after being helped up: a refused kill can leave isDead set that long (the rule above decides those).
+    if not rv.downed and now - (rv.dead_check_t or 0) >= 0.5 and now - (rv.up_t or -100) > 8 then
+        rv.dead_check_t = now
+        local dc = safe(player_dc)   -- nil on the title screen (no ObjectManager yet)
+        local dead = dc and safe(dc.call, dc, "get_isDead") == true
+        if dead and not rv.dead_sent then
+            rv.dead_sent = true
+            log("died for real (the game's own death): telling friends")
+            send("gameover")
+        elseif not dead and dc then
+            rv.dead_sent = false
+        end
+    end
     if not rv.downed then return end
     local ok, err = pcall(function()
         local p, dc = player(), player_dc()
@@ -322,6 +378,8 @@ re.on_frame(function()
         if (dc:call("get_health") or 1) < 1 then
             pcall(dc.call, dc, "setHealth(System.Single, System.Single)", 1.0, dc:call("get_maxHealth") or 1000)
         end
+        -- v0.68: a finished grab still holding our body (see release_held_grab).
+        release_held_grab("while down", true)
         -- Keep the down look (a hit or the game can stand us up again).
         local mv = p:call("getComponent(System.Type)", sdk.typeof("app.PlayerMovement"))
         if mv and not mv:call("get_isCrouch") then pcall(down_look, true) end
@@ -334,8 +392,13 @@ re.on_frame(function()
         end
         -- A friend who is up, close for REVIVE_TIME → up.
         local close = false
+        -- v0.68: in our own scene the friend's character is hidden here (friend_pos is nil), so their position comes
+        -- from the link, as in friend_here. Bot test: down during the garage car fight's event (c03e02_00 running),
+        -- the friend stood 0.8 m away and nobody could get us up; after 90 s it was a real death.
+        local in_scene = local_cutscene and local_cutscene()
         for k = 1, 3 do
-            local gp = not rv.down_slots[k] and friend_pos(k)
+            local up_k = not rv.down_slots[k] and not friend_dead(k)
+            local gp = up_k and (friend_pos(k) or (in_scene and friend_link_pos(k)) or nil)
             if gp and rv.pos and math.sqrt((gp.x - rv.pos.x) ^ 2 + (gp.z - rv.pos.z) ^ 2) < REVIVE_DIST then close = true end
         end
         if close then
@@ -378,14 +441,14 @@ function coop_revive_on_event(text)
         note(who(k) .. " is down - go to them!")
         return true
     elseif text == "up" then
-        rv.down_slots[k] = nil
+        rv.down_slots[k], rv.dead_slots[k] = nil, nil
         rv.friend_down = any_friend_down()
         pcall(friend_pose, false, k)
         if coop_voice_play then pcall(coop_voice_play, "up", k) end   -- v0.42: heard getting up
         note(who(k) .. " is back up")
         return true
     elseif text == "gameover" then
-        rv.down_slots[k] = nil
+        rv.down_slots[k], rv.dead_slots[k] = nil, os.clock()
         rv.friend_down = any_friend_down()
         pcall(friend_pose, false, k)
         -- Nobody left up to get us: we go too.

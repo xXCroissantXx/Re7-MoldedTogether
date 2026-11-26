@@ -1650,7 +1650,10 @@ local function puppetize(e)
     -- v0.67: where it stood when it became a copy, so drive() eases it onto the friend's game's position (see BLEND_S).
     local tr = safe(e.go.call, e.go, "get_Transform")
     local p0 = tr and safe(tr.call, tr, "get_Position")
-    e.blend_from, e.blend_t0 = p0 and { x = p0.x, y = p0.y, z = p0.z } or nil, os.clock()
+    -- The clock starts at the first drive() (v0.68): the friend's first position arrives a few tenths of a second
+    -- after this, and a blend timed from here was often over by then (noticed-bot morgue fight: copy snaps of
+    -- 0.4-0.7 m 0.2-0.7 s after a hand-off).
+    e.blend_from, e.blend_t0 = p0 and { x = p0.x, y = p0.y, z = p0.z } or nil, nil
     log("puppet on: " .. e.name .. " " .. e.id)
 end
 
@@ -1873,7 +1876,8 @@ local function drive(e, h, now)
     -- BLEND_MAX or more is a real move (a warp, a scene) and still jumps.
     local bf = e.blend_from
     if bf then
-        local u = (now - (e.blend_t0 or now)) / BLEND_S
+        e.blend_t0 = e.blend_t0 or now
+        local u = (now - e.blend_t0) / BLEND_S
         local gap = math.sqrt((x - bf.x) ^ 2 + (z - bf.z) ^ 2)
         if u >= 1 or gap >= BLEND_MAX then
             e.blend_from = nil

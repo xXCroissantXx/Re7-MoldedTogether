@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.68 (2026-11-25)
+Found by the first bot fights where Jack really fights (the test bots can now be seen by enemies).
+
+- **Your view comes back after Jack's finishing kill.** Jack's finishing grab plays on your own body, then asks
+  for a game over. With a friend up, the game over is refused and you go down, but the grab kept hold of your
+  body, frozen on its last frame. The camera follows your head, so your view stayed on the floor, even after
+  being helped up. Now a finished grab that still holds your body is let go about a second later, while you're
+  down, and again when you get up. Bot-tested: view on the floor while down, back at normal height once up.
+- **Getting helped up during a scene.** While your game plays a scene (the garage car fight runs as one), your
+  friend's character is hidden on your screen, and the revive only looked for that character, so a friend right
+  next to you couldn't get you up and you died after 90 seconds. It now uses where your friend really is.
+- **A friend who died can't get you up.** When one of you died for real while the other was down, the dead
+  player's game didn't say so, and the downed player was "got back up" by a friend on the game-over screen. Now
+  a real death is told to everyone, a friend who just died doesn't count as up for 30 seconds, and if that
+  leaves nobody up, you both go back to the checkpoint together.
+- **Smoother hand-offs.** When Jack changes games, the game that starts copying him eases him into place from
+  the moment the friend's first position arrives (the ease used to be over by then, so he still jumped up to
+  0.7 m).
+
 ## v0.67 (2026-11-25)
 Jack moves better between your games, and standing still costs your game less.
 

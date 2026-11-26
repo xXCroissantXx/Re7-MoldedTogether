@@ -2201,3 +2201,25 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   link 56 -> 36 ms/s on the focused copy. Not a bug: TutorialCheck_Flag Can* host false = 700_MSG_WatchDeadJack
   waiting at PositionCheck (the bot never walks to Jack's body). Em3300 = Eveline (Fsm_em3300_Appear);
   Em3600 = Long-Hand Marguerite (c03_3 600 EmLoadAction, 950-1000 battle); forced steps skip her fight.
+- v0.68 (2026-11-25, real fights on the bots). Bot tools: B.notice_on(radius, period) in bot_prelude.lua (v7):
+  every period s, each enemy this game runs (not a mod copy) within radius with no target gets its Think's
+  <visionSensor>k__BackingField senseDirect(our player) -> Jack (garage Em3000 and morgue Em8000) fights the bots
+  (walks over, hits, grabs). jack_smooth_test.py --notice; snap_report.py (one-frame moves > 9 m/s vs owner
+  changes); headoff_test.py (one bot kept at full health, Jack finishes the other); headoff_forced_test.py
+  (probes/player_jack.lua plays CommonFinishNeck_PL on our player via MotionManager.setExternalTask: the same
+  stuck state on demand).
+  Head-off view: Jack's finishing kill (garage CommonFinishNeck, player half motion 32/112) jacks player layer 0
+  through app.MotionManager's external task, then setGameOverFlag(true); refused -> go_down, but nothing ends the
+  task: layer 0 jacked on the last frame, camera (rides the Head joint) 0.05-0.18 m above the feet, through get_up.
+  Damage can't end that life (v0.67 VIEW_MIN rule fired, player stayed alive). Fix: coop_revive release_held_grab:
+  MotionManager.clearExternalTask when layer 0 get_Jacked and on its end frame for HELD_GRAB_S 1 s while down,
+  and always in get_up. Bot: refused 21:07:17, released 21:07:19, up 21:07:20, view 1.58 m.
+  Revive in a scene: the rescue check used friend_pos (ghost, hidden while local_cutscene) only; during the garage
+  car fight event c03e02_00 a friend 0.8 m away never counted (90 s -> real death). Now friend_link_pos too when
+  in a scene (as friend_here).
+  Real death unannounced: frame watch (0.5 s, not within 8 s of get_up) dc isDead -> 'gameover' once (rv.dead_sent;
+  die_for_real sets it); receiver rv.dead_slots[k], friend_dead(k) DEAD_HOLD_S 30 excludes k from friend_here()
+  and the rescuer check; 'up' clears it.
+  Blend: e.blend_t0 starts at the first drive() (first friend position ~0.3-0.5 s after puppetize).
+  Note: jack_share_test now has real fights (Jack no longer brain-dead since v0.67): bots die, and after a double
+  game over its 'not shared' count includes the game-over screens.
