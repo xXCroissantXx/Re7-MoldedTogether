@@ -68,6 +68,13 @@ local function safe(f, ...)
     if ok then return r end
     return nil
 end
+-- In a real scene here (v0.69): not when every running scene has gone past coop_story's LONG_SCENE_S. The tapes' scenes
+-- run the whole time you play the tape (bot sweep 2026-11-26): drawers, switches and puzzle pieces the friend used there
+-- waited for "your scene to end" until the tape was over, though the props work normally then.
+local function in_real_scene()
+    if not (local_cutscene and local_cutscene()) then return false end
+    return not (coop_only_long_scenes and coop_only_long_scenes())
+end
 -- A managed array's items, or {} (v0.33: a query during a load once returned a non-array).
 local function elems(arr)
     if arr == nil then return {} end
@@ -738,7 +745,10 @@ local function interactions_shared() return not (settings and settings.share_int
 local INTR_SKIP = { "save", "tape", "video", "vhs", "record", "itembox", "event", "cs_",
     "shotgun", "statue", "pendulum", "item", "wp0", "wp1", "wp2", "wp4",
     "getinto", "getout", "ignition", "ethancar", "puzzle", "ladder", "hide", "crouch", "climb",
-    "moldedtray01a_enemytray" }   -- the morgue's tray incinerators toggle: shared by state (poll_trays)
+    "moldedtray01a_enemytray",    -- the morgue's tray incinerators toggle: shared by state (poll_trays)
+    -- Message-only "it won't open" spots (v0.69: sm0250_ChainLocker01A_NoOpen). Nothing to share, and the chain
+    -- path took the locker for a chain and would have hidden the whole locker; any objective it sets is a story flag.
+    "noopen", "cantopen", "notopen", "interactpoint_ng" }
 local function intr_names(c)
     local out = {}
     local go = safe(c.call, c, "get_GameObject")
@@ -827,9 +837,15 @@ end
 -- off. The friend's desk stayed locked. Now: InteractClose after the success; if the locked
 -- model is still drawn 0.6 s later, InteractClose once more; after that the four changes by
 -- hand. Each step is logged.
+-- v0.69: the interaction and its direct parent only. Bot sweep 2026-11-26, Chapter 4: the ship's under-floor door
+-- (InteractSendFsm / sm2288_UndeFloorDoorParts01A_Open1 / sm1581_Locker01A_Ch4KeyLock) matched by its grandparent, a
+-- key-locked locker, so the friend's game "opened it by hand" (drawer on, lock off) and never ran the door's own
+-- opening: still not done there. The lockpick locks name the lock itself (sm2234_KeyPickLock02A_KeyLockSet, the desk;
+-- sm1929_KeyPickBox03A_KeyLock, the box), one level up at most.
 function is_lockpick(c)
     local n = intr_names(c)
-    return n:find("keypick", 1, true) ~= nil or n:find("keylock", 1, true) ~= nil
+    local first_two = n:match("^([^/]*/?[^/]*)") or n
+    return first_two:find("keypick", 1, true) ~= nil or first_two:find("keylock", 1, true) ~= nil
 end
 ws.locks = {}
 -- The lock's container: the nearest ancestor with a direct child named "InteractDrawer" (the
@@ -1267,7 +1283,7 @@ local function apply_prop(kind, id, want, ch, phone, lasting)
     -- state machines still during a scene. On 2026-11-10 a locker the friend opened during the boiler
     -- room scene took the "open" flag here and stayed shut (the flag then made every later try a no-op).
     -- It waits for the scene to end, and afterwards the prop's own machine is checked (drawer_check).
-    if (kind == "drawer" or kind == "switch") and local_cutscene and local_cutscene() then
+    if (kind == "drawer" or kind == "switch") and in_real_scene() then
         ws.pending_props[key] = { kind = kind, id = id, want = want, ch = ch }
         log(kind .. " " .. id .. ": waits for your scene to end")
         return
@@ -1443,7 +1459,7 @@ local function poll_phys(now)
             local ours = ws.applying["phys:" .. key] and now - ws.applying["phys:" .. key] < 2
             local held = s.weaponish
             local near_me = (p.x - pp.x) ^ 2 + (p.y - pp.y) ^ 2 + (p.z - pp.z) ^ 2 < 2.5 * 2.5
-            local scripted = moved > 3 or held or (local_cutscene and local_cutscene())
+            local scripted = moved > 3 or held or (in_real_scene())
             if moved > PHYS_MOVE and not ours and not scripted then
                 if near_me then s.mine_until = now + 3 end
             end
@@ -1568,7 +1584,7 @@ local function check_drawers(now)
         local s = ws.props[key]
         if s == nil or c.tries >= 3 then
             ws.drawer_check[key] = nil
-        elseif now >= c.t and not (local_cutscene and local_cutscene()) then
+        elseif now >= c.t and not (in_real_scene()) then
             local go = safe(s.c.call, s.c, "get_GameObject")
             local tr = go and safe(go.call, go, "get_Transform")
             local par = tr and safe(tr.call, tr, "get_Parent")
@@ -1598,7 +1614,7 @@ local function apply_pending()
             pcall(apply_door, "unlock", id, ch)
         end
     end
-    local in_scene = local_cutscene and local_cutscene()
+    local in_scene = in_real_scene()
     for key, p in pairs(ws.pending_props) do
         local held = (p.kind == "drawer" or p.kind == "switch") and (in_scene or (p.kind == "drawer" and ws.props[key] and coop_world_prop_dist(ws.props[key]) > PROP_FAR - 5))
         if ws.props[key] and p.ch == chapter() and not held then
@@ -1986,7 +2002,7 @@ local function poll_gimmicks(now)
     ws.gim_t = now
     if settings and settings.share_item_gimmicks == false then return end
     local all = puzzle_gimmicks()
-    local in_scene = local_cutscene and local_cutscene()
+    local in_scene = in_real_scene()
     for key, fsm in pairs(all) do
         local st = tostring(safe(fsm.call, fsm, "getCurrentState(System.UInt32)", 0) or "")
         local was = ws.gim_state[key]
@@ -2059,7 +2075,7 @@ local function poll_trays(now)
     if now - (ws.tray_t or 0) < 0.5 then return end
     ws.tray_t = now
     if not interactions_shared() then return end
-    local in_scene = local_cutscene and local_cutscene()
+    local in_scene = in_real_scene()
     for name, t in pairs(tray_list(now)) do
         local st = tostring(safe(t.fsm.call, t.fsm, "getCurrentState(System.UInt32)", 0) or "")
         if st == "" or st == "nil" then

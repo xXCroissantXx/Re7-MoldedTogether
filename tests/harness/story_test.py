@@ -68,6 +68,24 @@ friend("story c03e01_01 5")
 frames(2)
 check(not requested("c03e01_01"), "its next scene is ours to reach (we're in the sequence now)")
 ''',
+'the friend\'s next part comes while their first part is still playing here (c04e71)': r'''
+T.scenes = { "c03e31_00", "c03e31_01" }
+reset_requests()
+friend("story c03e31_00 5")
+frames(3)
+check(requested("c03e31_00"), "the friend's first part plays here")
+our_scene("c03e31_00")
+T.cutscene = true
+reset_requests()
+friend("story c03e31_01 5")
+frames(2)
+check(not requested("c03e31_01"), "their next part waits while the first still plays here")
+check(not requested("c03e31_00"), "the first part isn't asked for again")
+T.cutscene = false
+our_scene_ends("c03e31_00")
+frames(4)
+check(requested("c03e31_01"), "their next part plays here once the first is over (it was lost: no flashback 3)")
+''',
 'far away: nothing is started': r'''
 -- v0.52 rule: a cutscene pulls in everyone within SCENE_PULL_MAX (200 m); beyond that nothing is started.
 T.scenes = { "c03e02_00" }
@@ -136,6 +154,55 @@ reset_requests()
 friend("story c03e00_00 5")
 frames(2)
 check(not requested("c03e00_00"), "a save from after the dinner never replays it")
+''',
+'gates: ours turns on 5 s after it is off while the friend\'s is on': r'''
+gate("CanOpenInventory", false)
+frames(11)   -- the gate list is read
+friend("tcan CanOpenInventory 5 1")
+frames(3)
+check(T.gates.CanOpenInventory == false, "not at once (the step's own moment)")
+frames(4)
+check(T.gates.CanOpenInventory == true, "on again once it has been off 5 s while the friend's is on")
+''',
+'gates: our states go out again every 30 s (a message lost while loading)': r'''
+gate("CanOpenInventory", true)
+frames(11)
+T.sent = {}
+frames(31)
+check(sent("tcan CanOpenInventory 5 1"), "the unchanged gate is told again within 30 s")
+''',
+'gates: a story moment here that keeps it off is left alone, then tried again after 30 s': r'''
+gate("CanOpenMap", false)
+frames(11)
+T.hold.CanOpenMap = true
+friend("tcan CanOpenMap 5 1")
+frames(20)
+local n = T.gate_sets or 0
+check(n == 2, "turned on twice and turned back off by the game twice, then left alone (sets: " .. n .. ")")
+-- The friend's gate flips at a story step: not a reason to fight the hold again.
+friend("tcan CanOpenMap 5 0")
+frames(1)
+friend("tcan CanOpenMap 5 1")
+frames(10)
+check((T.gate_sets or 0) == n, "the friend's step flip doesn't restart the fight (sets: " .. (T.gate_sets or 0) .. ")")
+-- The hold ends but the game doesn't turn the gate on itself (the v0.66 case): the retry after 30 s does.
+T.hold.CanOpenMap = false
+frames(25)
+check(T.gates.CanOpenMap == true, "tried again once the 30 s are up: on, and it stays on")
+''',
+'gates: the game turning ours on itself ends the give-up at once': r'''
+gate("CanChangeWeapon", false)
+frames(11)
+T.hold.CanChangeWeapon = true
+friend("tcan CanChangeWeapon 5 1")
+frames(20)
+local n = T.gate_sets or 0
+T.hold.CanChangeWeapon = false
+T.gates.CanChangeWeapon = true     -- our story moment ends: the game turns it on
+frames(1)
+T.gates.CanChangeWeapon = false    -- and a later moment turns it off again
+frames(7)
+check(T.gates.CanChangeWeapon == true and (T.gate_sets or 0) == n + 1, "a fresh off after the game's own on is fixed in 5 s, not 30")
 ''',
 'busy: the friend\'s scene waits until we are back': r'''
 T.scenes = { "c03e03_00" }

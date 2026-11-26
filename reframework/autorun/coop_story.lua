@@ -356,6 +356,9 @@ sdk.hook(ec:get_method("requestSetup(app.GameEventSetting, via.Transform)"), fun
         local grp = seq_of(name)
         if grp then ss.last_seq = { grp = grp, t = os.clock(), ch = ch } end
         ss.running[name] = os.clock()
+        -- v0.69: started for the friend (their scene played here), not by our own story: see scene_to_start.
+        ss.for_friend = ss.for_friend or {}
+        ss.for_friend[name] = ours("ev:" .. name) and true or nil
         log(string.format("scene %s starts (%s, story clock %d)", name, ours("ev:" .. name) and "your friend's" or "yours",
             coop_story_clock()))
         -- A scene our own phone started (coop_world notes the moment we answer): told apart from a real
@@ -602,11 +605,31 @@ local function seq_top(grp)
     end
     return top
 end
+-- A scene of this sequence (index under 10) playing here right now: its name, or nil.
+local function seq_running(grp)
+    for n in pairs(ss.running or {}) do
+        local g, i = seq_of(n)
+        if g == grp and (i == nil or i < 10) then return n end
+    end
+    return nil
+end
 local function scene_to_start(name)
     if played_here()[name] then return nil, "already played here" end
     local grp, idx = seq_of(name)
     if grp == nil then return name end
     local mine = seq_played(grp)
+    -- v0.69: a part of this sequence still playing here counts as started. Bot run 2026-11-26, Chapter 4: the host's
+    -- c04e71_01 came while the guest was 1 s from the end of c04e71_00 (the host's, played here); it wasn't "played"
+    -- yet, so the late-arrival rule below swapped in c04e71_00, which was then "already played", and _01 was lost: the
+    -- third flashback never happened in the guest's ship (its past-ship doors stayed as they were).
+    local running = seq_running(grp)
+    local started = mine or running
+    if running and not mine and not (ss.for_friend and ss.for_friend[running]) then mine = running end
+    -- v0.69: our part of this sequence was the friend's scene played here, not our own story's: nothing here will go on
+    -- to the next part by itself, so the friend's next part plays too. Bot sweep 2026-11-26, Chapter 4: the guest played
+    -- the host's c04e71_00 and then refused its c04e71_01 ("your game is in this scene's sequence and plays it when you
+    -- get there"); it never did.
+    if mine and ss.for_friend and ss.for_friend[mine] then mine = nil end
     if mine then
         -- v0.50 (bot playthrough): only while our game is still before this scene in the sequence. Chapter 4's
         -- start plays c04e12_01 (a 0 s setup scene) by itself, and the host's c04e12_00 afterwards was refused as
@@ -617,7 +640,7 @@ local function scene_to_start(name)
         end
         log(string.format("friend's %s: your game has played %s_%02d of its sequence, past this one: playing it", name, grp, top))
     end
-    if idx and idx >= 1 and idx <= 9 and not (mine and idx and seq_top(grp) > idx) then
+    if idx and idx >= 1 and idx <= 9 and not started then
         -- Partway through a sequence we haven't started: start it from its first scene (a late arrival: the friend
         -- played _00 before we were there). v0.50: dropped again if our own game then plays the friend's scene
         -- itself (see the pending queue): Chapter 4's start plays c04e12_01 before c04e12_00 in both games.
@@ -721,6 +744,65 @@ end
 -- on there, so Mia's wall stayed up and "you are further on in the story" repeated. The longest real cutscene
 -- seen is the dinner, c03e00_00, at 102 s, so 130 s leaves every real one alone.
 local LONG_SCENE_S = 130
+
+-- Our player left inside a scene's player part (v0.69). Bot test 2026-11-26, Chapter 1 from a New Game: the guest's
+-- player stayed in the opening's event action (its GameEventActionController isPlay, process 6, waiting on its
+-- "continue" end: isEndContinueAction) for over 20 minutes after the host's game had gone on; the guest couldn't move
+-- (PlayerOrder Base layer locked), MenuManager.isPlayingEvent stayed true, so the game counted as "in a cutscene" for
+-- good and boss sharing stayed off: each game ran its own Mia. endCompleteAction(false) ended it (isPlayingEvent false
+-- 2 s later, Mia shared at once). Done only when it has lasted STUCK_ACTION_S, our friend isn't in a scene, and we
+-- aren't down; then a Base lock left on is lifted too.
+STUCK_ACTION_S = 120
+local stuck_act = { since = nil, t = 0 }
+local function safe(f, ...)
+    local ok, r = pcall(f, ...)
+    if ok then return r end
+    return nil
+end
+dbg_note{ feature = "Story cutscenes", name = "End a scene's player part our player was left in",
+    when = "every frame, but it only works once a second, and only with a friend linked",
+    reads = "our player's GameEventActionController (isPlay, isEndContinueAction), the friend's cutscene flag, revive.downed",
+    writes = "after STUCK_ACTION_S: GameEventActionController.endCompleteAction(false); PlayerOrder Base lock lifted if still on" }
+re.on_frame(function()
+    local now = os.clock()
+    if now - stuck_act.t < 1 then return end
+    stuck_act.t = now
+    local ns = coop_net_state and coop_net_state()
+    local linked = coop_link_friend ~= nil and ns ~= nil and coop_link_friend(ns.kv) == true
+    if not linked then stuck_act.since = nil return end
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local p = om and safe(om.get_field, om, "PlayerObj")
+    local gea = p and safe(p.call, p, "getComponent(System.Type)", sdk.typeof("app.GameEventActionController")) or nil
+    local stuck = type(gea) == "userdata" and safe(gea.call, gea, "get_isPlay") == true and safe(gea.call, gea, "get_isEndContinueAction") == true
+        and rawget(_G, "friend_cutscene") == false and not (revive and revive.downed)
+    if not stuck then stuck_act.since = nil return end
+    stuck_act.since = stuck_act.since or now
+    if now - stuck_act.since < STUCK_ACTION_S then return end
+    stuck_act.since = nil
+    local ok = pcall(gea.call, gea, "endCompleteAction(System.Boolean)", false)
+    log(string.format("our player was left in a scene's part for %d s while your friend played on: ended it (%s)",
+        STUCK_ACTION_S, ok and "ok" or "ERR"))
+    note("you were stuck in a scene: it's ended so you can play on")
+    -- The scene's Base lock (PlayerOrder.switchPlayerOperatable layer 0) can stay on after it: lifted 2 s later.
+    stuck_act.unlock_at = now + 2
+end)
+dbg_note{ feature = "Story cutscenes", name = "Lift the Base lock a scene part left on (2 s after ending it)",
+    when = "every frame, a clock check; works once, 2 s after the scene part above was ended",
+    reads = "PlayerOrder.get_isPlayerNoneOperatable, revive.downed",
+    writes = "PlayerOrder.switchPlayerOperatable(true, Base) if still locked" }
+re.on_frame(function()
+    if stuck_act.unlock_at == nil or os.clock() < stuck_act.unlock_at then return end
+    stuck_act.unlock_at = nil
+    if revive and revive.downed then return end
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local p = om and om:get_field("PlayerObj")
+    local po = p and safe(p.call, p, "getComponent(System.Type)", sdk.typeof("app.PlayerOrder"))
+    if po and safe(po.call, po, "get_isPlayerNoneOperatable") == true then
+        pcall(po.call, po, "switchPlayerOperatable(System.Boolean, app.PlayerDefine.OperationLayer)", true, 0)
+        log("our player was still locked after that scene part: unlocked")
+    end
+end)
+
 local function only_long_scenes()
     if next(ss.running) == nil then return false end
     local now = os.clock()
@@ -729,6 +811,26 @@ local function only_long_scenes()
     end
     return true
 end
+-- v0.69: for coop_enemies, whose held-in-cutscene friend's changes waited behind long events too (see there).
+function coop_only_long_scenes() return only_long_scenes() end
+
+-- The game's own screens that hold the player (v0.69, probes/menu_is.lua): inventory, a file or examined item, the item
+-- box, item select, the save screen, tips, carrying something, a full-screen movie, and any stacked menu. Bot sweep
+-- 2026-11-26 (FF040): the orphan-lock watchdog below unlocked a player the game kept locking (3 times in 32 s) because
+-- only the pause menu counted; a player reading a file for 15 s would have been let loose under it.
+local GAME_SCREENS = { "isExistStackOpenMenu", "isOpenInventoryMenu", "isOpenDetailSearchGUI", "isOpenItemBoxMenu",
+    "isOpenItemSelectMenu", "isOpenSaveMenuGUI", "isOpenTableItemExplanationMenu", "isTipsOpen", "isOpenMultiSubMenu",
+    "isCarryActionMode", "isPlayerCarryAction", "get_IsPlayInGameFullScreenMovie", "isOpenCardGameInventory" }
+local function game_screen_open()
+    local mm = sdk.get_managed_singleton("app.MenuManager")
+    if mm == nil then return nil end
+    for _, m in ipairs(GAME_SCREENS) do
+        local ok, v = pcall(mm.call, mm, m)
+        if ok and v == true then return m end
+    end
+    return nil
+end
+coop_game_screen_open = game_screen_open
 
 local function busy_here()
     local om = sdk.get_managed_singleton("app.ObjectManager")
@@ -747,10 +849,74 @@ local function busy_here()
     local ok, open = false, false
     if mm then ok, open = pcall(mm.call, mm, "isOpenPauseMenu") end
     if ok and open == true then return "in the menu" end
+    if game_screen_open() then return "in a game screen" end
     if revive and revive.downed then return "down" end
     if local_cutscene and local_cutscene() and not only_long_scenes() then return "in a cutscene" end
     return nil
 end
+
+-- A lock with nothing behind it (v0.69). Bot sweep 2026-11-26, Chapter 4's start: the guest's player and camera stayed
+-- locked on PlayerOrder's Base layer with no event running, no scene part and MenuManager.isPlayingEvent false; whatever
+-- locked it (a scene of the start that was dropped or ran in the friend's game) never unlocked it. switchPlayerOperatable
+-- / switchCameraOperatable(true, Base) gave the guest its player back. Done after ORPHAN_LOCK_S with a friend linked,
+-- when nothing that locks a player is going on here (a real scene, an event, a grab, being down, a load or a pause) and
+-- the friend isn't in a scene either.
+ORPHAN_LOCK_S = 15
+local orphan = { since = nil, t = 0, fights = 0 }
+dbg_note{ feature = "Story cutscenes", name = "Unlock a player locked with nothing going on",
+    when = "every frame, but it only works once a second, and only with a friend linked",
+    reads = "PlayerOrder locks, running scenes, MenuManager.isPlayingEvent, the player's event action and grab layer, revive, busy_here, the friend's cutscene flag",
+    writes = "after ORPHAN_LOCK_S: PlayerOrder.switchPlayerOperatable / switchCameraOperatable(true, Base)" }
+re.on_frame(function()
+    local now = os.clock()
+    if now - orphan.t < 1 then return end
+    orphan.t = now
+    local ns = coop_net_state and coop_net_state()
+    if not (coop_link_friend ~= nil and ns ~= nil and coop_link_friend(ns.kv) == true) then orphan.since = nil return end
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local p = om and safe(om.get_field, om, "PlayerObj")
+    local po = p and safe(p.call, p, "getComponent(System.Type)", sdk.typeof("app.PlayerOrder")) or nil
+    if type(po) ~= "userdata" then orphan.since = nil return end
+    local locked = safe(po.call, po, "get_isPlayerNoneOperatable") == true or safe(po.call, po, "get_isCameraNoneOperatable") == true
+    local mm = sdk.get_managed_singleton("app.MenuManager")
+    local gea = safe(p.call, p, "getComponent(System.Type)", sdk.typeof("app.GameEventActionController"))
+    local mo = safe(p.call, p, "getComponent(System.Type)", sdk.typeof("via.motion.Motion"))
+    local L = mo and safe(mo.call, mo, "getLayer", 0)
+    local busy = (local_cutscene and local_cutscene() and not only_long_scenes())
+        or (mm and safe(mm.call, mm, "isPlayingEvent") == true)
+        or (gea and safe(gea.call, gea, "get_isPlay") == true)
+        or (L and safe(L.call, L, "get_Jacked") == true)
+        or (revive and revive.downed) or busy_here() ~= nil or rawget(_G, "friend_cutscene") == true
+    if not locked then
+        -- Free for 5 s on the game's own: whatever we gave up on is over.
+        if orphan.free_t == nil then orphan.free_t = now end
+        if now - orphan.free_t >= 5 then orphan.fights, orphan.gave_up = 0, nil end
+        orphan.since = nil
+        return
+    end
+    orphan.free_t = nil
+    if busy then orphan.since = nil return end
+    -- Locked again within 3 s of our unlock: the game means it (bot sweep FF040: 3 unlocks in 32 s). Twice, and this
+    -- lock is left to the game until the player has been free 5 s.
+    if orphan.unlock_t and now - orphan.unlock_t < 3 then
+        orphan.unlock_t = nil
+        orphan.fights = orphan.fights + 1
+        if orphan.fights >= 2 and not orphan.gave_up then
+            orphan.gave_up = true
+            log("our player keeps being locked again right after unlocking: left to the game")
+        end
+    end
+    if orphan.gave_up then orphan.since = nil return end
+    orphan.since = orphan.since or now
+    if now - orphan.since < ORPHAN_LOCK_S then return end
+    orphan.since = nil
+    orphan.unlock_t = now
+    pcall(po.call, po, "switchPlayerOperatable(System.Boolean, app.PlayerDefine.OperationLayer)", true, 0)
+    pcall(po.call, po, "switchCameraOperatable(System.Boolean, app.PlayerDefine.OperationLayer)", true, 0)
+    log(string.format("our player was locked %d s with nothing going on (no scene, event, grab or menu): unlocked", ORPHAN_LOCK_S))
+    note("you were stuck with nothing going on: you can move again")
+end)
+
 
 local apply_story_body
 -- v0.53: a scene the friend's game is holding for us ("story <name> <ch> hold"): it starts there when we answer
@@ -1705,7 +1871,121 @@ re.on_frame(function()
     local ok, err = pcall(gf_tick, os.clock())
     if not ok and not gf.err then gf.err = true log("story flags ERR " .. tostring(err)) end
 end)
+-- Tutorial gates (v0.69). The TutorialCheck_Flag set holds what the player may do right now: CanChangeWeapon,
+-- CanOpenInventory, CanOpenMap... A story moment turns them off and turns them back on when it's done, in each game
+-- for its own player. Bot sweep 2026-11-26 (both players kept together): after Jack's fight the "look at dead Jack"
+-- message (700_MSG_WatchDeadJack_FFS) waits at PositionCheck until the player walks up to the body; the guest had, the
+-- host hadn't, the story went on, and the host's weapons, inventory and map stayed locked for the rest of Chapter 3
+-- (60 steps). Now a gate that turns on in one game is told to the other ("tcan"), and there, if ours is still off
+-- TCAN_WAIT_S later and we're not in a scene, loading or down, it's turned on too. Also seen in that sweep: both games
+-- turn these gates off for a moment at every story step and back on after it, but a step that reached our game from
+-- the friend's never turned them back on here: with 20 s first, the guest had no inventory for 20 s after every step.
+-- 5 s: past the step's own moment, and a friend who is on already got past whatever gated it.
+TCAN_WAIT_S = 5
+-- A gate the game keeps turning back off here is left alone this long, then tried again (a hold that ended without
+-- the game turning it on, the v0.66 bug, still gets fixed; a long hold, a Marguerite chase, flickers once in 30 s).
+TCAN_RETRY_S = 30
+TCAN_RESEND_S = 30
+-- v0.69 (play-mode sweep, Chapter 1): the friend's gate state is kept as it is now ("tcan <name> <ch> <0|1>", both
+-- ways), and ours is turned on once it has been off TCAN_WAIT_S while theirs is on. Keeping only the moment theirs came
+-- on (and forgetting it when ours was on) left a gate that went off here later off until theirs happened to flip again.
+local tc = { list = nil, scan_t = -100, poll_t = 0, friend = {}, off_since = {}, set_t = {}, fights = {}, gave_up = {} }
+local function tc_scan(now)
+    tc.scan_t = now
+    local hub = gf_hub()
+    if hub == nil then tc.list = nil return end
+    local list = {}
+    for i = 0, (tonumber(gsafe(hub.call, hub, "getUserVariablesCount")) or 0) - 1 do
+        local uv = gsafe(hub.call, hub, "getUserVariables", i)
+        if uv and tostring(gsafe(uv.call, uv, "get_Name") or "") == "TutorialCheck_Flag" then
+            for j = 0, (tonumber(gsafe(uv.call, uv, "getVariableCount")) or 0) - 1 do
+                local v = gsafe(uv.call, uv, "getVariable", j)
+                local name = v and tostring(gsafe(v.call, v, "get_Name") or "")
+                local on = v and gsafe(v.call, v, "get_Bool")
+                if name and name:sub(1, 3) == "Can" and type(on) == "boolean" then
+                    local old = tc.list and tc.list[name]
+                    list[name] = { v = v, on = old and old.on }
+                    if list[name].on == nil then list[name].on = on end
+                end
+            end
+        end
+    end
+    tc.list = list
+end
+local function tc_tick(now)
+    if now - tc.poll_t < 0.5 then return end
+    tc.poll_t = now
+    if tc.list == nil or now - tc.scan_t > 10 then tc_scan(now) end
+    if tc.list == nil then return end
+    -- Every gate's state again every TCAN_RESEND_S (bot sweep, Chapter 3): states went only on a change, and the
+    -- guest's "on" sent while both games were still loading never arrived, so the host's gates stayed off after the
+    -- dead-Jack moment with nothing to go on.
+    if gf_sharing() and now - (tc.resend_t or -100) >= TCAN_RESEND_S then
+        tc.resend_t = now
+        for name, e in pairs(tc.list) do
+            -- Not logged (the changes are): it would be a line per gate every 30 s.
+            if type(e.on) == "boolean" and coop_send_event then
+                coop_send_event(string.format("tcan %s %d %d", name, chapter(), e.on and 1 or 0))
+                ss.sent = ss.sent + 1
+            end
+        end
+    end
+    for name, e in pairs(tc.list) do
+        local on = gsafe(e.v.call, e.v, "get_Bool")
+        if type(on) == "boolean" and on ~= e.on then
+            e.on = on
+            -- Ours came back on by the game's own doing: whatever held it off here is over, so a gate we left to the
+            -- game gets another chance (the friend's flips at every story step aren't news: FF030 bot sweep, a
+            -- Marguerite chase holds the chased player's gates off and each step's flip there re-fought it twice).
+            if on == true and tc.set_t[name] == nil then tc.gave_up[name], tc.fights[name] = nil, nil end
+            -- The game turned it straight back off after we turned it on (a story moment here holds it off, bot sweep
+            -- 2026-11-26: on, off, on, off every 5 s): twice and that gate is left to the game for TCAN_RETRY_S, or
+            -- until the game turns it on itself.
+            if on == false and tc.set_t[name] and now - tc.set_t[name] < 3 then
+                tc.fights[name] = (tc.fights[name] or 0) + 1
+                if tc.fights[name] >= 2 and not tc.gave_up[name] then
+                    tc.gave_up[name] = now
+                    log(string.format("%s: the game here keeps it off (a story moment of ours): left to the game", name))
+                end
+            end
+            tc.set_t[name] = nil
+            if gf_sharing() then send(string.format("tcan %s %d %d", name, chapter(), on and 1 or 0)) end
+        end
+        if tc.gave_up[name] and now - tc.gave_up[name] >= TCAN_RETRY_S then tc.gave_up[name], tc.fights[name] = nil, nil end
+        if on == false and tc.friend[name] == true and not tc.gave_up[name] then
+            tc.off_since[name] = tc.off_since[name] or now
+            if now - tc.off_since[name] >= TCAN_WAIT_S then
+                local b = busy_here()
+                if not b and not (revive and revive.downed) and not (local_cutscene and local_cutscene()) then
+                    tc.off_since[name] = nil
+                    pcall(e.v.call, e.v, "set_Bool", true)
+                    e.on = true
+                    tc.set_t[name] = now
+                    log(string.format("%s was off here %d s while your friend's is on: on again", name, TCAN_WAIT_S))
+                end
+            end
+        else
+            tc.off_since[name] = nil
+        end
+    end
+end
+dbg_note{ feature = "Shared story", name = "Tutorial gates: share them and turn ours on when the friend's is",
+    when = "every frame; its work twice a second (a rescan of the gate list every 10 s)",
+    reads = "the TutorialCheck_Flag set's Can* flags (global variables hub), the friend's 'tcan' states",
+    writes = "sends 'tcan' when a gate changes here; sets a gate true after TCAN_WAIT_S off while the friend's is on" }
+re.on_frame(function()
+    local ok, err = pcall(tc_tick, os.clock())
+    if not ok and not tc.err then tc.err = true log("tutorial gates ERR " .. tostring(err)) end
+end)
+
 local function gf_on_event(text)
+    local tname, tch, tv = text:match("^tcan (%S+) (%-?%d+) ?(%d?)")
+    if tname then
+        if gf_sharing() and tonumber(tch) == chapter() then
+            tc.friend[tname] = (tv ~= "0")
+        end
+        return true
+    end
     local key, ch, name = text:match("^gflag (%x+:%x+) (%-?%d+) ?(%S*)")
     if key then
         if gf_sharing() then

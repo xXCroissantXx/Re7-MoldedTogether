@@ -2223,3 +2223,51 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   Blend: e.blend_t0 starts at the first drive() (first friend position ~0.3-0.5 s after puppetize).
   Note: jack_share_test now has real fights (Jack no longer brain-dead since v0.67): bots die, and after a double
   game over its 'not shared' count includes the game-over screens.
+- 2026-11-25 (after v0.68, bot tools only): real (noticed) fights per shared enemy.
+  Morgue Jack's head-off kill forced (headoff_forced_test.py --morgue --half Chapter3Battle1NeckSlash_PL --state
+  NeckSlash): refused -> down -> friend up 3 s later mid-animation -> release_held_grab on get_up -> view 1.61 m. OK.
+  Marguerite (marg_test.py --keep, then jack_smooth_test.py --notice --name Em3100): 9 turns in 180 s, 0 snaps, a down
+  + revive in 7 s; she barely moves when woken by hand (known: her chase needs real story state).
+  Mia, Chapter 4 (mia_fight_test.py: Chapter324 jump, 16 steps to c04_2 150, folder Chapter/Chapter4/Enemy_c04/Enemy_c04_2
+  activated, body woken): 9 turns, 0 snaps, but layer 0 motion 0 frame 0/0 (no motion set up for a hand-woken body):
+  she can't move; her real fight needs the story's own spawn. The forced steps skip it (c04_2_Main_MiaBattleEnd).
+  Molded (slot 8 engine room, --notice --name Em4000; recorder now follows one id in both games via JS_WANT_ID):
+  hits + down + revive in 3 s; a 5.8 m one-frame move on the copy = the game reusing the pooled body for another
+  spawn point (log: 'its spawn point has another body now'); idle after the first clash (known Molded limit).
+- v0.69 (2026-11-26, gimmick / story sweeps). Bot tools: story_run --together (guest warped next to the host before
+  each step: area triggers alike; most earlier gimmick diffs were positional), --play (SR.trigger_spots: a step's
+  advancers' GimmickActiveControl CollidersList positions; the host walks in, flag / sendNo only if nothing moves),
+  --sweep with --together; limb_sync_test.py, long_scene_test.py, mia_ch1_test.py, headoff_forced_test.py --morgue.
+  Molded limbs: MoldedActionController LostPartsUnit.Type (Head 0, LeftArm 1, RightArm 2, LeftLeg 3, RightLeg 4,
+  Blade 6); Em4000LostPartsUserData units offPartsNo / onPartsNo (mesh parts); watch_limbs (0.5 s, mesh parts
+  hidden = lost) -> 'limb <id> <ch> <type>'; on_limb: setPartsEnable + setLostParts. NEVER bootLostParts from Lua
+  (threw and hung the game); requestLostPartsAction / onGiveLostParts with a made-up hit did nothing / threw.
+  Tapes: their scenes run the whole tape; coop_enemies HELD_IN_CUTSCENE and coop_world's drawer/switch waits now use
+  real_cutscene / in_real_scene = local_cutscene and not coop_only_long_scenes() (LONG_SCENE_S 130).
+  Tutorial gates: 'tcan <Can*> <ch> <0|1>' both ways; ours on after TCAN_WAIT_S 5 off while the friend's is on.
+  Stuck players: STUCK_ACTION_S 120 (player GameEventActionController isPlay + isEndContinueAction, friend not in a
+  scene) -> endCompleteAction(false) + Base unlock; ORPHAN_LOCK_S 15 (PlayerOrder locked, no scene / event / grab /
+  down / busy) -> switchPlayerOperatable + switchCameraOperatable(true, Base).
+  Sequences: ss.for_friend[name]; scene_to_start ignores our part of a sequence that was the friend's scene.
+  is_lockpick: first two name segments only (sm1581_Locker01A_Ch4KeyLock grandparent).
+  Benign diffs left: WatchDeadJack FSM position wait, HardMode/SlowOpen gac, BGM FSMs, tips flags, kept-by-design
+  prompts (SoukoPlate), host-forced advancers at State00, Chapter 7-9 = DLC (not swept).
+- v0.69 tapes (2026-11-26, FF030 / FF040 / FF050 play sweeps). Tutorial gates: a gate the game turns back off within
+  3 s of ours, twice, is left to the game for TCAN_RETRY_S 30 or until the game turns it on itself (a Marguerite
+  chase, Tips_PursuitMarguerite, holds the chased player's CanOpenInventory / CanOpenMap off: right per player).
+  The friend's step flips no longer restart it. story_test.py: 3 gate scenarios (fake TutorialCheck_Flag hub).
+  busy_here + the orphan-lock watchdog: game screens count (MenuManager isExistStackOpenMenu, isOpenInventoryMenu,
+  isOpenDetailSearchGUI, isOpenItemBoxMenu, isOpenItemSelectMenu, isOpenSaveMenuGUI, isTipsOpen, carry mode,
+  full-screen movie...); a lock back within 3 s of our unlock, twice, is left to the game until free 5 s.
+  INTR_SKIP: noopen / cantopen / notopen / interactpoint_ng (message-only; sm0250_ChainLocker01A_NoOpen went down the
+  chain path, whose hand cut hides the parent named for a chain: the whole locker).
+  Scripted kills (probes/gameover_path.lua): Marguerite's catch = MotionManager.setExternalTask on the player, then
+  GameManager.setGameOverFlag(true) ~4.7 s later, no damage and no SetGameOver fsm. GameManager.Debug_NoGameOver
+  doesn't stop it. Bot god mode (bot_prelude v9) clears an external task put on the player outside events with an
+  enemy within 3 m. Tapes end on their own back in Chapter 3 (story_run now stops there).
+  Benign per player: MotherDiscovery FSMs, AutoSave gac, message AutoSend FSMs, FF040 toilet flush effect.
+  Sequences: scene_to_start counts a part still playing here (seq_running, ss.running) as started; the late-arrival
+  'start from _00' rule only when no part played or plays here. Chapter 4: the host's c04e71_01 came 1 s before the
+  guest's c04e71_00 (the host's) ended, _00 was swapped in, 'already played', _01 lost. story_test scenario added.
+  Still per player: c04_1_Main_200 flashback chain starts at 200_FlashBack02_StartEffect's trigger area (78.9, 9.8,
+  38.2); a player pulled into c04e71 from outside it never fires it (past-ship look, one door's lock, 2 steps).

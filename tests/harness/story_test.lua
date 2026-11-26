@@ -58,7 +58,33 @@ local mm = obj({ call = function(self, m) if m == "isOpenPauseMenu" then return 
 
 local singletons = { ["app.GameManager"] = gm, ["app.GameFlowFsmManager"] = fm, ["app.ObjectManager"] = om,
     ["app.MenuManager"] = mm }
-local function method(td, name) return { td = td, name = name } end
+-- The global variables hub, with only the TutorialCheck_Flag set (its Can* gates): T.gates[name] = bool. A gate's
+-- T.hold[name] = true stands for a story moment here: the game turns that gate back off right after anyone sets it.
+T.gates, T.hold = {}, {}
+local gate_order = {}
+function gate(name, on) if T.gates[name] == nil then gate_order[#gate_order + 1] = name end T.gates[name] = on end
+local function gate_var(name)
+    return obj({ call = function(self, m, v)
+        if m == "get_Name" then return name end
+        if m == "get_Bool" then return T.gates[name] end
+        if m == "set_Bool" then T.gates[name] = v T.gate_sets = (T.gate_sets or 0) + 1 end
+    end })
+end
+local tc_set = obj({ call = function(self, m, j)
+    if m == "get_Name" then return "TutorialCheck_Flag" end
+    if m == "getVariableCount" then return #gate_order end
+    if m == "getVariable" then return gate_var(gate_order[j + 1]) end
+end })
+local hub = obj({ call = function(self, m, i)
+    if m == "getUserVariablesCount" then return 1 end
+    if m == "getUserVariables" then return tc_set end
+end })
+local function method(td, name)
+    if td == "via.userdata.GlobalUserData" and name == "get_VariablesHub" then
+        return { td = td, name = name, call = function() return hub end }
+    end
+    return { td = td, name = name }
+end
 local function typedef(name)
     return obj({
         get_method = function(self, n) return method(name, n) end,
@@ -88,6 +114,7 @@ function frames(seconds)
     local n = math.floor(seconds * 10)
     for _ = 1, n do
         T.now = T.now + 0.1
+        for name, h in pairs(T.hold) do if h then T.gates[name] = false end end
         for _, f in ipairs(T.frames) do
             local ok, e = pcall(f)
             if not ok then print("FAIL frame error: " .. tostring(e)) T.fails = T.fails + 1 end

@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.69 (2026-11-26)
+Gimmicks, puzzles and the story kept in step through the whole game, found by bot sweeps that play the story with
+both players side by side and compare 1,400+ pieces of each game's story after every step.
+
+- **Molded limbs are shared.** An arm, a leg, the head or the blade shot off a Molded is gone in your friend's game too
+  (before, only its health was shared, so it still had the arm there).
+- **The tapes are shared while you play them.** A tape's scene runs the whole time you play the tape, and everything
+  your friend did in it (doors, drawers, switches, the shadow puzzle, valves, cranks, keypads) waited until the tape was
+  over. Now only real cutscenes hold your friend's changes back.
+- **Your inventory and map aren't left locked.** Story moments lock weapons, the inventory and the map for a moment and
+  unlock them after; a story step that came from your friend's game often never unlocked them here (and the "look at
+  dead Jack" moment kept them locked for the rest of Chapter 3 for a player who hadn't walked up to him). Now they come
+  back once your friend has theirs, unless something in your own game is holding them (Marguerite chasing you keeps
+  your inventory shut, as it should).
+- **No more getting stuck unable to move.** Two ways a player could be left frozen: still inside a scene's part after
+  the scene was over (Chapter 1's opening: the guest couldn't move and Mia wasn't shared), or locked with nothing going
+  on at all (the start of Chapter 4). Both are freed now (after 2 minutes and 15 seconds). Reading a file, the
+  inventory, the item box or the save screen never counts as stuck, and your friend's scenes wait until you close them.
+- **A scene sequence your friend started plays on for you.** After playing your friend's scene, your game refused the
+  next part of its sequence ("you'll play it when you get there") and never did (Chapter 4's c04e71). And when their
+  next part came while the first was still ending for you (a second behind), it was dropped; now it plays right after.
+- **The ship's under-floor door** opens properly for your friend too (it was taken for a lockpick lock because of the
+  locker above it).
+- **A chained locker that won't open stays a locker.** Trying it in one game (it only says it won't open) could hide
+  the whole locker in your friend's game.
+
 ## v0.68 (2026-11-25)
 Found by the first bot fights where Jack really fights (the test bots can now be seen by enemies).
 

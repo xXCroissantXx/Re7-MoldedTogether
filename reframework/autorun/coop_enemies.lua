@@ -437,6 +437,81 @@ local function kill_enemy(e)
 end
 
 -- Scan the enemies here: register new ones, notice deaths, apply remembered kills.
+-- Molded limbs (v0.69). A Molded can lose its head, arms, legs or its blade (app.MoldedActionController
+-- LostPartsUnit.Type: Head 0, LeftArm 1, RightArm 2, LeftLeg 3, RightLeg 4, Blade 6); only its health was shared, so a
+-- Molded whose arm you shot off still had it in your friend's game. The game shows a lost limb by hiding the limb's
+-- mesh parts and showing its stump's (Em4000LostPartsUserData units: offPartsNo / onPartsNo, found with
+-- findLostPartsUnit(type)), and sets a value its animations read (setLostParts(unit, true)). Watched here for every
+-- awake Molded twice a second; a limb that goes missing is sent ("limb <id> <chapter> <type>"), and the friend's game
+-- shows the same on its body. Never bootLostParts from here: called from a script it threw and hung the game (bot
+-- test 2026-11-25); requestLostPartsAction / onGiveLostParts with a made-up hit did nothing or threw.
+LIMB_TYPES = { 0, 1, 2, 3, 4, 6 }
+local LIMB_NAMES = { [0] = "head", [1] = "left arm", [2] = "right arm", [3] = "left leg", [4] = "right leg", [6] = "blade" }
+local LIMB_EVERY = 0.5
+local function limb_info(e)
+    if e.limbs ~= nil then return e.limbs or nil end
+    local ac
+    for _, c in ipairs(arr_items(safe(e.go.call, e.go, "get_Components"))) do
+        if c:get_type_definition():is_a("app.MoldedActionController") then ac = c break end
+    end
+    local mesh = safe(e.go.call, e.go, "getComponent(System.Type)", sdk.typeof("via.render.Mesh"))
+    if ac == nil or mesh == nil then e.limbs = false return nil end
+    local limbs = { ac = ac, mesh = mesh, units = {} }
+    for _, ty in ipairs(LIMB_TYPES) do
+        local unit = safe(ac.call, ac, "findLostPartsUnit(app.MoldedActionController.LostPartsUnit.Type)", ty)
+        if unit then
+            local function nums(name)
+                local l, t = safe(unit.get_field, unit, name), {}
+                for i = 0, (l and tonumber(safe(l.call, l, "get_Count")) or 0) - 1 do t[#t + 1] = safe(l.call, l, "get_Item", i) end
+                return t
+            end
+            local off = nums("offPartsNo")
+            if #off > 0 then limbs.units[ty] = { unit = unit, off = off, on = nums("onPartsNo") } end
+        end
+    end
+    e.limbs = limbs
+    return limbs
+end
+-- Which limbs are gone on this body now: every one of the limb's own mesh parts hidden.
+local function limbs_lost(L)
+    local lost = {}
+    for ty, u in pairs(L.units) do
+        local gone = true
+        for _, n in ipairs(u.off) do
+            if safe(L.mesh.call, L.mesh, "getPartsEnable(System.UInt64)", n) ~= false then gone = false break end
+        end
+        lost[ty] = gone
+    end
+    return lost
+end
+local function watch_limbs(e, now)
+    if now - (e.limb_t or 0) < LIMB_EVERY then return end
+    e.limb_t = now
+    local L = limb_info(e)
+    if L == nil then return end
+    local lost = limbs_lost(L)
+    e.limb_lost = e.limb_lost or {}
+    -- A dying Molded's body comes apart (every part hidden in one go; bot suite 2026-11-26: "lost its left arm, right
+    -- arm, left leg, right leg, head" in the same check as its kill). That's its death, shared as a kill: not limbs.
+    local newly = 0
+    for ty, gone in pairs(lost) do if gone and not e.limb_lost[ty] then newly = newly + 1 end end
+    local hp = e.dc and tonumber(safe(e.dc.call, e.dc, "get_health"))
+    if newly >= 4 or (hp ~= nil and hp <= 0) then
+        for ty, gone in pairs(lost) do e.limb_lost[ty] = gone end
+        return
+    end
+    for ty, gone in pairs(lost) do
+        if gone and not e.limb_lost[ty] then
+            if e.limb_applied and e.limb_applied[ty] then
+                e.limb_applied[ty] = nil   -- we did it on the friend's word: not sent back
+            else
+                send_event(string.format("limb %s %d %d", e.id, chapter(), ty))
+                log(string.format("%s %s lost its %s here: told your friend", e.name, e.id:sub(1, 12), LIMB_NAMES[ty] or tostring(ty)))
+            end
+        end
+        e.limb_lost[ty] = gone   -- a body the game reuses comes back whole: it can be lost again
+    end
+end
 local function scan()
     local l = enemy_list()
     if l == nil then return end
@@ -527,6 +602,8 @@ local function scan()
                 end
                 e.hp = hp
                 e.dead = dead
+                -- v0.69: Molded limbs (see watch_limbs).
+                if active and not dead and not e.dup and is_regular(e.name) then pcall(watch_limbs, e, os.clock()) end
                 if not dead and active and not e.dup and es.pending[e.id] == chapter() then
                     es.pending[e.id] = nil
                     es.applying[e.id] = os.clock()
@@ -567,6 +644,23 @@ end
 local function find_tracked(id)
     for _, e in pairs(es.tracked) do if e.id == id then return (not e.dup) and e or nil end end
     return nil
+end
+
+-- The friend's Molded lost a limb (v0.69, see watch_limbs): the same limb goes on ours.
+function on_limb(id, ch, ty)
+    if ch ~= chapter() then return end
+    local e = find_tracked(id)
+    if e == nil or e.dead or e.dup then return end
+    local L = limb_info(e)
+    local u = L and L.units[ty]
+    if u == nil then log(string.format("friend's %s: no limb %s on %s here", e.name, tostring(ty), id:sub(1, 12))) return end
+    if limbs_lost(L)[ty] then return end
+    for _, n in ipairs(u.off) do safe(L.mesh.call, L.mesh, "setPartsEnable(System.UInt64, System.Boolean)", n, false) end
+    for _, n in ipairs(u.on) do safe(L.mesh.call, L.mesh, "setPartsEnable(System.UInt64, System.Boolean)", n, true) end
+    safe(L.ac.call, L.ac, "setLostParts", u.unit, true)
+    e.limb_applied = e.limb_applied or {}
+    e.limb_applied[ty] = true
+    log(string.format("your friend's game: %s %s lost its %s: shown here too", e.name, id:sub(1, 12), LIMB_NAMES[ty] or tostring(ty)))
 end
 
 -- The friend hurt an enemy: take the same health off ours. setHealth rather than
@@ -745,6 +839,8 @@ local function on_event(text)
     if hid then pcall(on_ehp, hid, tonumber(hch), tonumber(hv), hname) return end
     local did, dch, damt, dname = text:match("^dmg (%S+) (%-?%d+) ([%d%.]+) (%S+)")
     if did then on_damage(did, tonumber(dch), tonumber(damt), dname) return end
+    local lid, lch, lty = text:match("^limb (%S+) (%-?%d+) (%d+)")
+    if lid then pcall(on_limb, lid, tonumber(lch), tonumber(lty)) return end
     local id, ch, name = text:match("^kill (%S+) (%-?%d+) (%S+)")
     if id == nil then log("ignored event: " .. text) return end
     ch = tonumber(ch)
@@ -799,12 +895,21 @@ DROPPED_IN_CUTSCENE = { phys = true, dang = true, dmg = true, ehp = true }
 STALE_AFTER = { story = 20, own = 10, phys = 3, dang = 3, dmg = 5, talk = 60, heal = 10, drop = 120 }
 
 -- Changes kept during our cutscene: applied 1 s after it ends (and after a scene settles).
+-- A real cutscene here (v0.69): not one where every running scene has gone on past coop_story's LONG_SCENE_S. Bot
+-- sweep 2026-11-26, the tapes: their scenes (c03f20_00, c03f40_00...) run the whole time you play the tape, and every
+-- door, drawer, switch and interaction the friend used there waited behind them (held, "nothing" in the log) until
+-- the tape was over. coop_story already copies the friend's story through such long events (v0.56); now these too.
+local function real_cutscene()
+    if not (local_cutscene and local_cutscene()) then return false end
+    return not (coop_only_long_scenes and coop_only_long_scenes())
+end
+
 local function release_held(now)
     if es.held == nil or #es.held == 0 then
         if (es.dropped_n or 0) > 0 then log(string.format("cutscene: dropped %d pushes/hits from the friend", es.dropped_n)) es.dropped_n = 0 end
         return
     end
-    if local_cutscene and local_cutscene() then es.cut_end_t = nil return end
+    if real_cutscene() then es.cut_end_t = nil return end
     es.cut_end_t = es.cut_end_t or now
     if now - es.cut_end_t < 1 then return end
     local list = es.held
@@ -857,11 +962,11 @@ local function read_events()
                 -- Arrived while we were loading, too long ago to act on (v0.39).
                 es.stale_n = (es.stale_n or 0) + 1
                 if kind == "story" or kind == "own" then log(string.format("too old to act on (%d s): %s", age, body)) end
-            elseif local_cutscene and local_cutscene() and HELD_IN_CUTSCENE[kind] then
+            elseif real_cutscene() and HELD_IN_CUTSCENE[kind] then
                 es.held = es.held or {}
                 if #es.held < 300 then es.held[#es.held + 1] = { slot = slot, body = body } end
                 es.held_n = (es.held_n or 0) + 1
-            elseif local_cutscene and local_cutscene() and DROPPED_IN_CUTSCENE[kind] then
+            elseif real_cutscene() and DROPPED_IN_CUTSCENE[kind] then
                 es.dropped_n = (es.dropped_n or 0) + 1
             else
                 coop_event_slot = slot
