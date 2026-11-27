@@ -1727,6 +1727,21 @@ local function form_header(x, y, w, letter, number)
     return y + bsz + 10
 end
 
+-- A newer release on GitHub (v0.71): CoopNet asks once per launch and writes coopnet_latest.txt
+-- ("latest <version> <1 newer|0> <page>"); read at most every 15 s while the screen is open.
+local latest = { t = -100, line = nil }
+local function newer_release_line()
+    local now = os.clock()
+    if now - latest.t < 15 then return latest.line end
+    latest.t = now
+    latest.line = nil
+    local s = fs.read("coopnet_latest.txt")
+    local v, newer
+    if s then v, newer = s:match("^latest (%S+) ([01])") end   -- (not "s and s:match()": that keeps one value)
+    if v and newer == "1" then latest.line = "Update: v" .. v .. " is out on GitHub" end
+    return latest.line
+end
+
 local function draw_paper(title, items, is_confirm)
     local w, h = screen()
     local hit = { a = {}, b = {}, more = {} }   -- v0.43: where the rows are, for the mouse
@@ -1756,6 +1771,8 @@ local function draw_paper(title, items, is_confirm)
     local foot = {}
     local inv = pending_invite and safe(pending_invite)
     if inv then foot[#foot + 1] = { inv.name .. " invited you: Friends", 0xFF7FFF8C } end
+    local upd = newer_release_line()
+    if upd then foot[#foot + 1] = { upd, 0xFF5AC8FF } end
     foot[#foot + 1] = { party_line(), #linked_members() > 0 and 0xFF7FFF8C or 0xFF969696 }
     local fy = ay + ah - 24 - line_h("small") * #foot
     for _, f in ipairs(foot) do
@@ -2160,6 +2177,13 @@ local function draw_sheets(title, items, is_confirm)
     local px0 = w - text_w(pl, "small") - 28
     pcall(draw.filled_rect, px0 - 12, 14, text_w(pl, "small") + 24, line_h("small") + 8, 0xB0000000)
     text(pl, px0, 18, (inv or #linked_members() > 0) and 0xFF7FFF8C or 0xFFBFBFBF, "small")
+    -- A newer release (v0.71), under it.
+    local upd = newer_release_line()
+    if upd then
+        local ux0, uy = w - text_w(upd, "small") - 28, 18 + line_h("small") + 14
+        pcall(draw.filled_rect, ux0 - 12, uy - 4, text_w(upd, "small") + 24, line_h("small") + 8, 0xB0000000)
+        text(upd, ux0, uy, 0xFF5AC8FF, "small")
+    end
     if mo and mo.x and os.clock() - (mo.t or -100) < 4 then
         pcall(draw.filled_circle, mo.x, mo.y, 6, 0xFFFFFFFF, 16)
         pcall(draw.outline_circle, mo.x, mo.y, 7, 0xFF000000, 16)

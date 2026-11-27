@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.70; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.71; formerly coop-re7)
 Created by xXCroissantXx & Kingkiller1195
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
@@ -311,7 +311,9 @@ Ethan's own animations, including the upper-body moves your body plays (blocking
 updates a second over Steam's relay network (`ISteamNetworkingMessages`), plus guaranteed messages for things
 that happen once (a kill, a door, a pickup, a story step) and 10-a-second enemy updates. Each enemy and boss is
 run by one game (the nearest player's) with its own AI; the other games turn that enemy's AI off and move it from
-those updates. The scripts:
+those updates. Once per launch the plugin also asks GitHub whether a newer release is out (one anonymous request;
+nothing about you is sent) and the co-op screen says so; `"updateCheck": false` in
+`reframework\data\coopnet_config.json` switches that off. The scripts:
 
 | Script | Does |
 |---|---|

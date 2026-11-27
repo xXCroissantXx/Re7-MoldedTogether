@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.71 (2026-11-26)
+- **The co-op screen tells you when a newer version is out.** Once per launch the network plugin asks GitHub for the
+  latest Molded Together release (one anonymous request; nothing about you is sent) and, if it's newer than yours, the
+  co-op screen shows "Update: vX is out on GitHub" under the who-you're-playing-with line. Nothing is downloaded or
+  changed by itself. Switch it off with `"updateCheck": false` in `reframework\data\coopnet_config.json`.
+  (The idea comes from Kingkiller1195's re7mp, whose launcher updates itself.)
+
 ## v0.70 (2026-11-26)
 Two enemy fixes found by bots playing all of Chapter 3 and Chapter 4 on v0.69.
 

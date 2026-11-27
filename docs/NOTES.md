@@ -2285,3 +2285,14 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   left: TutorialDriving prompt, PlateDoor_Approaching objective gac, TableBreak sensor, MapEx icons, BGM FSMs.
   Bots: re7bots sweep skips 'inventoryselect' (opens the item menu, which holds that game's gates off); props that
   unload mid-sweep are skipped. isExistStackOpenMenu was true there only because a menu really was open.
+- v0.71 (2026-11-26, after reading Kingkiller1195's re7mp: a C++ launcher + one 30k-line Lua, nearly all marked
+  unverified in the real game). Taken: a version check. CoopNet CheckLatest (Config.updateCheck, default true): 5 s
+  after start one GET of api.github.com/repos/xXCroissantXx/Re7-MoldedTogether/releases/latest (UA
+  MoldedTogether-UpdateCheck, 10 s timeout), writes coopnet_latest.txt 'latest <ver> <1|0> <page>' (deleted first;
+  nothing on failure). coop_menu newer_release_line (cached 15 s): the paper's sheet A foot and the in-game
+  screen's top right. menu_test: 3 checks. Verified on the bots (both copies wrote it; notice drawn in game).
+  Lua pitfall hit: 'local a, b = s and s:match(...)' keeps one value.
+  Not taken: his co-op save sharing (writes into the friend's Steam save folder, re-signs saves; never tried with
+  the game loading one), auto-swapping updater, 'shared fate' death mode, execution = team wipe (ours downs and
+  releases the grab, tested), his limb sync (still finding the methods by shape; ours is tested). Idea kept for
+  later: revive by using a healing item on a downed friend (his v9.3), next to our 3 s stand-by-them revive.

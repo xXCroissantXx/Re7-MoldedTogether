@@ -380,7 +380,26 @@ settings.menu_text = nil frames(2)
 coop_menu_set_open(false) frames(0.1)
 ''')
 
-fails = int(A.eval('T.fails')) + int(B.eval('T.fails')) + int(C.eval('T.fails')) + int(D.eval('T.fails')) + fails_extra
-checks = int(A.eval('T.checks')) + int(B.eval('T.checks')) + int(C.eval('T.checks')) + int(D.eval('T.checks'))
+# v0.71: a newer release (CoopNet's coopnet_latest.txt) is told at the foot of sheet A; the same version tells nothing.
+E = game('76561198000000005', '76561198000000006', 'Updater')
+E.execute('''
+T.files["coopnet_latest.txt"] = "latest 0.99 1 https://github.com/x/y/releases/tag/v0.99"
+coop_menu_set_open(true) T.texts = {} frames(0.5)
+check(drew("v0.99 is out"), "a newer release is told on the co-op screen")
+coop_menu_set_open(false) frames(0.1)
+T.files["coopnet_latest.txt"] = "latest 0.70 0 https://github.com/x/y/releases/tag/v0.70"
+frames(16)
+coop_menu_set_open(true) T.texts = {} frames(0.5)
+check(not drew(" is out"), "the same version tells nothing")
+coop_menu_set_open(false) frames(0.1)
+T.files["coopnet_latest.txt"] = nil
+frames(16)
+coop_menu_set_open(true) T.texts = {} frames(0.5)
+check(not drew(" is out"), "no answer (offline, or the check is off) tells nothing")
+coop_menu_set_open(false) frames(0.1)
+''')
+
+fails = int(A.eval('T.fails')) + int(B.eval('T.fails')) + int(C.eval('T.fails')) + int(D.eval('T.fails')) + int(E.eval('T.fails')) + fails_extra
+checks = int(A.eval('T.checks')) + int(B.eval('T.checks')) + int(C.eval('T.checks')) + int(D.eval('T.checks')) + int(E.eval('T.checks'))
 print('menu scenarios:', ('FAILED %d of %d' % (fails, checks)) if fails else ('all %d checks passed' % checks))
 sys.exit(1 if fails else 0)

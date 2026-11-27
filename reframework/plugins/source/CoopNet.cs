@@ -87,6 +87,9 @@ public class CoopNet
         public double simLatencyMs { get; set; } = 80;
         public double simJitterMs { get; set; } = 30;
         public double simLossPct { get; set; } = 5;
+        // v0.71: ask GitHub once per launch whether a newer release is out (coopnet_latest.txt; the co-op screen
+        // says so). Nothing about you is sent: one anonymous request for the public latest-release page.
+        public bool updateCheck { get; set; } = true;
     }
 
     // Fake remote player ----------------------------------------------------------
@@ -574,7 +577,7 @@ public class CoopNet
         public float LookYaw, LookPitch;   // camera relative to body, radians
     }
 
-    const string Version = "0.70";
+    const string Version = "0.71";
     const int PacketSize = 64;
     static readonly byte[] Magic = { (byte)'R', (byte)'7', (byte)'C', (byte)'2' };
     const int KeepSamples = 32;
@@ -642,12 +645,59 @@ public class CoopNet
             s_ioThread.Start();
             API.LogInfo($"[CoopNet] started mode={s_cfg.mode} peer={PeerText} sendHz={s_cfg.sendHz}");
             WriteStatus("started");
+            if (s_cfg.updateCheck) new Thread(CheckLatest) { IsBackground = true, Name = "CoopNet.Update" }.Start();
         }
         catch (Exception e)
         {
             API.LogError("[CoopNet] start failed: " + e);
             WriteStatusSafe("start failed: " + e.Message);
         }
+    }
+
+    // Newer release? (v0.71, the idea from Kingkiller1195's re7mp, whose launcher updates itself; here it only tells you.)
+    // One GET of the public latest-release record, 5 s after start, 10 s timeout, a generic user agent and nothing else.
+    // Writes "latest <version> <1 if newer than ours, else 0> <release page>" to coopnet_latest.txt; on any failure
+    // nothing is written (an old file is removed first, so the screen never shows a stale answer).
+    const string LatestUrl = "https://api.github.com/repos/xXCroissantXx/Re7-MoldedTogether/releases/latest";
+    static void CheckLatest()
+    {
+        var path = Path.Combine(s_dataDir, "coopnet_latest.txt");
+        try
+        {
+            try { File.Delete(path); } catch { }
+            Thread.Sleep(5000);
+            if (!s_running) return;
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("MoldedTogether-UpdateCheck");
+            http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+            var json = http.GetStringAsync(LatestUrl).GetAwaiter().GetResult();
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var tag = root.GetProperty("tag_name").GetString() ?? "";
+            var page = root.TryGetProperty("html_url", out var h) ? h.GetString() ?? "" : "";
+            var latest = tag.TrimStart('v', 'V').Trim();
+            if (latest.Length == 0 || latest.Contains(' ')) return;
+            bool newer = CompareVersions(latest, Version) > 0;
+            File.WriteAllText(path, $"latest {latest} {(newer ? 1 : 0)} {page}");
+            API.LogInfo($"[CoopNet] update check: latest release {latest}, ours {Version}" + (newer ? " (newer one out)" : ""));
+        }
+        catch (Exception e)
+        {
+            API.LogInfo("[CoopNet] update check skipped: " + e.Message);
+        }
+    }
+    // "0.71" vs "0.70": by number, part by part (a missing part counts as 0).
+    internal static int CompareVersions(string a, string b)
+    {
+        var pa = a.Split('.');
+        var pb = b.Split('.');
+        for (int i = 0; i < Math.Max(pa.Length, pb.Length); i++)
+        {
+            int x = i < pa.Length && int.TryParse(pa[i], out var xa) ? xa : 0;
+            int y = i < pb.Length && int.TryParse(pb[i], out var yb) ? yb : 0;
+            if (x != y) return x.CompareTo(y);
+        }
+        return 0;
     }
 
     [PluginExitPoint]
