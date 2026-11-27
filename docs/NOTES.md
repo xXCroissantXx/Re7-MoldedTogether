@@ -2296,3 +2296,24 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   the game loading one), auto-swapping updater, 'shared fate' death mode, execution = team wipe (ours downs and
   releases the grab, tested), his limb sync (still finding the methods by shape; ours is tested). Idea kept for
   later: revive by using a healing item on a downed friend (his v9.3), next to our 3 s stand-by-them revive.
+- v0.72 (2026-11-27, Kingkiller1195's healing-item revive). Item use, measured on the bots (probes/heal_use_rec.lua):
+  PlayerOrder.requestUseItem(item, true) (the inventory's Use) -> PlayerWeaponChange.removeWeapon ->
+  PlayerWeaponChange.useItem(item, weapon) 0.4 s later (bottle out) -> health 300 -> 800 of 1000 ~3 s later (not
+  through DamageController.recoveryHealth) -> Inventory.reduceItem('RemedyM', 1) at the end. A Herb can't be used
+  (tryUseItem refuses it; it's a crafting material); Inventory.tryUseHerb and equipWeapon('Herb') do nothing.
+  Inventory items are plain app.Item (app.ItemHealthRecover has _RecoverValue, unused here). coop_revive: a
+  useItem hook on our player's PlayerWeaponChange with a Remedy* id and a downed friend within ITEM_DIST
+  (= REVIVE_DIST 2.8 m) sends 'upitem <id> <pct>' (ITEM_HEAL RemedyM 50, RemedyL 100); the downed game gets up
+  if the sender is within ITEM_DIST x1.3 by its own view, health max(REVIVE_HEALTH, pct). Our own health is held
+  (follows hits down, never up) until 0.5 s after reduceItem of that id, 20 s at most, or our next healing use
+  (8 s was too short on bot windows: the heal came later and the giver kept it). coop_talk's heal_friend
+  skips for 10 s after (revive.item_t). HUD: 'Stand next to them or use a First Aid Med there'.
+  Bot test item_revive_test.py (give_herb.py gives real pickups): pass on the final code (up by the item at
+  500/1000, giver 2 -> 1 meds, own health kept at 400; nobody down -> ordinary heal to 900). Background bot
+  windows run frames in bursts, so wall-clock times there (9 s) say nothing. A second run in a row lost to the
+  stand-by revive: the link was starved then (round trip ~3 s, 1-2 samples/s, ghost 'no data for 2 s'), the
+  use only started 12 s after the request; the plain revive test failed the same way right after (near_t reset
+  by the flickering ghost). Same code passed both earlier on a fresh pair.
+  Also coop_world poll_props: a drawer flipped within 3 s of applying the friend's change was taken as that change
+  (ws.applying) and never sent (suite: 'sweep world' failed on the 3 drawers 'world drawer' had just shut, passed
+  alone). Now ws.applying_want[key] keeps the applied state; a drawer reading the other way is the player's.

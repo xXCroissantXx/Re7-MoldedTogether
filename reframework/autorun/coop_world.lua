@@ -1203,6 +1203,9 @@ local function poll_props(now)
     for key, s in pairs(ws.props) do
         local on = safe(s.pt.state, s.c) == true
         local ours = ws.applying[key] and now - ws.applying[key] < 3
+        -- v0.72: a drawer turned back the other way within those 3 s is the player's, not the friend's change being
+        -- applied (bot suite: opened again 1 s after the friend shut it, never sent, the games stayed apart).
+        if ours and s.kind == "drawer" and ws.applying_want and ws.applying_want[key] ~= nil and on ~= ws.applying_want[key] then ours = false end
         -- Far away nobody touched it: the room unloading or loading back changed what it reads.
         if on ~= s.on and s.kind == "drawer" and coop_world_prop_dist(s) > PROP_FAR then ours = true end
         if on ~= s.on and not ours then
@@ -1299,6 +1302,8 @@ local function apply_prop(kind, id, want, ch, phone, lasting)
     if before == want and not (kind == "intr" and is_lockpick(s.c) and lock_is_open(s.c) == false)
         and not (kind == "intr" and not is_lockpick(s.c) and is_chain(s.c) and not chain_cut(s.c)) then return end
     ws.applying[key] = os.clock()
+    ws.applying_want = ws.applying_want or {}
+    ws.applying_want[key] = want   -- v0.72: see poll_props
     local ok, err
     if kind == "box" then
         -- RigidBodyDestruct.setBreak(dir, pos, normal, attacker, type) always threw from Lua

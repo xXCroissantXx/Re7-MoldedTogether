@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.72 (2026-11-27)
+- **Use a First Aid Med next to a downed friend to get them up at once.** Open your items next to them (within about
+  3 m) and use a First Aid Med or a Strong First Aid Med: they're back up as soon as the bottle comes out, with the
+  medicine's health (half for a First Aid Med, full for a Strong one) instead of the usual third. The medicine is
+  yours and it's spent; its health goes to them, not to you. Standing next to them for 3 seconds still works and costs
+  nothing. (A Herb can't be used on its own in RE7, so it doesn't count.) The idea comes from Kingkiller1195's re7mp.
+- **A drawer opened again right after your friend shut it** (within 3 seconds) now shows open for them too; before,
+  that quick change was taken for theirs and never sent.
+
 ## v0.71 (2026-11-26)
 - **The co-op screen tells you when a newer version is out.** Once per launch the network plugin asks GitHub for the
   latest Molded Together release (one anonymous request; nothing about you is sent) and, if it's newer than yours, the

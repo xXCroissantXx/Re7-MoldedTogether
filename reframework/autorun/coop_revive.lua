@@ -34,6 +34,17 @@ local REVIVE_TIME = 3.0    -- s next to you
 local REVIVE_HEALTH = 0.35 -- of max health
 local DOWN_LIMIT = 90      -- s alone before it's a real death
 local VIEW_MIN, VIEW_S = 0.75, 3.0   -- v0.67: after a refused scripted kill, a view this low (m above the feet) this long ends the life
+-- v0.72: using a healing item within ITEM_DIST of a downed friend gets them up at once (the idea comes from
+-- Kingkiller1195's re7mp). The item's health goes to them, not to the one who used it.
+-- Bot test 2026-11-27: PlayerOrder.requestUseItem(First Aid Med) -> PlayerWeaponChange.useItem 0.4 s later (the bottle
+-- comes out) -> health 300 -> 800 of 1000 ~3 s later -> Inventory.reduceItem("RemedyM", 1) at the end. A Herb can't be
+-- used on its own (the game refuses it: it only goes into crafting), so only the Remedy* items count.
+local ITEM_DIST = REVIVE_DIST
+local ITEM_HEAL = { RemedyM = 50, RemedyL = 100 }   -- % of max health it gives (First Aid Med measured: +500 of 1000)
+local ITEM_NAMES = { RemedyM = "a First Aid Med", RemedyL = "a Strong First Aid Med" }
+local function item_name(id) return ITEM_NAMES[id] or "a healing item" end
+local function heal_item(id) return type(id) == "string" and id:match("^Remedy") ~= nil end
+local function who(k) return (k or 1) == 1 and "your friend" or ("friend " .. k) end
 
 -- Lines are collected and appended once a second (was a full read + rewrite per line).
 local log_buf, log_t, log_tail = {}, 0, nil
@@ -202,7 +213,7 @@ local function release_held_grab(why, at_end_only)
     return ok
 end
 
-local function get_up(why)
+local function get_up(why, health)
     rv.downed, rv.near_t = false, nil
     rv.up_t = os.clock()
     pcall(release_held_grab, "getting up", false)
@@ -210,7 +221,7 @@ local function get_up(why)
     local dc = player_dc()
     if dc then
         local max = dc:call("get_maxHealth") or 1000
-        pcall(dc.call, dc, "setHealth(System.Single, System.Single)", max * REVIVE_HEALTH, max)
+        pcall(dc.call, dc, "setHealth(System.Single, System.Single)", max * math.max(REVIVE_HEALTH, math.min(1, health or 0)), max)
     end
     send("up")
     note(why)
@@ -303,6 +314,77 @@ do
     log("revive hooks: setGameOverFlag " .. tostring(m ~= nil))
 end
 
+-- v0.72: a healing item used next to a downed friend gets them up (the idea comes from Kingkiller1195's re7mp).
+-- PlayerWeaponChange.useItem starts the use (the bottle comes out): with a friend down within ITEM_DIST, they're told
+-- at once ("upitem <id> <percent>") and get up with the item's health. The item is spent by the game as usual, and
+-- its health is the friend's: ours is held at what it was until the use is over (see the frame callback below).
+local function nearest_down_friend()
+    local p = player()
+    local me = p and safe(function() return p:call("get_Transform"):call("get_Position") end)
+    if me == nil then return nil end
+    local best, bd
+    for k, v in pairs(rv.down_slots) do
+        if v and not friend_dead(k) then
+            local gp = friend_pos(k) or friend_link_pos(k)
+            local d = gp and math.sqrt((gp.x - me.x) ^ 2 + (gp.z - me.z) ^ 2) or nil
+            if d and (bd == nil or d < bd) then best, bd = k, d end
+        end
+    end
+    return best, bd
+end
+local function on_item_use(id)
+    if not heal_item(id) then return end
+    rv.item_use = nil   -- a new healing use ends any hold from the last one: this one is ours unless it's for a friend
+    if rv.downed then return end
+    local k, d = nearest_down_friend()
+    if k == nil or d > ITEM_DIST then return end
+    local dc = player_dc()
+    local h = dc and tonumber(safe(dc.call, dc, "get_health"))
+    local pct = ITEM_HEAL[id] or 50
+    rv.item_use = { id = id, t = os.clock(), hp = h, k = k }
+    rv.item_t = os.clock()   -- coop_talk's heal-your-friend leaves this heal alone
+    send(string.format("upitem %s %d", id, pct))
+    note(string.format("you used %s on %s (%.1f m)", item_name(id), who(k), d))
+end
+do
+    local wc = sdk.find_type_definition("app.PlayerWeaponChange")
+    local m = wc and wc:get_method("useItem(app.Item, app.Weapon)")
+    if m then
+        dbg_note{ feature = "Going down and being revived", name = "A healing item used next to a downed friend gets them up",
+            when = "when the game calls PlayerWeaponChange.useItem (any item or weapon our player starts to use)",
+            reads = "the item's id (First Aid Meds only), our player, downed friends' positions",
+            writes = "sends 'upitem' to the friend's game; our own health is held where it was until the use is over" }
+        pcall(sdk.hook, m, function(args)
+            pcall(function()
+                local this = sdk.to_managed_object(args[2])
+                local p = player()
+                local go = this and this:call("get_GameObject")
+                if go == nil or p == nil or go:get_address() ~= p:get_address() then return end
+                local it = sdk.to_managed_object(args[3])
+                local id = it and it:get_field("ItemDataID")
+                on_item_use(id and tostring(id))
+            end)
+        end, function(r) return r end)
+    end
+    log("revive hooks: useItem " .. tostring(m ~= nil))
+    local inv = sdk.find_type_definition("app.Inventory")
+    local mr = inv and inv:get_method("reduceItem(System.String, System.Int32, System.Boolean)")
+    if mr then
+        dbg_note{ feature = "Going down and being revived", name = "Notice the game spending the healing item used on a friend",
+            when = "when the game calls Inventory.reduceItem (an item leaves an inventory)",
+            reads = "the item's id, the healing item being used on a friend",
+            writes = "ends the hold on our health half a second later" }
+        pcall(sdk.hook, mr, function(args)
+            pcall(function()
+                local u = rv.item_use
+                if u == nil or u.spent then return end
+                local id = sdk.to_managed_object(args[3])
+                if id and tostring(id:call("ToString")) == u.id then u.spent = os.clock() end
+            end)
+        end, function(r) return r end)
+    end
+end
+
 -- While down: hold position, keep 1 health, watch for the friend.
 dbg_note{ feature = "Going down and being revived", name = "While down: hold still, keep 1 health, wait for the friend",
     when = "every frame; the heavy part runs only while we are down",
@@ -371,6 +453,23 @@ re.on_frame(function()
             rv.dead_sent = false
         end
     end
+    -- v0.72: a healing item used on a downed friend (on_item_use): its health is theirs, so ours stays where it was
+    -- (lower after a hit, never higher) until half a second after the game spent the item, or 20 s at most (the use
+    -- takes ~3.5 s; bot windows in the background run their frames in bursts and took over 8 s), or our next healing use.
+    local u = rv.item_use
+    if u then
+        if now - u.t > 20 or (u.spent and now - u.spent > 0.5) then
+            rv.item_use = nil
+        elseif u.hp then
+            local dc = safe(player_dc)
+            local h = dc and tonumber(safe(dc.call, dc, "get_health"))
+            if h and h < u.hp then u.hp = h
+            elseif h and h > u.hp + 0.5 then
+                pcall(dc.call, dc, "setHealth(System.Single, System.Single)", u.hp, dc:call("get_maxHealth") or 1000)
+                if not u.held then u.held = true log(string.format("the %s's health went to the friend: ours kept at %.0f", u.id, u.hp)) end
+            end
+        end
+    end
     if not rv.downed then return end
     local ok, err = pcall(function()
         local p, dc = player(), player_dc()
@@ -430,11 +529,24 @@ local function friend_pose(down, k)
     if net then net.forced_action, net.forced_action_layer = down and SUPINE or nil, 0 end
 end
 
-local function who(k) return (k or 1) == 1 and "your friend" or ("friend " .. k) end
 
 function coop_revive_on_event(text)
     local k = coop_event_slot or 1
-    if text:match("^down ") then
+    local item, pct = text:match("^upitem (%S+) (%d+)$")
+    if item then
+        -- v0.72: friend k used a healing item next to us (see ITEM_DIST). Up at once, with the item's health (never
+        -- less than the usual REVIVE_HEALTH), if we're still down and they're still close here (by our own view of them).
+        if not rv.downed then return true end
+        local gp = friend_pos(k) or friend_link_pos(k)
+        local d = (gp and rv.pos) and math.sqrt((gp.x - rv.pos.x) ^ 2 + (gp.z - rv.pos.z) ^ 2) or nil
+        if d == nil or d > ITEM_DIST * 1.3 then
+            log(string.format("%s used %s on us but is %s m away here: not taken", who(k), item, d and string.format("%.1f", d) or "?"))
+            return true
+        end
+        get_up(who(k) .. " used " .. item_name(item) .. " on you", tonumber(pct) / 100)
+        if coop_stat then pcall(coop_stat, "got_up") end
+        return true
+    elseif text:match("^down ") then
         rv.down_slots[k] = true
         rv.friend_down, rv.friend_down_t = true, os.clock()
         pcall(friend_pose, true, k)
@@ -482,7 +594,7 @@ function revive_hud()
             if best == nil or (d and (bd == nil or d < bd)) then best, bd = k, d end
         end
         local name = who(best)
-        return name:sub(1, 1):upper() .. name:sub(2) .. " is down! Stand next to them to get them up ("
+        return name:sub(1, 1):upper() .. name:sub(2) .. " is down! Stand next to them or use a First Aid Med there ("
             .. (bd and string.format("%d m", math.floor(bd)) or "?") .. " away)", 0xFF6B6BFF
     end
     if now - rv.msg_t < 5 then return rv.msg, 0xFF7FE6FF end

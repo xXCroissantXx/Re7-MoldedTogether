@@ -47,6 +47,8 @@ events = [
     # v0.47: banks the friend's game added to their body
     'mbank 3 1 Animation/Player/pl0000/pl0000_test.motlist', 'mbank 3 1 Animation/Player/pl0000/pl0000_test.motlist',
     '@2 mbank 10 0 Animation/Player/pl0000/other.motlist', 'mbank bad',
+    # v0.72: a healing item used on a downed friend
+    'down 4', 'upitem RemedyM 50', '@2 upitem RemedyL 100', 'upitem RemedyM', 'upitem bogus x',
 ]
 import re as _re
 if len(sys.argv) > 5:

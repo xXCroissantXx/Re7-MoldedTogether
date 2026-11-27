@@ -536,6 +536,8 @@ local function watch_heal()
     heal.prev = h
     if prev == nil or h <= prev + 0.5 then return end
     if not (settings and settings.heal_friend == true) or now - heal.med_t > 2 then return end
+    -- v0.72: a heal used to get a downed friend up (coop_revive's item revive) is already theirs.
+    if revive and revive.item_t and now - revive.item_t < 10 then return end
     if not talk.present or hp.friend == nil or hp.friend >= 100 or not friend_near(p) then return end
     local pct = math.floor((h - prev) / m * 100 + 0.5)
     if pct < 1 then return end

@@ -1,4 +1,4 @@
-# Molded Together: online co-op for Resident Evil 7 (v0.71; formerly coop-re7)
+# Molded Together: online co-op for Resident Evil 7 (v0.72; formerly coop-re7)
 Created by xXCroissantXx & Kingkiller1195
 
 Play Resident Evil 7 with up to three friends over the internet. You all share one game: the same Molded and
@@ -24,7 +24,7 @@ climb and fight where they do, over Steam (no port forwarding).
 | **Puzzles and key items** | A key item used in its lock (the dog heads, the statue) does its job in every game. The shadow puzzles and the basement cremator are solved for everyone. One-off interactions (the fridge, the van, the pot, switches) happen in every game. |
 | **Giving items** | Discard ammo, healing or materials in your inventory and it lands on your friend's ground too, to pick up. |
 | **Supplies** | Each player gets their own ammo, healing and crafting materials. For a harder game, tick **Share supplies**: then there's one copy, and whatever one player picks up disappears for the others. Weapons, keys, files and maps always stay for everyone, so nobody gets stuck; when one of you takes one, the others are told to pick it up too. |
-| **Deaths** | With a friend connected, a fatal hit (also in a grab or a boss fight) puts you **down** instead of a game over, until a friend stands next to you for 3 seconds. It's a real game over only when everyone is down. |
+| **Deaths** | With a friend connected, a fatal hit (also in a grab or a boss fight) puts you **down** instead of a game over, until a friend stands next to you for 3 seconds, or uses a First Aid Med next to you (you're up at once, with the medicine's health). It's a real game over only when everyone is down. |
 | **Pausing** | The others see "Your friend paused the game"; enemies your game was running carry on in theirs. |
 | **Saving** | Each player saves their own game; when one saves, the others are told, so you can all save at the same point. |
 | **Pushed objects** | Chairs, bottles and other loose props one of you knocks around move for the others too. |
