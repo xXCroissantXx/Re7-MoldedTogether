@@ -2271,3 +2271,17 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   guest's c04e71_00 (the host's) ended, _00 was swapped in, 'already played', _01 lost. story_test scenario added.
   Still per player: c04_1_Main_200 flashback chain starts at 200_FlashBack02_StartEffect's trigger area (78.9, 9.8,
   38.2); a player pulled into c04e71 from outside it never fires it (past-ship look, one door's lock, 2 steps).
+- v0.70 (2026-11-26, full Chapter 3 / 4 play sweeps on v0.69). Limbs: watch_limbs counts a limb lost only after
+  it was seen in place (e.limb_seen), not in LIMB_SETTLE_S 5 after first watched or after the body turns into /
+  out of a puppet (e.limb_pup), and only for LIMB_KINDS (Em4000; Em4100 on the ship 'lost its head' on a puppet
+  switch and the friend's real one lost it). on_limb ignores other kinds.
+  Both-run enemies: read_snapshot's own == 'me' branch yielded to a lower-SteamID friend only when not
+  awake_near_me; with both players together neither game ever yielded (two Em4100 after a take-back during the
+  host's c04_1 step-400 video). Now keep = awake_near_me and (player_held() or not friend_near(te, k)): the near
+  player's game keeps it unless the friend is within HOLD_R too (then only a hold on us, motion layer 0 jacked).
+  Dropping awake_near_me entirely broke the near-player rule (mold_share_test). mold_share_test (god mode on now) is
+  flaky the same on v0.69 and v0.70 (a down hands the Molded over; setup misses every other run); never two runners.
+  Sweeps: Chapter 3 (c03_1..c03_5, 73 steps) and Chapter 4 (c04_1..c04_3, 29 steps) in step; per-player diffs
+  left: TutorialDriving prompt, PlateDoor_Approaching objective gac, TableBreak sensor, MapEx icons, BGM FSMs.
+  Bots: re7bots sweep skips 'inventoryselect' (opens the item menu, which holds that game's gates off); props that
+  unload mid-sweep are skipped. isExistStackOpenMenu was true there only because a menu really was open.

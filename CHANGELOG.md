@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.70 (2026-11-26)
+Two enemy fixes found by bots playing all of Chapter 3 and Chapter 4 on v0.69.
+
+- **Molded on the ship keep their heads.** The limb sharing in v0.69 could take a Molded's head for "shot off" when the
+  body changed hands between the two games (Chapter 4's ship Molded), and then removed the head in your friend's game.
+  Limbs now only count once they've been seen in place, never in the first seconds after a Molded appears or changes
+  hands, and only for the common Molded (the one tested).
+- **One game runs each enemy again after a cutscene.** When one player was in a scene, the other game took that
+  player's Molded over; after the scene both games kept running them (they drifted apart). The game of the player
+  next to a Molded still runs it, but when you're both next to it, one game now gives it up (unless it has hold of
+  you), so the two games settle on one.
+
 ## v0.69 (2026-11-26)
 Gimmicks, puzzles and the story kept in step through the whole game, found by bot sweeps that play the story with
 both players side by side and compare 1,400+ pieces of each game's story after every step.

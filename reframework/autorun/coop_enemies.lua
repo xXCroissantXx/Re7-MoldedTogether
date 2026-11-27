@@ -448,6 +448,11 @@ end
 LIMB_TYPES = { 0, 1, 2, 3, 4, 6 }
 local LIMB_NAMES = { [0] = "head", [1] = "left arm", [2] = "right arm", [3] = "left leg", [4] = "right leg", [6] = "blade" }
 local LIMB_EVERY = 0.5
+LIMB_SETTLE_S = 5
+-- Which enemies' limbs are shared: the common Molded, the one tested (limb_sync_test.py). Chapter 4's Em4100 on the ship
+-- "lost its head" when its body became the friend's copy (bot run 2026-11-26): its head parts switch for other reasons,
+-- and a false report takes a real head off in the friend's game. Others join once tested.
+LIMB_KINDS = { Em4000 = true }
 local function limb_info(e)
     if e.limbs ~= nil then return e.limbs or nil end
     local ac
@@ -491,6 +496,20 @@ local function watch_limbs(e, now)
     if L == nil then return end
     local lost = limbs_lost(L)
     e.limb_lost = e.limb_lost or {}
+    e.limb_seen = e.limb_seen or {}
+    -- A limb counts as lost only once it has been seen in place, and not in an enemy's first LIMB_SETTLE_S here
+    -- (bot run 2026-11-26, Chapter 4: the guest's fresh copies of two Em4100 the host had just spawned showed no head
+    -- for a moment; "lost its head" went to the host, which took the heads off its real Molded).
+    e.limb_t0 = e.limb_t0 or now
+    -- Its body turning into the friend's copy, or back, settles again (the parts can switch then).
+    local pup = em_move ~= nil and em_move.puppets ~= nil and em_move.puppets[e.id] ~= nil
+    if e.limb_pup ~= nil and e.limb_pup ~= pup then e.limb_t0 = now end
+    e.limb_pup = pup
+    for ty, gone in pairs(lost) do if not gone then e.limb_seen[ty] = true end end
+    if now - e.limb_t0 < LIMB_SETTLE_S then
+        for ty, gone in pairs(lost) do e.limb_lost[ty] = gone end
+        return
+    end
     -- A dying Molded's body comes apart (every part hidden in one go; bot suite 2026-11-26: "lost its left arm, right
     -- arm, left leg, right leg, head" in the same check as its kill). That's its death, shared as a kill: not limbs.
     local newly = 0
@@ -501,7 +520,7 @@ local function watch_limbs(e, now)
         return
     end
     for ty, gone in pairs(lost) do
-        if gone and not e.limb_lost[ty] then
+        if gone and not e.limb_lost[ty] and e.limb_seen[ty] then
             if e.limb_applied and e.limb_applied[ty] then
                 e.limb_applied[ty] = nil   -- we did it on the friend's word: not sent back
             else
@@ -603,7 +622,7 @@ local function scan()
                 e.hp = hp
                 e.dead = dead
                 -- v0.69: Molded limbs (see watch_limbs).
-                if active and not dead and not e.dup and is_regular(e.name) then pcall(watch_limbs, e, os.clock()) end
+                if active and not dead and not e.dup and LIMB_KINDS[e.name] then pcall(watch_limbs, e, os.clock()) end
                 if not dead and active and not e.dup and es.pending[e.id] == chapter() then
                     es.pending[e.id] = nil
                     es.applying[e.id] = os.clock()
@@ -650,7 +669,7 @@ end
 function on_limb(id, ch, ty)
     if ch ~= chapter() then return end
     local e = find_tracked(id)
-    if e == nil or e.dead or e.dup then return end
+    if e == nil or e.dead or e.dup or not LIMB_KINDS[e.name] then return end
     local L = limb_info(e)
     local u = L and L.units[ty]
     if u == nil then log(string.format("friend's %s: no limb %s on %s here", e.name, tostring(ty), id:sub(1, 12))) return end
@@ -1525,6 +1544,27 @@ end
 local function awake_near_me(e)
     return e ~= nil and not e.dead and safe(e.go.call, e.go, "get_Update") == true and near_my_player(e)
 end
+-- Friend k's player is within HOLD_R of this enemy too (their Ethan as shown here; false when hidden).
+local function friend_near(e, k)
+    local env = coop_slot_envs and coop_slot_envs[k or 1] or _G
+    local ghost_fn = rawget(env, "coop_ghost") or ((k or 1) == 1 and coop_ghost) or nil
+    local g = ghost_fn and ghost_fn()
+    local hidden = rawget(env, "ghost_hidden")
+    if hidden == nil and (k or 1) == 1 then hidden = ghost_hidden end
+    if g == nil or hidden or e == nil then return false end
+    local gp = safe(function() return g:call("get_Transform"):call("get_Position") end)
+    local ep = safe(function() return e.go:call("get_Transform"):call("get_Position") end)
+    if gp == nil or ep == nil then return false end
+    return (ep.x - gp.x) ^ 2 + (ep.y - gp.y) ^ 2 + (ep.z - gp.z) ^ 2 < HOLD_R * HOLD_R
+end
+-- Our player is held right now (a grab has taken over its motion's base layer; see coop_revive's held grabs).
+local function player_held()
+    local om = sdk.get_managed_singleton("app.ObjectManager")
+    local p = om and safe(om.get_field, om, "PlayerObj")
+    local mo = p and safe(p.call, p, "getComponent(System.Type)", sdk.typeof("via.motion.Motion"))
+    local L = mo and safe(mo.call, mo, "getLayer", 0)
+    return L ~= nil and safe(L.call, L, "get_Jacked") == true
+end
 local function hold_note(e)
     mv.hold_logged = mv.hold_logged or {}
     if mv.hold_logged[e.id] then return end
@@ -1645,7 +1685,15 @@ local function read_snapshot(now, k)
                 if lower_than_me(k) or not here then mv.own[id], mv.own_t[id], take = k, now, true end
             elseif own == "me" then
                 -- Just handed to us: a snapshot they sent a moment before still has it.
-                if now - (mv.own_t[id] or 0) >= 1 and lower_than_me(k) and not awake_near_me(te) then
+                -- v0.70: "awake near me" keeps ours (the nearer player's game runs it), but with both players next to
+                -- it both games kept it: bot run 2026-11-26, Chapter 4, two Em4100 ran in both games for minutes after
+                -- one game took them back during the other's scene. When the friend is near it too, only a hold on us
+                -- keeps ours; otherwise the lower SteamID's game has it.
+                local keep = awake_near_me(te) and (player_held() or not friend_near(te, k))
+                if now - (mv.own_t[id] or 0) >= 1 and lower_than_me(k) and not keep then
+                    if now - (mv.own_t[id] or 0) > 5 then
+                        log(string.format("%s %s: both games ran it, your friend's is the one now", te and te.name or "?", id:sub(1, 12)))
+                    end
                     mv.own[id], mv.own_t[id], take = k, now, true
                 end
             elseif type(own) == "number" and now - (mv.own_t[id] or 0) >= 1 then
