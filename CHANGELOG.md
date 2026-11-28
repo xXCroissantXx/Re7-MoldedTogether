@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.73 (2026-11-27)
+- **A friend whose game hitches is no longer treated as gone.** When a game stops sending for a few seconds (a room
+  loading, alt-tab, a busy graphics card), the other game used to read it as "nobody here" after 3 seconds:
+  - a fatal hit in that moment was a **real game over** instead of going down. Now a friend heard from in the last
+    10 seconds, in your chapter, counts; being down still ends for real after 90 seconds if nobody comes.
+  - your friend's character **blinked out and back** ("no data for 2 s"). It now stays where it was for up to
+    4 seconds before it's hidden.
+  - getting a downed friend up by **standing next to them** started its 3 seconds over on every blink. A gap of up to
+    1.5 seconds no longer resets it (they still need you next to them at the end).
+
 ## v0.72 (2026-11-27)
 - **Use a First Aid Med next to a downed friend to get them up at once.** Open your items next to them (within about
   3 m) and use a First Aid Med or a Strong First Aid Med: they're back up as soon as the bottle comes out, with the

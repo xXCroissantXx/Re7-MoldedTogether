@@ -2317,3 +2317,25 @@ changing (the C# was only syntax-checked outside the game: REFramework compiles 
   Also coop_world poll_props: a drawer flipped within 3 s of applying the friend's change was taken as that change
   (ws.applying) and never sent (suite: 'sweep world' failed on the 3 drawers 'world drawer' had just shut, passed
   alone). Now ws.applying_want[key] keeps the applied state; a drawer reading the other way is the player's.
+- v0.73 (2026-11-27, 'iron out the issues, sync, optimise'). Bot rig first: minimized RE7 resets its D3D12
+  device ~60 times a second (REFramework 'resize buffers' / 'Reset!' spam, 50-66 MB logs): ~31 fps in bursts,
+  link round trips 2-3 s, one copy died in a scene load. offscreen.py (start_pair runs it; --minimized to
+  skip) restores the windows off-screen at the bottom of the z-order, not activated: 31 -> 146 fps alone,
+  save loads 42 s -> 3 s. With other games on the GPU (two RE8 copies were running) both copies still stalled
+  1.5-3 s every ~2.7 s, between WaitRendering and the next frame (probes/stall_phase.lua): GPU contention,
+  not the mod (the mod's Debug timer max 10 ms per callback; NtSuspendProcess of the other copy didn't help;
+  via.Application.set_MaxFps(45) made it worse). Link pipeline itself fine: coopnet_rx newest sample ~2
+  behind the sender's tx; in game a warp's sample lands ~0.3 s after the best case (probes/arrive_watch.lua).
+  Perf: mod ~6-10% of frame time; each per-frame callback ~0.02 ms (mostly the timer's own cost);
+  local_cutscene 5.5 us x ~300/s; the link's file opens (~1 ms per tick) are the rest. A kept-open handle
+  can't work: CoopNet writes coopnet_rx by tmp + File.Move (atomic replace). Left as is.
+  Fixes: a friend's game that hitches read as 'nobody here' after 3 s (coop_friend_sample): a fatal hit then
+  was a real death. coop_dummy coop_friend_heard(max_age) (net.rx_t, same chapter); coop_revive friend_here
+  counts friend_heard(k) within FRIEND_GRACE_S 10. The ghost hides after STALE_HIDE_S 4 without data (was
+  NET_TIMEOUT 2; NET_TIMEOUT unchanged for everything else). Stand-by revive: near_t kept through NEAR_GRACE_S
+  1.5 out of reach (rv.close_t); getting up still needs the friend close. hitch_test.py (NtSuspendProcess of
+  copy 1: shown through 3 s, down not dead 5 s in with no fresh position, revive through a 1 s pause) pass.
+  Suite 18 pass / 4 skip ('move' needed 8 s: two bridge calls per poll); molded share + kill pass; Jack: v0.72
+  and v0.73 the same (shared until both bots died at once, then copy 0 reloaded and copy 1's bot god mode
+  kept it standing: out of step after a team wipe, a bot artifact). Old TODOs (first save, reload after a
+  jump) already handled by saving on (v0.58) and saving_off_for_jump.

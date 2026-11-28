@@ -866,6 +866,15 @@ function coop_friend_sample()
     return last
 end
 
+-- v0.73: did a sample come from this friend in the last max_age seconds, in our chapter? A game that hitches (a room
+-- streaming in, alt-tab, the GPU busy) sends nothing for a few seconds; coop_friend_sample's 3 s then read as "gone".
+-- Bot copies sharing a GPU stalled 1.5-3 s every few seconds (2026-11-27), past that 3 s.
+function coop_friend_heard(max_age)
+    if net.rx_t == nil or os.clock() - net.rx_t > max_age then return false end
+    if net.peer_chapter and net.peer_chapter ~= local_chapter() then return false end
+    return true
+end
+
 -- Link kinds (v0.44): "udp" (LAN or direct IP) is a real friend too, like "steam"; the bot
 -- counts where a test friend makes sense. Until v0.43 most features checked for "steam".
 function coop_link_friend(kv) local m = kv and kv.mode return m == "steam" or m == "udp" end
@@ -1190,6 +1199,7 @@ local function net_io()
                     net.lates[#net.lates + 1] = off - net.offset
                     if #net.lates > 100 then table.remove(net.lates, 1) end
                     net.rx_count = (net.rx_count or 0) + 1
+                    net.rx_t = now                         -- v0.73: when we last heard from them (coop_friend_heard)
                     net.history[#net.history + 1] = { t = t + net.offset,
                         pos = Vector3f.new(v[3], v[4], v[5]), rot = Quaternion.new(v[9], v[6], v[7], v[8]),
                         flags = math.floor(v[10]), look_yaw = v[13], look_pitch = v[14] }
@@ -4490,6 +4500,7 @@ on_frame_1(function()
 end)
 
 NET_TIMEOUT = 2.0
+STALE_HIDE_S = 4      -- v0.73: s without data before the friend's character is hidden
 CUTSCENE_DEBOUNCE = 0.5   -- s an event must run before the ghost hides (no flicker on tiny events)
 ghost_hidden = false
 cutscene_now = false      -- our own cutscene state, also sent to the other player (STANCE_CUTSCENE)
@@ -4519,7 +4530,10 @@ re.on_frame(function()
     end
     if not net.enabled or #parts == 0 then return end
     local last = net.history[#net.history]
-    local stale = (last == nil) or (now - last.t > NET_TIMEOUT + net.delay)
+    -- v0.73: hidden after STALE_HIDE_S without data (was NET_TIMEOUT, 2 s): a friend whose game hitched 2-3 s blinked
+    -- out and back in (bot logs: 'ghost hidden: no data for 2 s' / 'ghost shown' several times a minute). They now
+    -- stand where they were for a moment, as their own game shows them.
+    local stale = (last == nil) or (now - last.t > STALE_HIDE_S + net.delay)
     -- Hide him while we watch a cutscene, and while *they* are in one (their character
     -- is being moved by their cutscene, which would look odd here).
     -- From the newest sample, not anim.flags: that is only refreshed while the ghost
@@ -4542,7 +4556,7 @@ re.on_frame(function()
         ghost_hidden = hide
         for _, p in ipairs(parts) do pcall(p.go.call, p.go, "set_DrawSelf", not hide) end
         if held and held.part then pcall(held.part.call, held.part, "set_DrawSelf", not hide) end
-        local why = stale and "no data for 2 s" or cutscene_now and "you're in a cutscene" or theirs and "they're in a cutscene"
+        local why = stale and ("no data for " .. STALE_HIDE_S .. " s") or cutscene_now and "you're in a cutscene" or theirs and "they're in a cutscene"
             or laddering and "they're on a ladder" or ""
         log(hide and ("ghost hidden: " .. why) or "ghost shown")
         cs.apply_t = now

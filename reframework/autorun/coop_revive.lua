@@ -33,6 +33,7 @@ local REVIVE_DIST = 2.8    -- m (the follow-me bot waits 2.5 m away)
 local REVIVE_TIME = 3.0    -- s next to you
 local REVIVE_HEALTH = 0.35 -- of max health
 local DOWN_LIMIT = 90      -- s alone before it's a real death
+local NEAR_GRACE_S = 1.5   -- v0.73: s the friend may drop out of reach (a hitch) without the 3 s count starting again
 local VIEW_MIN, VIEW_S = 0.75, 3.0   -- v0.67: after a refused scripted kill, a view this low (m above the feet) this long ends the life
 -- v0.72: using a healing item within ITEM_DIST of a downed friend gets them up at once (the idea comes from
 -- Kingkiller1195's re7mp). The item's health goes to them, not to the one who used it.
@@ -124,6 +125,15 @@ end
 -- player revived in the morgue fight was killed in Jack's grab 20 s later, their game loaded the
 -- checkpoint (story back to before the fight) and they fought on alone while the friend finished it.
 -- Friend k's last position from the link (fresh, same chapter), whether or not their character is shown.
+-- v0.73: heard from friend k within FRIEND_GRACE_S, in our chapter (their game may be hitching: no fresh position
+-- for a few seconds). Being down still ends for real after DOWN_LIMIT if nobody comes.
+local FRIEND_GRACE_S = 10
+local function friend_heard(k)
+    local env = coop_slot_envs and coop_slot_envs[k]
+    local fn = env and rawget(env, "coop_friend_heard")
+    if fn == nil and k == 1 then fn = coop_friend_heard end
+    return fn ~= nil and safe(fn, FRIEND_GRACE_S) == true
+end
 local function friend_link_pos(k)
     local env = coop_slot_envs and coop_slot_envs[k]
     local fn = env and rawget(env, "coop_friend_sample")
@@ -143,6 +153,7 @@ local function friend_here()
         if not rv.down_slots[k] and not friend_dead(k) then
             if not in_scene and friend_ghost(k) ~= nil then return true end
             if friend_link_pos(k) ~= nil then return true end
+            if friend_heard(k) then return true end
         end
     end
     return false
@@ -502,11 +513,14 @@ re.on_frame(function()
         end
         if close then
             rv.near_t = rv.near_t or now
+            rv.close_t = now
             if now - rv.near_t >= REVIVE_TIME then
                 get_up("your friend got you back up")
                 if coop_stat then pcall(coop_stat, "got_up") end   -- the session page (v0.42)
             end
-        else
+        elseif rv.near_t and now - (rv.close_t or 0) > NEAR_GRACE_S then
+            -- v0.73: a moment without the friend (their character hidden for 'no data for 2 s' while their game
+            -- hitched) no longer starts the count again; getting up still needs them close at the end.
             rv.near_t = nil
         end
         if rv.downed and now - rv.down_t > DOWN_LIMIT then die_for_real("nobody came for 90 s")
